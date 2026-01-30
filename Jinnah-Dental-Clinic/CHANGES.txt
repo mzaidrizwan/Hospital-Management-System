@@ -1,0 +1,7 @@
+1. Changed data wiring.
+2. autoamted the data syncing 
+3. resolved indexdb version problem.
+4. Page SLow loading converted into fast loading.
+5. Re-arranged elements of Admin Dashboard page.
+6. re-designed the patient-details-modal at Patient Management page.
+7. re-structured Add-Patient-modal at Patient Management page.
