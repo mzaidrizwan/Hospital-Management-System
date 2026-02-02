@@ -1,16 +1,17 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { X, DollarSign, Calendar, Clock } from 'lucide-react';
+import { X, DollarSign, Calendar, Clock, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Staff } from '@/types'; // Using new types
+import { Staff } from '@/types';
+import { useData } from '@/context/DataContext';
 
 interface StaffFormModalProps {
   open: boolean;
   onClose: () => void;
-  onSubmit: (data: Partial<Staff>) => void;
+  onSubmit: (data: Partial<Staff>) => Promise<void> | void;
   staff: Staff | null;
   isEditing: boolean;
 }
@@ -48,6 +49,8 @@ export default function StaffFormModal({
     monthly: 0
   });
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   useEffect(() => {
     if (staff && isEditing) {
       setFormData({
@@ -56,7 +59,7 @@ export default function StaffFormModal({
         joinDate: staff.joinDate.split('T')[0],
         workingDaysPerWeek: staff.workingDaysPerWeek || 6
       });
-      
+
       calculateSalaries(
         Number(staff.salary),
         staff.salaryDuration || 'monthly',
@@ -84,10 +87,10 @@ export default function StaffFormModal({
 
   const calculateSalaries = (amount: number, duration: string, workingDays: number = 6) => {
     const weeksInMonth = 4.33;
-    
+
     let daily = 0, weekly = 0, monthly = 0;
-    
-    switch(duration) {
+
+    switch (duration) {
       case 'daily':
         daily = amount;
         weekly = amount * workingDays;
@@ -104,7 +107,7 @@ export default function StaffFormModal({
         monthly = amount;
         break;
     }
-    
+
     setCalculatedSalary({
       daily: Math.round(daily * 100) / 100,
       weekly: Math.round(weekly * 100) / 100,
@@ -114,236 +117,297 @@ export default function StaffFormModal({
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    
+
     setFormData(prev => {
       const updated = { ...prev, [name]: value };
-      
+
       if (name === 'salary' || name === 'salaryDuration' || name === 'workingDaysPerWeek') {
         const salaryAmount = name === 'salary' ? parseFloat(value) || 0 : Number(prev.salary) || 0;
         const duration = name === 'salaryDuration' ? value : (prev.salaryDuration || 'monthly');
         const workingDays = name === 'workingDaysPerWeek' ? parseFloat(value) || 6 : Number(prev.workingDaysPerWeek) || 6;
-        
+
         calculateSalaries(salaryAmount, duration as string, workingDays);
       }
-      
+
       return updated;
     });
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!formData.name?.trim() || !formData.role || !formData.phone?.trim() || Number(formData.salary) <= 0) {
       alert('Please fill required fields');
       return;
     }
-    
-    onSubmit(formData);
+
+    setIsSubmitting(true);
+    try {
+      // Execute parent's submission (which handles construction & local-first update)
+      // This ensures the local state and DB are updated immediately
+      await onSubmit(formData);
+
+      // Ensure the modal closes immediately
+      onClose();
+    } catch (error) {
+      console.error('Error submitting form:', error);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (!open) return null;
 
   return (
-    <div 
+    <div
       className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="bg-white rounded-lg w-full max-w-md max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-4 border-b">
-          <h2 className="text-lg font-semibold">
+      {/* Fixed dimensions - wider for grid */}
+      <div className="bg-white rounded-lg w-full max-w-2xl max-h-[calc(100vh-2rem)] flex flex-col shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b shrink-0 bg-gray-50/50">
+          <h2 className="text-lg font-bold text-gray-900 tracking-tight">
             {isEditing ? 'Edit Staff Member' : 'Add New Staff'}
           </h2>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded">
-            <X className="w-5 h-5" />
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-gray-200 rounded-full transition-colors"
+            disabled={isSubmitting}
+          >
+            <X className="w-5 h-5 text-gray-500" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
-          <div className="space-y-3">
-            <div className="space-y-2">
-              <Label htmlFor="name">Full Name *</Label>
-              <Input
-                id="name"
-                name="name"
-                value={formData.name}
-                onChange={handleChange}
-                required
-                placeholder="John Smith"
-              />
-            </div>
+        {/* Form Content - 2 Column Grid */}
+        <div className="flex-1 overflow-y-auto p-6">
+          <form onSubmit={handleSubmit} id="staff-form" className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="role">Role *</Label>
-                <select
-                  id="role"
-                  name="role"
-                  value={formData.role}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 border rounded-lg"
-                  required
-                >
-                  <option value="">Select Role</option>
-                  {roles.map(role => (
-                    <option key={role} value={role}>{role}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="status">Status</Label>
-                <select
-                  id="status"
-                  name="status"
-                  value={formData.status}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 border rounded-lg"
-                >
-                  {statuses.map(status => (
-                    <option key={status} value={status}>{status}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="experience">Experience</Label>
-              <Input
-                id="experience"
-                name="experience"
-                value={formData.experience}
-                onChange={handleChange}
-                placeholder="e.g., 5 years"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="phone">Phone Number *</Label>
-              <Input
-                id="phone"
-                name="phone"
-                value={formData.phone}
-                onChange={handleChange}
-                required
-                placeholder="+1 (555) 123-4567"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="joinDate">Join Date</Label>
-              <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-muted-foreground" />
-                <Input
-                  id="joinDate"
-                  name="joinDate"
-                  type="date"
-                  value={formData.joinDate}
-                  onChange={handleChange}
-                  className="flex-1"
-                />
-              </div>
-            </div>
-
-            {/* Salary Configuration (kept) */}
-            <div className="space-y-3 border-t pt-4">
-              <h3 className="font-medium">Salary Configuration</h3>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="salaryDuration">Salary Duration *</Label>
-                  <select
-                    id="salaryDuration"
-                    name="salaryDuration"
-                    value={formData.salaryDuration}
+              {/* Left Column */}
+              <div className="space-y-4">
+                {/* Full Name */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="name" className="text-xs font-bold uppercase tracking-wider text-gray-500">Full Name *</Label>
+                  <Input
+                    id="name"
+                    name="name"
+                    value={formData.name}
                     onChange={handleChange}
-                    className="w-full px-3 py-2 border rounded-lg"
+                    required
+                    placeholder="John Smith"
+                    disabled={isSubmitting}
+                    className="h-10 focus-visible:ring-primary shadow-sm"
+                  />
+                </div>
+
+                {/* Role */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="role" className="text-xs font-bold uppercase tracking-wider text-gray-500">Role *</Label>
+                  <select
+                    id="role"
+                    name="role"
+                    value={formData.role}
+                    onChange={handleChange}
+                    className="w-full px-3 py-2 border rounded-lg bg-white h-10 text-sm shadow-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
+                    required
+                    disabled={isSubmitting}
                   >
-                    {salaryDurations.map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
+                    <option value="">Select Role</option>
+                    {roles.map(role => (
+                      <option key={role} value={role}>{role}</option>
                     ))}
                   </select>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="workingDaysPerWeek">Working Days/Week</Label>
-                  <Input
-                    id="workingDaysPerWeek"
-                    name="workingDaysPerWeek"
-                    type="number"
-                    value={formData.workingDaysPerWeek}
+                {/* Status */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="status" className="text-xs font-bold uppercase tracking-wider text-gray-500">Status</Label>
+                  <select
+                    id="status"
+                    name="status"
+                    value={formData.status}
                     onChange={handleChange}
-                    min="1"
-                    max="7"
-                    placeholder="6"
+                    className="w-full px-3 py-2 border rounded-lg bg-white h-10 text-sm shadow-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
+                    disabled={isSubmitting}
+                  >
+                    {statuses.map(status => (
+                      <option key={status} value={status}>{status}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Experience */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="experience" className="text-xs font-bold uppercase tracking-wider text-gray-500">Experience</Label>
+                  <Input
+                    id="experience"
+                    name="experience"
+                    value={formData.experience}
+                    onChange={handleChange}
+                    placeholder="e.g., 5 years"
+                    disabled={isSubmitting}
+                    className="h-10 shadow-sm"
                   />
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="salary">
-                  {formData.salaryDuration === 'daily' ? 'Daily Salary ($) *' :
-                   formData.salaryDuration === 'weekly' ? 'Weekly Salary ($) *' :
-                   'Monthly Salary ($) *'}
-                </Label>
-                <div className="relative">
-                  <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              {/* Right Column */}
+              <div className="space-y-4">
+                {/* Phone Number */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="phone" className="text-xs font-bold uppercase tracking-wider text-gray-500">Phone Number *</Label>
                   <Input
-                    id="salary"
-                    name="salary"
-                    type="number"
-                    value={formData.salary}
+                    id="phone"
+                    name="phone"
+                    value={formData.phone}
                     onChange={handleChange}
                     required
-                    placeholder={
-                      formData.salaryDuration === 'daily' ? 'e.g., 200' :
-                      formData.salaryDuration === 'weekly' ? 'e.g., 1200' :
-                      'e.g., 5000'
-                    }
-                    className="pl-9"
-                    min="0"
+                    placeholder="+92 3XX XXXXXXX"
+                    disabled={isSubmitting}
+                    className="h-10 shadow-sm"
                   />
                 </div>
-              </div>
 
-              {/* Salary Conversion Preview (kept) */}
-              {Number(formData.salary) > 0 && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                  <h4 className="font-medium mb-2 flex items-center gap-2">
-                    <Clock className="w-4 h-4" />
-                    Salary Breakdown
-                  </h4>
-                  <div className="grid grid-cols-3 gap-2 text-sm">
-                    <div className="text-center">
-                      <div className="font-medium">Daily</div>
-                      <div className="text-blue-600">${calculatedSalary.daily.toFixed(2)}</div>
-                    </div>
-                    <div className="text-center">
-                      <div className="font-medium">Weekly</div>
-                      <div className="text-blue-600">${calculatedSalary.weekly.toFixed(2)}</div>
-                    </div>
-                    <div className="text-center">
-                      <div className="font-medium">Monthly</div>
-                      <div className="text-blue-600">${calculatedSalary.monthly.toFixed(2)}</div>
+                {/* Join Date */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="joinDate" className="text-xs font-bold uppercase tracking-wider text-gray-500">Join Date</Label>
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                      <Input
+                        id="joinDate"
+                        name="joinDate"
+                        type="date"
+                        value={formData.joinDate}
+                        onChange={handleChange}
+                        className="pl-9 h-10 shadow-sm"
+                        disabled={isSubmitting}
+                      />
                     </div>
                   </div>
-                  <p className="text-xs text-blue-600 mt-2 text-center">
-                    Based on {formData.workingDaysPerWeek || 6} working days per week
-                  </p>
                 </div>
-              )}
-            </div>
-          </div>
 
-          <div className="flex justify-end gap-3 pt-4 border-t">
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit">
-              {isEditing ? 'Update Staff' : 'Add Staff'}
-            </Button>
-          </div>
-        </form>
+                {/* Salary Configuration */}
+                <div className="space-y-4 p-4 bg-gray-50/50 rounded-xl border border-gray-100">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="salaryDuration" className="text-[10px] font-black uppercase tracking-widest text-gray-400">Duration</Label>
+                      <select
+                        id="salaryDuration"
+                        name="salaryDuration"
+                        value={formData.salaryDuration}
+                        onChange={handleChange}
+                        className="w-full px-2 py-1.5 border rounded-lg bg-white h-10 text-xs font-bold shadow-sm outline-none"
+                        disabled={isSubmitting}
+                      >
+                        {salaryDurations.map(option => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="workingDaysPerWeek" className="text-[10px] font-black uppercase tracking-widest text-gray-400">Days/Week</Label>
+                      <Input
+                        id="workingDaysPerWeek"
+                        name="workingDaysPerWeek"
+                        type="number"
+                        value={formData.workingDaysPerWeek}
+                        onChange={handleChange}
+                        min="1"
+                        max="7"
+                        className="h-10 text-xs font-bold shadow-sm"
+                        disabled={isSubmitting}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="salary" className="text-[10px] font-black uppercase tracking-widest text-gray-400">Amount (PKR)</Label>
+                    <div className="relative">
+                      <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <Input
+                        id="salary"
+                        name="salary"
+                        type="number"
+                        value={formData.salary}
+                        onChange={handleChange}
+                        required
+                        className="pl-9 h-10 text-sm font-bold shadow-sm"
+                        disabled={isSubmitting}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Salary Breakdown Row (Full Width) */}
+            {Number(formData.salary) > 0 && (
+              <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 transition-all animate-in fade-in zoom-in-95">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="p-1.5 bg-blue-100 rounded-lg text-blue-600">
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <h4 className="font-black text-xs uppercase tracking-widest text-blue-900">Salary Breakdown</h4>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-white p-3 rounded-lg border border-blue-100 shadow-sm text-center">
+                    <p className="text-[10px] font-black uppercase text-blue-400 tracking-tighter mb-1">Daily</p>
+                    <p className="font-black text-blue-600">{formatCurrency(calculatedSalary.daily)}</p>
+                  </div>
+                  <div className="bg-white p-3 rounded-lg border border-blue-100 shadow-sm text-center">
+                    <p className="text-[10px] font-black uppercase text-blue-400 tracking-tighter mb-1">Weekly</p>
+                    <p className="font-black text-blue-600">{formatCurrency(calculatedSalary.weekly)}</p>
+                  </div>
+                  <div className="bg-white p-3 rounded-lg border border-blue-100 shadow-sm text-center">
+                    <p className="text-[10px] font-black uppercase text-blue-400 tracking-tighter mb-1">Monthly</p>
+                    <p className="font-black text-blue-600">{formatCurrency(calculatedSalary.monthly)}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </form>
+        </div>
+
+        {/* Footer */}
+        <div className="border-t p-4 shrink-0 bg-gray-50/50 flex justify-end gap-3 rounded-b-lg">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onClose}
+            disabled={isSubmitting}
+            className="font-bold border-gray-200 hover:bg-gray-100"
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            form="staff-form"
+            disabled={isSubmitting}
+            className="font-black px-8 bg-primary hover:bg-primary/90 shadow-md transition-all active:scale-95"
+          >
+            {isSubmitting ? (
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Processing...
+              </div>
+            ) : (
+              isEditing ? 'Update Personnel' : 'Add Personnel'
+            )}
+          </Button>
+        </div>
       </div>
     </div>
   );
 }
+
+const formatCurrency = (amount: number) => {
+  return new Intl.NumberFormat('en-PK', {
+    style: 'currency',
+    currency: 'PKR',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(amount);
+};

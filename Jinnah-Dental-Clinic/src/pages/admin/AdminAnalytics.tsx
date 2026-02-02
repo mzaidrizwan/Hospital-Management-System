@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   BarChart,
@@ -14,11 +14,11 @@ import {
   Area,
 } from 'recharts';
 import { Button } from '@/components/ui/button';
-import { Loader2, RefreshCw, AlertCircle } from 'lucide-react';
-import { toast } from "@/hooks/use-toast";
-import { db } from '@/lib/firebase';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { format, startOfMonth, endOfMonth, isSameMonth } from 'date-fns';
+import { Loader2, RefreshCw, AlertCircle, TrendingUp, BarChart2 } from 'lucide-react';
+import { toast } from "sonner";
+import { useData } from '@/context/DataContext';
+
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 
 interface MonthlyData {
   name: string;           // e.g. "Jan"
@@ -26,107 +26,102 @@ interface MonthlyData {
   patients: number;       // count of completed queue items
 }
 
+const formatCurrency = (amount: number) => {
+  if (isNaN(amount)) return 'PKR 0';
+  return new Intl.NumberFormat('en-PK', {
+    style: 'currency',
+    currency: 'PKR',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(amount);
+};
+
 export default function AdminAnalytics() {
-  const [monthlyData, setMonthlyData] = useState<MonthlyData[]>([]);
+  const { queue, bills, loading: dataLoading } = useData();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const months = [
+  const months = useMemo(() => [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-  ];
+  ], []);
 
-  const fetchAnalyticsData = async () => {
-    setLoading(true);
-    setError(null);
+  const monthlyData = useMemo(() => {
+    if (dataLoading) return [];
 
     try {
       const currentYear = new Date().getFullYear();
-
-      // 1. Fetch completed treatments from queue collection
-      const queueQuery = query(
-        collection(db, 'queue'),
-        where('status', '==', 'completed')
-      );
-      const queueSnapshot = await getDocs(queueQuery);
-
-      // 2. Fetch all bills (for revenue)
-      const billsSnapshot = await getDocs(collection(db, 'bills'));
-
-      // Aggregate monthly
       const monthlyMap: Record<string, MonthlyData> = {};
 
       // Initialize all 12 months with 0
-      months.forEach((month, index) => {
-        const monthNum = (index + 1).toString().padStart(2, '0');
+      months.forEach((month) => {
         monthlyMap[month] = { name: month, revenue: 0, patients: 0 };
       });
 
-      // Process queue items (patients)
-      queueSnapshot.forEach((doc) => {
-        const data = doc.data();
-        const checkInTime = data.checkInTime || data.createdAt;
-        if (!checkInTime) return;
+      // Process queue items (patients) - only completed ones
+      (queue || []).forEach((item) => {
+        if (!item || (item.status !== 'completed' && item.status !== 'in_treatment')) return;
 
-        const date = new Date(checkInTime);
-        if (date.getFullYear() !== currentYear) return;
+        const dateStr = item.checkInTime || item.createdAt;
+        if (!dateStr) return;
 
-        const monthIndex = date.getMonth();
-        const monthName = months[monthIndex];
+        try {
+          const date = new Date(dateStr);
+          if (isNaN(date.getTime()) || date.getFullYear() !== currentYear) return;
 
-        monthlyMap[monthName].patients += 1;
+          const monthIndex = date.getMonth();
+          const monthName = months[monthIndex];
+
+          if (monthlyMap[monthName]) {
+            monthlyMap[monthName].patients += 1;
+          }
+        } catch (e) {
+          console.error('Error parsing queue date:', e);
+        }
       });
 
       // Process bills (revenue)
-      billsSnapshot.forEach((doc) => {
-        const data = doc.data();
-        const createdDate = data.createdDate || data.createdAt;
-        if (!createdDate) return;
+      (bills || []).forEach((bill) => {
+        if (!bill) return;
+        const dateStr = bill.createdDate || bill.date;
+        if (!dateStr) return;
 
-        const date = new Date(createdDate);
-        if (date.getFullYear() !== currentYear) return;
+        try {
+          const date = new Date(dateStr);
+          if (isNaN(date.getTime()) || date.getFullYear() !== currentYear) return;
 
-        const monthIndex = date.getMonth();
-        const monthName = months[monthIndex];
+          const monthIndex = date.getMonth();
+          const monthName = months[monthIndex];
 
-        // Use totalAmount or amountPaid — decide based on your need
-        const amount = data.totalAmount || data.amountPaid || 0;
-        monthlyMap[monthName].revenue += Number(amount);
+          const amount = Number(bill.totalAmount || bill.amountPaid || 0);
+          if (monthlyMap[monthName]) {
+            monthlyMap[monthName].revenue += amount;
+          }
+        } catch (e) {
+          console.error('Error parsing bill date:', e);
+        }
       });
 
-      // Convert map to array in correct order
-      const dataArray = months.map((month) => monthlyMap[month]);
-
-      setMonthlyData(dataArray);
-
-      toast({
-        title: "Data Loaded",
-        description: `Showing analytics for ${currentYear}`,
-      });
-    } catch (err: any) {
-      console.error('Analytics fetch error:', err);
-      setError('Failed to load analytics data. Please try again.');
-      toast({
-        title: "Error",
-        description: "Could not load analytics. Check your connection.",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
+      return months.map((month) => monthlyMap[month]);
+    } catch (err) {
+      console.error('Analytics aggregation error:', err);
+      setError('Error processing analytics');
+      return [];
     }
-  };
+  }, [queue, bills, dataLoading, months]);
+
+  const hasData = useMemo(() => {
+    return monthlyData.some(d => d.revenue > 0 || d.patients > 0);
+  }, [monthlyData]);
 
   useEffect(() => {
-    fetchAnalyticsData();
-  }, []);
+    if (!dataLoading) {
+      setLoading(false);
+    }
+  }, [dataLoading]);
 
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(value);
+  const handleRefresh = () => {
+    window.location.reload();
   };
 
   const CustomTooltip = ({ active, payload, label }: any) => {
@@ -138,7 +133,7 @@ export default function AdminAnalytics() {
             Revenue: {formatCurrency(payload[0].value)}
           </p>
           <p className="text-sm text-muted-foreground">
-            Patients: {payload[1]?.value || payload[0].payload.patients}
+            Patients: {payload[1]?.value || payload[0].payload.patients || 0}
           </p>
         </div>
       );
@@ -146,25 +141,28 @@ export default function AdminAnalytics() {
     return null;
   };
 
+  if (loading) {
+    return <LoadingSpinner message="Generating analytics reports..." />;
+  }
+
   return (
     <div className="space-y-6 animate-fade-in p-4 md:p-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold">Clinic Analytics</h1>
-          <p className="text-muted-foreground">Real-time performance overview</p>
+          <div className="flex items-center gap-2">
+            <BarChart2 className="w-6 h-6 text-primary" />
+            <h1 className="text-2xl md:text-3xl font-bold">Clinic Analytics</h1>
+          </div>
+          <p className="text-muted-foreground">Real-time performance overview for {new Date().getFullYear()}</p>
         </div>
         <Button
           variant="outline"
-          onClick={fetchAnalyticsData}
+          onClick={handleRefresh}
           disabled={loading}
           className="gap-2"
         >
-          {loading ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <RefreshCw className="w-4 h-4" />
-          )}
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           Refresh
         </Button>
       </div>
@@ -176,47 +174,60 @@ export default function AdminAnalytics() {
         </div>
       )}
 
-      {loading ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {[1, 2].map((i) => (
-            <Card key={i}>
-              <CardHeader>
-                <CardTitle className="h-6 bg-muted rounded w-48 animate-pulse" />
-              </CardHeader>
-              <CardContent>
-                <div className="h-72 bg-muted/40 rounded animate-pulse" />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+      {!hasData ? (
+        <Card className="p-12 text-center border-dashed">
+          <CardContent className="flex flex-col items-center gap-4">
+            <BarChart2 className="w-12 h-12 text-muted-foreground opacity-20" />
+            <div className="space-y-1">
+              <h3 className="text-lg font-semibold">No Analytics Data Yet</h3>
+              <p className="text-muted-foreground max-w-xs mx-auto text-sm">
+                We couldn't find any financial or patient activity for the year {new Date().getFullYear()}. Data will appear here once treatments are recorded.
+              </p>
+            </div>
+            <Button variant="outline" onClick={() => window.location.reload()}>
+              Check Again
+            </Button>
+          </CardContent>
+        </Card>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Monthly Revenue Trend */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Monthly Revenue Trend</CardTitle>
+          <Card className="hover:shadow-md transition-shadow">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-base font-semibold">Monthly Revenue Trend</CardTitle>
+              <TrendingUp className="w-4 h-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="h-80">
+              <div className="h-80 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={monthlyData}>
+                  <AreaChart data={monthlyData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                     <defs>
                       <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
                         <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                    <XAxis
+                      dataKey="name"
+                      stroke="hsl(var(--muted-foreground))"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                    />
                     <YAxis
                       stroke="hsl(var(--muted-foreground))"
-                      tickFormatter={(value) => `$${value / 1000}k`}
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(value) => `PKR ${value / 1000}k`}
                     />
                     <Tooltip content={<CustomTooltip />} />
                     <Area
                       type="monotone"
                       dataKey="revenue"
                       stroke="hsl(var(--primary))"
+                      strokeWidth={2}
                       fillOpacity={1}
                       fill="url(#colorRevenue)"
                     />
@@ -227,22 +238,35 @@ export default function AdminAnalytics() {
           </Card>
 
           {/* Patient Volume */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Patient Volume</CardTitle>
+          <Card className="hover:shadow-md transition-shadow">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-base font-semibold">Patient Volume</CardTitle>
+              <BarChart2 className="w-4 h-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="h-80">
+              <div className="h-80 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={monthlyData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" />
-                    <YAxis stroke="hsl(var(--muted-foreground))" />
+                  <BarChart data={monthlyData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                    <XAxis
+                      dataKey="name"
+                      stroke="hsl(var(--muted-foreground))"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      stroke="hsl(var(--muted-foreground))"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                    />
                     <Tooltip content={<CustomTooltip />} />
                     <Bar
                       dataKey="patients"
-                      fill="hsl(var(--success))"
+                      fill="hsl(var(--primary))"
                       radius={[4, 4, 0, 0]}
+                      maxBarSize={40}
                     />
                   </BarChart>
                 </ResponsiveContainer>

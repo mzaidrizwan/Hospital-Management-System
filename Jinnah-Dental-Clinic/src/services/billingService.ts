@@ -16,26 +16,22 @@ import {
 const BILLS_COLLECTION = 'bills';
 
 // Add new bill
+// Add new bill (Write-Through)
 export const addBill = async (billData: Omit<Bill, 'id' | 'createdAt' | 'updatedAt'>) => {
   try {
-    const billsRef = collection(db, BILLS_COLLECTION);
+    const { smartSync, syncPatientAfterTreatment } = await import('./syncService');
 
-    const newBill = {
-      ...billData,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    };
+    const id = await smartSync(BILLS_COLLECTION, billData);
 
-    const docRef = await addDoc(billsRef, newBill);
-
-    // Optional: Sync patient after bill is added (if needed)
-    if (billData.patientId) {
+    // Sync patient after bill is added
+    if (billData.patientId || billData.patientNumber) {
+      const patientNumber = billData.patientNumber || billData.patientId;
       setTimeout(() => {
-        // syncPatientAfterTreatment(billData.patientId).catch(console.error);
+        syncPatientAfterTreatment(patientNumber).catch(console.error);
       }, 1000);
     }
 
-    return docRef.id;
+    return id as string;
   } catch (error) {
     console.error('Error adding bill:', error);
     throw error;

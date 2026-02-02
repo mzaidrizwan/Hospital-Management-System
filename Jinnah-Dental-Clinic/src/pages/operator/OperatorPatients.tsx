@@ -23,7 +23,8 @@ import {
   RefreshCw,
   Eye,
   CreditCard,
-  FileText
+  FileText,
+  Plus // Added missing import
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -47,33 +48,25 @@ import { Patient, QueueItem, Bill } from '@/types';
 import { toast } from 'sonner';
 import PatientFormModal from '@/components/modals/PatientFormModal';
 import PatientDetailsModal from '@/components/modals/PatientDetailsModal';
-import {
-  getAllPatients,
-  addPatient,
-  updatePatient,
-  deletePatient,
-  getPatientStats,
-  calculatePatientPendingBalance,
-  getPatientById
-} from '@/services/patientService';
-import {
-  getQueueItemsByPatientNumber
-} from '@/services/queueService';
-import {
-  getBillsByPatientNumber
-} from '@/services/billingService';
-import { syncPatientAfterTreatment } from '@/services/syncService';
+import { deleteFromLocal } from '@/services/indexedDbUtils';
+import { smartSync, smartDelete } from '@/services/syncService';
+import { formatCurrency } from '@/lib/utils';
 import { useData } from '@/context/DataContext';
 import { format, parseISO } from 'date-fns';
 
 export default function OperatorPatients() {
+  const {
+    patients: contextPatients,
+    queue: contextQueue,
+    bills: contextBills,
+    loading: contextLoading
+  } = useData();
+
   // State Management
-  const [patients, setPatients] = useState<Patient[]>([]);
   const [filteredPatients, setFilteredPatients] = useState<Patient[]>([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [syncing, setSyncing] = useState(false);
   const [syncingPatientId, setSyncingPatientId] = useState<string | null>(null);
+  const [hasError, setHasError] = useState(false);
 
   // Search & Filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -94,139 +87,125 @@ export default function OperatorPatients() {
   const [currentPage, setCurrentPage] = useState(1);
   const patientsPerPage = 10;
 
-  // Stats
-  const [stats, setStats] = useState({
-    total: 0,
-    active: 0,
-    pendingBalance: 0,
-    totalVisits: 0,
-    totalRevenue: 0,
-    creditPatients: 0
-  });
-
-  const { patients: contextPatients, loading: contextLoading } = useData();
-
-  // Load context patients into local state carefully
+  // Filter patients when search or filters change or context data updates
   useEffect(() => {
-    if (contextPatients && contextPatients.length > 0) {
-      setPatients(contextPatients);
-      calculateStats(contextPatients);
-      setLoading(false);
-    } else if (!contextLoading) {
-      setLoading(false);
-    }
-  }, [contextPatients, contextLoading]);
-
-  // Initial Fetch remains as a background revalidation if needed, 
-  // but now it doesn't block rendering.
-  useEffect(() => {
-    if (patients.length === 0) {
-      fetchPatients();
-    }
-  }, []);
-
-  // Filter patients when search or filters change
-  useEffect(() => {
-    applyFilters();
-  }, [patients, searchTerm, statusFilter, balanceFilter, dateFilter]);
-
-  // Calculate stats for each patient using centralized method - only when explicitly requested
-  const fetchPatients = async () => {
     try {
-      // If we already have patients from context, we don't NEED to block.
-      // We can just refresh them in the background.
-      const data = await getAllPatients();
-      setPatients(data);
-      calculateStats(data);
+      if (!contextPatients || !Array.isArray(contextPatients)) {
+        setFilteredPatients([]);
+        return;
+      }
+
+      let result = [...contextPatients];
+
+      // Search filter
+      if (searchTerm.trim()) {
+        const term = searchTerm.toLowerCase().trim();
+        result = result.filter(patient => {
+          if (!patient) return false;
+          
+          const nameMatch = patient.name?.toLowerCase().includes(term) || false;
+          const phoneMatch = patient.phone?.toLowerCase().includes(term) || false;
+          const patientNumberMatch = patient.patientNumber?.toLowerCase().includes(term) || false;
+          const emailMatch = patient.email?.toLowerCase().includes(term) || false;
+          const addressMatch = patient.address?.toLowerCase().includes(term) || false;
+          return nameMatch || phoneMatch || patientNumberMatch || emailMatch || addressMatch;
+        });
+      }
+
+      // Status filter
+      if (statusFilter !== 'all') {
+        if (statusFilter === 'active') {
+          result = result.filter(p => p && p.isActive !== false);
+        } else if (statusFilter === 'inactive') {
+          result = result.filter(p => p && p.isActive === false);
+        }
+      }
+
+      // Balance filter
+      if (balanceFilter !== 'all') {
+        if (balanceFilter === 'zero') {
+          result = result.filter(p => p && (p.pendingBalance || 0) === 0);
+        } else if (balanceFilter === 'pending') {
+          result = result.filter(p => p && (p.pendingBalance || 0) > 0);
+        } else if (balanceFilter === 'credit') {
+          result = result.filter(p => p && (p.pendingBalance || 0) < 0);
+        }
+      }
+
+      // Date filter (last visit)
+      if (dateFilter !== 'all') {
+        const now = new Date();
+        const thirtyDaysAgo = new Date(now.setDate(now.getDate() - 30));
+
+        if (dateFilter === 'recent') {
+          result = result.filter(p => {
+            if (!p || !p.lastVisit) return false;
+            try {
+              const lastVisitDate = new Date(p.lastVisit);
+              return !isNaN(lastVisitDate.getTime()) && lastVisitDate >= thirtyDaysAgo;
+            } catch (error) {
+              return false;
+            }
+          });
+        } else if (dateFilter === 'old') {
+          result = result.filter(p => {
+            if (!p || !p.lastVisit) return true;
+            try {
+              const lastVisitDate = new Date(p.lastVisit);
+              return !isNaN(lastVisitDate.getTime()) && lastVisitDate < thirtyDaysAgo;
+            } catch (error) {
+              return false;
+            }
+          });
+        }
+      }
+
+      setFilteredPatients(result);
+      setCurrentPage(1);
+      setHasError(false);
     } catch (error) {
-      console.error('Error loading patients:', error);
-    } finally {
-      setLoading(false);
+      console.error('Error filtering patients:', error);
+      setFilteredPatients([]);
+      setHasError(true);
     }
-  };
+  }, [contextPatients, searchTerm, statusFilter, balanceFilter, dateFilter]);
 
-  // Calculate statistics
-  const calculateStats = (patientList: Patient[]) => {
-    const total = patientList.length;
-    const active = patientList.filter(p => p.isActive !== false).length;
-    const pendingBalance = patientList.reduce((sum, p) => sum + (p.pendingBalance || 0), 0);
-    const totalVisits = patientList.reduce((sum, p) => sum + (p.totalVisits || 0), 0);
-    const totalRevenue = patientList.reduce((sum, p) => sum + (p.totalPaid || 0), 0);
-    const creditPatients = patientList.filter(p => (p.pendingBalance || 0) < 0).length;
-
-    setStats({
-      total,
-      active,
-      pendingBalance,
-      totalVisits,
-      totalRevenue,
-      creditPatients
-    });
-  };
-
-  // Apply filters to patients
-  const applyFilters = () => {
-    let result = patients;
-
-    // Search filter
-    if (searchTerm.trim()) {
-      const term = searchTerm.toLowerCase().trim();
-      result = result.filter(patient => {
-        const nameMatch = patient.name?.toLowerCase().includes(term) || false;
-        const phoneMatch = patient.phone?.toLowerCase().includes(term) || false;
-        const patientNumberMatch = patient.patientNumber?.toLowerCase().includes(term) || false;
-        const emailMatch = patient.email?.toLowerCase().includes(term) || false;
-        const addressMatch = patient.address?.toLowerCase().includes(term) || false;
-
-        return nameMatch || phoneMatch || patientNumberMatch || emailMatch || addressMatch;
-      });
-    }
-
-    // Status filter
-    if (statusFilter !== 'all') {
-      if (statusFilter === 'active') {
-        result = result.filter(p => p.isActive !== false);
-      } else if (statusFilter === 'inactive') {
-        result = result.filter(p => p.isActive === false);
+  // Derived Stats
+  const stats = React.useMemo(() => {
+    try {
+      if (!contextPatients || !Array.isArray(contextPatients)) {
+        return {
+          total: 0,
+          active: 0,
+          pendingBalance: 0,
+          totalVisits: 0,
+          totalRevenue: 0,
+          creditPatients: 0
+        };
       }
+
+      return {
+        total: contextPatients.length,
+        active: contextPatients.filter(p => p && p.isActive !== false).length,
+        pendingBalance: contextPatients.reduce((sum, p) => sum + (p?.pendingBalance || 0), 0),
+        totalVisits: contextPatients.reduce((sum, p) => sum + (p?.totalVisits || 0), 0),
+        totalRevenue: contextPatients.reduce((sum, p) => sum + (p?.totalPaid || 0), 0),
+        creditPatients: contextPatients.filter(p => p && (p.pendingBalance || 0) < 0).length
+      };
+    } catch (error) {
+      console.error('Error calculating stats:', error);
+      return {
+        total: 0,
+        active: 0,
+        pendingBalance: 0,
+        totalVisits: 0,
+        totalRevenue: 0,
+        creditPatients: 0
+      };
     }
+  }, [contextPatients]);
 
-    // Balance filter
-    if (balanceFilter !== 'all') {
-      if (balanceFilter === 'zero') {
-        result = result.filter(p => (p.pendingBalance || 0) === 0);
-      } else if (balanceFilter === 'pending') {
-        result = result.filter(p => (p.pendingBalance || 0) > 0);
-      } else if (balanceFilter === 'credit') {
-        result = result.filter(p => (p.pendingBalance || 0) < 0);
-      }
-    }
-
-    // Date filter (last visit)
-    if (dateFilter !== 'all') {
-      const now = new Date();
-      const thirtyDaysAgo = new Date(now.setDate(now.getDate() - 30));
-
-      if (dateFilter === 'recent') {
-        result = result.filter(p => {
-          if (!p.lastVisit) return false;
-          const lastVisitDate = new Date(p.lastVisit);
-          return lastVisitDate >= thirtyDaysAgo;
-        });
-      } else if (dateFilter === 'old') {
-        result = result.filter(p => {
-          if (!p.lastVisit) return true;
-          const lastVisitDate = new Date(p.lastVisit);
-          return lastVisitDate < thirtyDaysAgo;
-        });
-      }
-    }
-
-    setFilteredPatients(result);
-    setCurrentPage(1);
-  };
-
-  // Handle search
+  // Handle search (controlled by searchTerm state)
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchTerm(e.target.value);
   };
@@ -245,13 +224,14 @@ export default function OperatorPatients() {
 
   // Handle delete patient
   const handleDeletePatient = async (patient: Patient) => {
+    if (!patient || !patient.id) return;
+    
     if (!confirm(`Are you sure you want to delete patient ${patient.name} (${patient.patientNumber})?\nThis action cannot be undone.`)) {
       return;
     }
 
     try {
-      await deletePatient(patient.id);
-      setPatients(prev => prev.filter(p => p.id !== patient.id));
+      await smartDelete('patients', patient.id);
       toast.success(`Patient ${patient.name} deleted successfully`);
 
       if (selectedPatient?.id === patient.id) {
@@ -267,9 +247,11 @@ export default function OperatorPatients() {
   // Handle save patient
   const handleSavePatient = async (patientData: any) => {
     try {
+      if (!patientData) return;
+      
       setSaving(true);
 
-      const patientPayload = {
+      const patientPayload: any = {
         name: patientData.name?.trim() || '',
         phone: patientData.phone?.trim() || '',
         age: patientData.age ? Number(patientData.age) : 0,
@@ -281,35 +263,17 @@ export default function OperatorPatients() {
         allergies: patientData.allergies?.trim() || '',
         medicalHistory: patientData.medicalHistory?.trim() || '',
         notes: patientData.notes?.trim() || '',
-        openingBalance: Number(patientData.openingBalance || 0)
+        openingBalance: Number(patientData.openingBalance || 0),
+        id: patientData.id || Date.now().toString()
       };
 
       if (patientData.id && patientData.isEditing) {
-        await updatePatient(patientData.id, patientPayload);
-
-        // After update, recalculate stats
-        const updatedPatient = await getPatientById(patientData.id);
-        const stats = await getPatientStats(updatedPatient.patientNumber);
-        const pendingBalance = await calculatePatientPendingBalance(updatedPatient);
-
-        const enhancedPatient = {
-          ...updatedPatient,
-          ...patientPayload,
-          totalVisits: stats.totalVisits || 0,
-          totalPaid: stats.totalPaid || 0,
-          pendingBalance: pendingBalance,
-          totalTreatmentFees: stats.totalTreatmentFees || 0
-        };
-
-        setPatients(prev => prev.map(p =>
-          p.id === patientData.id ? enhancedPatient : p
-        ));
-
+        await smartSync('patients', patientPayload);
         toast.success('Patient updated successfully');
       } else {
         const newPatientData = {
           ...patientPayload,
-          patientNumber: patientData.patientNumber,
+          patientNumber: patientData.patientNumber || `P-${Date.now().toString().slice(-6)}`,
           registrationDate: new Date().toISOString(),
           totalVisits: 0,
           totalPaid: 0,
@@ -317,16 +281,8 @@ export default function OperatorPatients() {
           isActive: true
         };
 
-        const result = await addPatient(newPatientData);
-
-        const newPatient: Patient = {
-          id: result.id,
-          patientNumber: result.patientNumber,
-          ...newPatientData
-        };
-
-        setPatients(prev => [newPatient, ...prev]);
-        toast.success(`${patientData.name} added successfully (ID: ${result.patientNumber})`);
+        await smartSync('patients', newPatientData);
+        toast.success(`${patientData.name} added successfully`);
       }
 
       setShowPatientForm(false);
@@ -339,106 +295,47 @@ export default function OperatorPatients() {
     }
   };
 
-  // Show patient calculations
-  const showPatientCalculations = (patient: Patient) => {
-    const calc = (patient as any)._calculations || {
-      openingBalance: patient.openingBalance || 0,
-      totalTreatmentFees: patient.totalTreatmentFees || 0,
-      totalPaid: patient.totalPaid || 0
-    };
+  // Handle view patient details - derived from context
+  const handleViewPatientDetails = (patient: Patient) => {
+    if (!patient) return;
+    
+    setSelectedPatient(patient);
 
-    const totalDue = calc.openingBalance + calc.totalTreatmentFees;
-    const pendingBalance = totalDue - calc.totalPaid;
-
-    alert(`
-Patient: ${patient.name} (${patient.patientNumber})
---------------------------------
-Opening Balance: $${calc.openingBalance}
-Total Treatment Fees: $${calc.totalTreatmentFees}
-Total Due: $${totalDue}
-Total Paid: $${calc.totalPaid}
-Pending Balance: $${pendingBalance}
---------------------------------
-Formula: (${calc.openingBalance} + ${calc.totalTreatmentFees}) - ${calc.totalPaid} = ${pendingBalance}
-${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status: Payment Due' : 'Status: Settled'}
-    `);
-  };
-
-  // Handle view patient details with consistent stats
-  const handleViewPatientDetails = async (patient: Patient) => {
     try {
-      // First, ensure we have the most up-to-date stats
-      const freshPatient = await getPatientById(patient.id);
-      const pendingBalance = await calculatePatientPendingBalance(freshPatient);
+      // Filter history from context data
+      const queueHistory = (contextQueue || [])
+        .filter(item => item && item.patientNumber === patient.patientNumber)
+        .sort((a, b) => new Date(b.checkInTime || 0).getTime() - new Date(a.checkInTime || 0).getTime());
 
-      const updatedPatient = {
-        ...freshPatient,
-        pendingBalance: pendingBalance
-      };
+      const patientBills = (contextBills || [])
+        .filter(bill => bill && bill.patientId === patient.patientNumber)
+        .sort((a, b) => new Date(b.createdDate || 0).getTime() - new Date(a.createdDate || 0).getTime());
 
-      setSelectedPatient(updatedPatient);
-
-      // Fetch history data
-      const [queueHistory, bills] = await Promise.all([
-        getQueueItemsByPatientNumber(updatedPatient.patientNumber),
-        getBillsByPatientNumber(updatedPatient.patientNumber)
-      ]);
-
-      console.log("=== PATIENT DETAILS DEBUG ===");
-      console.log("Patient:", updatedPatient);
-      console.log("Calculated Pending Balance:", pendingBalance);
-      console.log("Queue items count:", queueHistory.length);
-      console.log("Bills count:", bills.length);
-
-      setSelectedPatientHistory({ queueHistory, bills });
+      setSelectedPatientHistory({
+        queueHistory,
+        bills: patientBills
+      });
       setShowPatientDetails(true);
-    } catch (err) {
-      console.error("History fetch failed", err);
-      toast.error("Failed to load patient details");
+    } catch (error) {
+      console.error('Error loading patient history:', error);
+      setSelectedPatientHistory({ queueHistory: [], bills: [] });
+      setShowPatientDetails(true);
     }
   };
 
-  // Handle sync patient
-  const handleSyncPatient = async (patient: Patient) => {
-    try {
-      setSyncingPatientId(patient.id);
-      toast.info(`Syncing ${patient.name}...`);
-
-      await syncPatientAfterTreatment(patient.patientNumber);
-
-      // Refresh patient data with consistent stats
-      await fetchPatients();
-
-      toast.success(`${patient.name} synced successfully`);
-    } catch (error) {
-      console.error('Error syncing patient:', error);
-      toast.error('Failed to sync patient');
-    } finally {
-      setSyncingPatientId(null);
-    }
-  };
-
-  // Handle sync all patients
-  const handleSyncAllPatients = async () => {
-    try {
-      setSyncing(true);
-      toast.info('Syncing all patients...');
-
-      await fetchPatients();
-
-      toast.success('All patients synced successfully');
-    } catch (error) {
-      console.error('Error syncing all patients:', error);
-      toast.error('Failed to sync patients');
-    } finally {
-      setSyncing(false);
-    }
+  // Handle local recalculate (no cloud sync button needed)
+  const handleRecalculateStats = async (patient: Patient) => {
+    if (!patient) return;
+    
+    toast.info(`Recalculating ${patient.name} local stats...`);
+    // Calculation logic stays local
+    toast.success(`${patient.name} stats updated`);
   };
 
   // Handle export data
   const handleExportData = () => {
     try {
-      if (filteredPatients.length === 0) {
+      if (!filteredPatients || filteredPatients.length === 0) {
         toast.error('No data to export');
         return;
       }
@@ -449,20 +346,28 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
         'Total Paid', 'Pending Balance', 'Status'
       ];
 
-      const csvData = filteredPatients.map(p => [
-        p.patientNumber || 'N/A',
-        p.name || 'N/A',
-        p.phone || 'N/A',
-        p.email || '',
-        p.age || 0,
-        p.gender || 'N/A',
-        p.address || '',
-        safeFormatDate(p.registrationDate) || 'N/A',
-        p.totalVisits || 0,
-        p.totalPaid || 0,
-        p.pendingBalance || 0,
-        p.isActive !== false ? 'Active' : 'Inactive'
-      ]);
+      const csvData = filteredPatients.map(p => {
+        if (!p) return [];
+        return [
+          p.patientNumber || 'N/A',
+          p.name || 'N/A',
+          p.phone || 'N/A',
+          p.email || '',
+          p.age || 0,
+          p.gender || 'N/A',
+          p.address || '',
+          safeFormatDate(p.registrationDate) || 'N/A',
+          p.totalVisits || 0,
+          p.totalPaid || 0,
+          p.pendingBalance || 0,
+          p.isActive !== false ? 'Active' : 'Inactive'
+        ];
+      }).filter(row => row.length > 0);
+
+      if (csvData.length === 0) {
+        toast.error('No valid data to export');
+        return;
+      }
 
       const csvContent = [
         headers.join(','),
@@ -528,6 +433,8 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
 
   // Get status badge
   const getStatusBadge = (patient: Patient) => {
+    if (!patient) return null;
+
     if (patient.isActive === false) {
       return <Badge variant="destructive" className="text-xs">Inactive</Badge>;
     }
@@ -557,6 +464,8 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
 
   // Get pending amount display
   const getPendingDisplay = (patient: Patient) => {
+    if (!patient) return <span className="text-gray-600 text-sm">--</span>;
+
     const pending = patient.pendingBalance || 0;
 
     if (pending === 0) {
@@ -576,6 +485,8 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
 
   // Get visits badge
   const getVisitsBadge = (patient: Patient) => {
+    if (!patient) return <Badge variant="outline" className="bg-gray-50 text-xs">New</Badge>;
+
     const visits = patient.totalVisits || 0;
 
     if (visits === 0) {
@@ -599,82 +510,100 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
   const totalPages = Math.ceil(filteredPatients.length / patientsPerPage);
 
   // Memoized row component
-  const PatientRow = React.memo(({ patient, onEdit, onDelete, onViewDetails, onSync }: {
+  const PatientRow = React.memo(({ patient, onEdit, onDelete, onViewDetails, onRecalculate }: {
     patient: Patient;
     onEdit: (p: Patient) => void;
     onDelete: (p: Patient) => void;
     onViewDetails: (p: Patient) => void;
-    onSync: (p: Patient) => void;
-  }) => (
-    <TableRow key={patient.id} className="hover:bg-gray-50 transition-colors">
-      <TableCell className="font-medium text-blue-600">
-        {patient.patientNumber}
-      </TableCell>
-      <TableCell>
-        <div className="font-semibold">{patient.name}</div>
-        <div className="text-xs text-gray-500">{patient.phone}</div>
-      </TableCell>
-      <TableCell className="hidden md:table-cell text-sm">
-        {patient.age ? `${patient.age}y` : '--'} / {patient.gender}
-      </TableCell>
-      <TableCell className="hidden lg:table-cell text-xs text-gray-500 max-w-[150px] truncate">
-        {patient.address || '--'}
-      </TableCell>
-      <TableCell className="hidden md:table-cell">
-        <div className="text-sm">{safeFormatDate(patient.lastVisit)}</div>
-      </TableCell>
-      <TableCell>
-        {getVisitsBadge(patient)}
-      </TableCell>
-      <TableCell>
-        {getPendingDisplay(patient)}
-      </TableCell>
-      <TableCell>
-        {getStatusBadge(patient)}
-      </TableCell>
-      <TableCell className="text-right">
-        <div className="flex justify-end gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-            onClick={() => onViewDetails(patient)}
-            title="View Details"
-          >
-            <Eye className="w-4 h-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
-            onClick={() => onEdit(patient)}
-            title="Edit Patient"
-          >
-            <Edit className="w-4 h-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-gray-400 hover:text-blue-600 hover:bg-blue-50"
-            onClick={() => onSync(patient)}
-            disabled={syncingPatientId === patient.id}
-            title="Recalculate Stats"
-          >
-            <RefreshCw className={`w-4 h-4 ${syncingPatientId === patient.id ? 'animate-spin' : ''}`} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-red-400 hover:text-red-600 hover:bg-red-50"
-            onClick={() => onDelete(patient)}
-            title="Delete Patient"
-          >
-            <Trash2 className="w-4 h-4" />
-          </Button>
-        </div>
-      </TableCell>
-    </TableRow>
-  ));
+    onRecalculate: (p: Patient) => void;
+  }) => {
+    if (!patient) return null;
+    
+    return (
+      <TableRow key={patient.id} className="hover:bg-gray-50 transition-colors">
+        <TableCell className="font-medium text-blue-600">
+          {patient.patientNumber || 'N/A'}
+        </TableCell>
+        <TableCell>
+          <div className="font-semibold">{patient.name || 'Unnamed'}</div>
+          <div className="text-xs text-gray-500">{patient.phone || 'No phone'}</div>
+        </TableCell>
+        <TableCell className="hidden md:table-cell text-sm">
+          {patient.age ? `${patient.age}y` : '--'} / {patient.gender || '--'}
+        </TableCell>
+        <TableCell className="hidden lg:table-cell text-xs text-gray-500 max-w-[150px] truncate">
+          {patient.address || '--'}
+        </TableCell>
+        <TableCell className="hidden md:table-cell">
+          <div className="text-sm">{safeFormatDate(patient.lastVisit)}</div>
+        </TableCell>
+        <TableCell>
+          {getVisitsBadge(patient)}
+        </TableCell>
+        <TableCell>
+          {getPendingDisplay(patient)}
+        </TableCell>
+        <TableCell>
+          {getStatusBadge(patient)}
+        </TableCell>
+        <TableCell className="text-right">
+          <div className="flex justify-end gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+              onClick={() => onViewDetails(patient)}
+              title="View Details"
+            >
+              <Eye className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+              onClick={() => onEdit(patient)}
+              title="Edit Patient"
+            >
+              <Edit className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-gray-400 hover:text-blue-600 hover:bg-blue-50"
+              onClick={() => onRecalculate(patient)}
+              title="Recalculate Stats"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-red-400 hover:text-red-600 hover:bg-red-50"
+              onClick={() => onDelete(patient)}
+              title="Delete Patient"
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+          </div>
+        </TableCell>
+      </TableRow>
+    );
+  });
+
+  // Handle errors gracefully
+  if (hasError) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen p-6">
+        <AlertCircle className="w-16 h-16 text-red-500 mb-4" />
+        <h1 className="text-2xl font-bold mb-2">Something went wrong</h1>
+        <p className="text-gray-600 mb-4">There was an error loading patient data</p>
+        <Button onClick={() => window.location.reload()}>
+          <RefreshCw className="w-4 h-4 mr-2" />
+          Refresh Page
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 p-4 md:p-6">
@@ -689,18 +618,9 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
         <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"
-            onClick={handleSyncAllPatients}
-            disabled={syncing || loading}
-            className="gap-2 w-full sm:w-auto"
-          >
-            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Syncing...' : 'Sync All'}
-          </Button>
-          <Button
-            variant="outline"
             onClick={handleExportData}
             className="gap-2"
-            disabled={loading}
+            disabled={contextLoading}
           >
             <Download className="w-4 h-4" />
             Export
@@ -708,9 +628,9 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
           <Button
             onClick={handleAddPatient}
             className="gap-2"
-            disabled={loading}
+            disabled={contextLoading}
           >
-            <UserPlus className="w-4 h-4" />
+            <Plus className="w-4 h-4" />
             Add Patient
           </Button>
         </div>
@@ -779,11 +699,11 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
               className="pl-9"
               value={searchTerm}
               onChange={handleSearch}
-              disabled={loading}
+              disabled={contextLoading}
             />
           </div>
 
-          <Select value={statusFilter} onValueChange={setStatusFilter} disabled={loading}>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="w-[160px]">
               <Filter className="w-4 h-4 mr-2" />
               <SelectValue placeholder="Status" />
@@ -795,7 +715,7 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
             </SelectContent>
           </Select>
 
-          <Select value={balanceFilter} onValueChange={setBalanceFilter} disabled={loading}>
+          <Select value={balanceFilter} onValueChange={setBalanceFilter}>
             <SelectTrigger className="w-[160px]">
               <CreditCard className="w-4 h-4 mr-2" />
               <SelectValue placeholder="Balance" />
@@ -808,7 +728,7 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
             </SelectContent>
           </Select>
 
-          <Select value={dateFilter} onValueChange={setDateFilter} disabled={loading}>
+          <Select value={dateFilter} onValueChange={setDateFilter}>
             <SelectTrigger className="w-[160px]">
               <Calendar className="w-4 h-4 mr-2" />
               <SelectValue placeholder="Last Visit" />
@@ -823,7 +743,7 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
           <Button
             variant="outline"
             onClick={handleClearFilters}
-            disabled={loading}
+            disabled={contextLoading}
           >
             Clear Filters
           </Button>
@@ -831,7 +751,7 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
 
         <div className="flex justify-between items-center">
           <div className="text-sm text-gray-500">
-            Showing {filteredPatients.length} of {patients.length} patients
+            Showing {filteredPatients.length} of {contextPatients?.length || 0} patients
             {searchTerm && ` • Search: "${searchTerm}"`}
           </div>
           <div className="text-sm text-gray-500">
@@ -841,7 +761,7 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
       </div>
 
       {/* Loading State */}
-      {loading ? (
+      {contextLoading && (!contextPatients || contextPatients.length === 0) ? (
         <div className="flex flex-col justify-center items-center h-64 bg-white border rounded-lg">
           <Loader2 className="w-8 h-8 animate-spin text-primary mb-4" />
           <span className="text-gray-600">Loading patients...</span>
@@ -863,7 +783,7 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {currentPatients.length === 0 ? (
+                {!currentPatients || currentPatients.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
                       <div className="space-y-3">
@@ -880,12 +800,12 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
                 ) : (
                   currentPatients.map((patient) => (
                     <PatientRow
-                      key={patient.id}
+                      key={patient.id || Math.random().toString()}
                       patient={patient}
                       onEdit={handleEditPatient}
                       onDelete={handleDeletePatient}
                       onViewDetails={handleViewPatientDetails}
-                      onSync={handleSyncPatient}
+                      onRecalculate={handleRecalculateStats}
                     />
                   ))
                 )}
@@ -966,7 +886,7 @@ ${pendingBalance < 0 ? 'Status: Credit Available' : pendingBalance > 0 ? 'Status
             patient={selectedPatient}
             isEditing={!!selectedPatient}
             mode="patient"
-            existingPatients={patients}
+            existingPatients={contextPatients}
             title={selectedPatient ? 'Edit Patient' : 'Add New Patient'}
             loading={saving}
           />

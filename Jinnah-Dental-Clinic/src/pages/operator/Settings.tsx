@@ -32,20 +32,11 @@ import { Treatment } from '@/types';
 import TreatmentFormModal from '@/components/modals/TreatmentFormModal';
 import Papa from 'papaparse';
 import { useAuth } from '@/context/AuthContext';
-
-// Firebase
-import { db } from '@/lib/firebase';
-import {
-  collection,
-  getDocs,
-  doc,
-  setDoc,
-  deleteDoc,
-  query
-} from 'firebase/firestore';
+import { ChangePasswordForm } from '@/components/auth/ChangePasswordForm';
 
 // IndexedDB Utilities
-import { saveToLocal, getFromLocal, deleteFromLocal } from '@/services/indexedDbUtils';
+import { saveToLocal, getFromLocal, deleteFromLocal, openDB } from '@/services/indexedDbUtils';
+import { smartSync, smartDelete } from '@/services/syncService';
 
 // Firebase sync helpers
 const syncToFirebase = (collectionName: string, item: any) => {
@@ -79,20 +70,8 @@ export default function OperatorSettings() {
   const [showTreatmentForm, setShowTreatmentForm] = useState(false);
   const [isEditingTreatment, setIsEditingTreatment] = useState(false);
   const [backupHistory, setBackupHistory] = useState<any[]>([]);
-  const [isSyncing, setIsSyncing] = useState(false);
-
-  // Password Change
-  const [passwordData, setPasswordData] = useState({
-    currentPassword: '',
-    newPassword: '',
-    confirmPassword: '',
-  });
-  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
-  const [showNewPassword, setShowNewPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [isCurrentPasswordValid, setIsCurrentPasswordValid] = useState(false);
-
   // User info from localStorage
+  const [isSyncing, setIsSyncing] = useState(false);
   const [userInfo, setUserInfo] = useState<{ role: string; name: string } | null>(null);
 
   // Clinic Settings
@@ -153,91 +132,20 @@ export default function OperatorSettings() {
     loadLocalData().catch(console.error);
   }, []);
 
-  // Manual Sync
+  // Manual Sync (Optional now, as it happens automatically)
   const handleSync = async () => {
-    setIsSyncing(true);
-    try {
-      const remoteTreatments = await loadFromFirebase('treatments') as Treatment[];
-      setTreatments(remoteTreatments);
-      for (const item of remoteTreatments) await saveToLocal('treatments', item);
-
-      const remoteClinicSnap = await getDocs(query(collection(db, 'clinicSettings')));
-      let remoteClinic = clinicData;
-      if (!remoteClinicSnap.empty) {
-        remoteClinic = remoteClinicSnap.docs[0].data();
-      }
-      setClinicData(remoteClinic);
-      await saveToLocal('clinicSettings', remoteClinic);
-
-      const remoteBackups = await loadFromFirebase('backups');
-      setBackupHistory(remoteBackups);
-      for (const item of remoteBackups) await saveToLocal('backups', item);
-
-      toast.success('Settings synced from Firebase!');
-    } catch (err) {
-      toast.error('Sync failed. Check connection.');
-    } finally {
-      setIsSyncing(false);
-    }
+    toast.info('Synchronization is handled automatically in the background.');
   };
 
-  // Validate current password in real-time
-  useEffect(() => {
-    const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-    if (currentUser.password === passwordData.currentPassword) {
-      setIsCurrentPasswordValid(true);
-    } else {
-      setIsCurrentPasswordValid(false);
-    }
-  }, [passwordData.currentPassword]);
 
-  // Handle change password
-  const handleChangePassword = async () => {
-    if (passwordData.newPassword !== passwordData.confirmPassword) {
-      toast.error('New passwords do not match');
-      return;
-    }
-    if (passwordData.newPassword.length < 6) {
-      toast.error('Password must be at least 6 characters');
-      return;
-    }
-
-    const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-    if (!currentUser.role) {
-      toast.error('No active user session');
-      return;
-    }
-
-    const success = await changePassword(
-      currentUser.role,
-      passwordData.currentPassword,
-      passwordData.newPassword
-    );
-
-    if (success) {
-      toast.success('Password changed successfully');
-
-      localStorage.setItem('currentUser', JSON.stringify({
-        ...currentUser,
-        password: passwordData.newPassword
-      }));
-
-      setPasswordData({
-        currentPassword: '',
-        newPassword: '',
-        confirmPassword: '',
-      });
-      setIsCurrentPasswordValid(false);
-    } else {
-      toast.error('Current password is incorrect or error occurred');
-    }
-  };
-
-  // Handle save clinic settings
+  // Handle save clinic settings (Write-Through)
   const handleSaveClinicSettings = async () => {
-    await saveToLocal('clinicSettings', clinicData);
-    syncToFirebase('clinicSettings', clinicData);
-    toast.success('Clinic settings saved');
+    try {
+      await smartSync('clinicSettings', { ...clinicData, role: 'clinic-settings' });
+      toast.success('Clinic settings saved');
+    } catch (error) {
+      toast.error('Failed to save clinic settings');
+    }
   };
 
   // Toggle all backup items
@@ -275,11 +183,12 @@ export default function OperatorSettings() {
 
     setBackupHistory(prev => [newBackup, ...prev]);
 
-    // Local save
-    await saveToLocal('backups', newBackup);
-
-    // Background sync
-    syncToFirebase('backups', newBackup);
+    // Local save and background sync (Write-Through)
+    try {
+      await smartSync('backups', newBackup);
+    } catch (error) {
+      console.error('Backup sync failed:', error);
+    }
 
     // Download JSON and CSV
     downloadBackup(newBackup, 'json');
@@ -410,11 +319,13 @@ export default function OperatorSettings() {
     if (confirm(`Delete treatment "${treatment.name}"?`)) {
       setTreatments(prev => prev.filter(t => t.id !== treatment.id));
 
-      await deleteItem('treatments', treatment.id);
-
-      deleteDoc(doc(db, 'treatments', treatment.id)).catch(console.error);
-
-      toast.success(`Treatment "${treatment.name}" deleted`);
+      try {
+        await smartDelete('treatments', treatment.id);
+        toast.success(`Treatment "${treatment.name}" deleted`);
+      } catch (error) {
+        console.error('Failed to delete treatment:', error);
+        toast.error('Failed to delete treatment');
+      }
     }
   };
 
@@ -442,13 +353,15 @@ export default function OperatorSettings() {
       setTreatments(prev => [...prev, updatedTreatment]);
     }
 
-    await saveToLocal('treatments', updatedTreatment);
+    try {
+      await smartSync('treatments', updatedTreatment);
+      toast.success(`Treatment "${treatmentData.name}" saved`);
+    } catch (error) {
+      console.error('Failed to save treatment:', error);
+      toast.error('Failed to save treatment');
+    }
 
     setShowTreatmentForm(false);
-
-    syncToFirebase('treatments', updatedTreatment);
-
-    toast.success(`Treatment "${treatmentData.name}" saved`);
   };
 
   return (
@@ -522,84 +435,7 @@ export default function OperatorSettings() {
             )}
 
             <h3 className="text-lg font-medium mb-4">Change Password</h3>
-            <div className="space-y-4 max-w-md">
-              <div>
-                <label className="block text-sm font-medium mb-2">Current Password</label>
-                <div className="relative">
-                  <Input
-                    type={showCurrentPassword ? "text" : "password"}
-                    value={passwordData.currentPassword}
-                    onChange={(e) => setPasswordData({ ...passwordData, currentPassword: e.target.value })}
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="absolute right-2 top-1/2 -translate-y-1/2"
-                    onClick={() => setShowCurrentPassword(!showCurrentPassword)}
-                  >
-                    {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </Button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">New Password</label>
-                <div className="relative">
-                  <Input
-                    type={showNewPassword ? "text" : "password"}
-                    value={passwordData.newPassword}
-                    onChange={(e) => setPasswordData({ ...passwordData, newPassword: e.target.value })}
-                    disabled={!isCurrentPasswordValid}
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="absolute right-2 top-1/2 -translate-y-1/2"
-                    onClick={() => setShowNewPassword(!showNewPassword)}
-                    disabled={!isCurrentPasswordValid}
-                  >
-                    {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </Button>
-                </div>
-                {!isCurrentPasswordValid && passwordData.currentPassword && (
-                  <p className="text-xs text-destructive mt-1">Enter correct current password first</p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">Confirm New Password</label>
-                <div className="relative">
-                  <Input
-                    type={showConfirmPassword ? "text" : "password"}
-                    value={passwordData.confirmPassword}
-                    onChange={(e) => setPasswordData({ ...passwordData, confirmPassword: e.target.value })}
-                    disabled={!isCurrentPasswordValid}
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="absolute right-2 top-1/2 -translate-y-1/2"
-                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                    disabled={!isCurrentPasswordValid}
-                  >
-                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </Button>
-                </div>
-              </div>
-
-              <div className="pt-2">
-                <Button
-                  onClick={handleChangePassword}
-                  disabled={!isCurrentPasswordValid || !passwordData.newPassword || !passwordData.confirmPassword}
-                >
-                  <Lock className="w-4 h-4 mr-2" />
-                  Change Password
-                </Button>
-              </div>
-            </div>
+            {userInfo && <ChangePasswordForm userId={userInfo.role} />}
           </div>
         </TabsContent>
 

@@ -5,6 +5,7 @@ import { User, UserRole, AuthState } from '@/types';
 
 // IndexedDB Utilities
 import { saveToLocal, getFromLocal } from '@/services/indexedDbUtils';
+import { toast } from 'sonner';
 
 interface AuthContextType extends AuthState {
   login: (role: UserRole, password: string) => Promise<boolean>;
@@ -92,92 +93,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('currentUser'); // Optional cleanup
   }, []);
 
-  // New: Change password function (used from settings)
-  // Update the changePassword function in AuthContext.tsx
+  // Refactored changePassword to use authService
   const changePassword = async (role: string, currentPassword: string, newPassword: string): Promise<boolean> => {
     try {
-      console.log('Changing password for role:', role);
-      console.log('Current password entered:', currentPassword);
+      const { updateUserPassword } = await import('@/services/authService');
+      const success = await updateUserPassword(role, currentPassword, newPassword);
 
-      // 1. First check localStorage for current user
-      const currentUserStr = localStorage.getItem('currentUser');
-      if (!currentUserStr) {
-        console.error('No current user found in localStorage');
-        return false;
-      }
-
-      const currentUser = JSON.parse(currentUserStr);
-      console.log('Stored user data:', currentUser);
-
-      // Check if the current password matches
-      if (currentUser.password !== currentPassword) {
-        console.error('Password mismatch:', {
-          entered: currentPassword,
-          stored: currentUser.password
-        });
-        return false;
-      }
-
-      // 2. Update localStorage
-      const updatedUser = {
-        ...currentUser,
-        password: newPassword
-      };
-      localStorage.setItem('currentUser', JSON.stringify(updatedUser));
-      console.log('LocalStorage updated');
-
-      // 3. Update IndexedDB
-      const user = await getFromLocal('users', role);
-      if (user) {
-        user.password = newPassword;
-        await saveToLocal('users', user);
-        console.log('IndexedDB updated');
-      } else {
-        console.warn('User not found in IndexedDB, adding new user');
-        await saveToLocal('users', updatedUser);
-      }
-
-      // 4. Update in clinicUsers array (if it exists)
-      const clinicUsersStr = localStorage.getItem('clinicUsers');
-      if (clinicUsersStr) {
-        try {
-          const clinicUsers = JSON.parse(clinicUsersStr);
-          const userIndex = clinicUsers.findIndex((u: any) => u.role === role);
-          if (userIndex !== -1) {
-            clinicUsers[userIndex].password = newPassword;
-            localStorage.setItem('clinicUsers', JSON.stringify(clinicUsers));
-            console.log('clinicUsers array updated');
-          }
-        } catch (e) {
-          console.warn('Could not update clinicUsers array:', e);
+      if (success) {
+        // Update local auth state if the change was for the logged-in user
+        if (authState.user && authState.user.role === role) {
+          // Note: we don't store password in authState.user for security
+          // But we might want to refresh the session metadata if needed
+          console.log('Current user password updated in background');
         }
+        return true;
       }
-
-      // 5. Update Firebase if online
-      if (typeof window !== 'undefined' && navigator.onLine) {
-        try {
-          // Import db dynamically to avoid SSR issues
-          const { db } = await import('@/lib/firebase');
-          const { doc, setDoc } = await import('firebase/firestore');
-
-          if (db) {
-            await setDoc(doc(db, 'users', role), {
-              ...updatedUser,
-              lastUpdated: new Date().toISOString()
-            });
-            console.log('Firebase password updated');
-          }
-        } catch (firebaseError) {
-          console.error('Firebase update failed:', firebaseError);
-          // Continue even if Firebase fails
-        }
-      }
-
-      console.log('Password changed successfully');
-      return true;
-
-    } catch (error) {
+      return false;
+    } catch (error: any) {
       console.error('Change password error:', error);
+      toast.error(error.message || 'Failed to change password');
       return false;
     }
   };

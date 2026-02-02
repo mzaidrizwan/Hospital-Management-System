@@ -1,16 +1,17 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { DollarSign, TrendingUp, TrendingDown, Download, AlertCircle, Loader2, RefreshCw, Badge } from 'lucide-react';
+import { DollarSign, TrendingUp, TrendingDown, Download, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatCard } from '@/components/dashboard/StatCard'; // Assuming you have this
 import { toast } from "@/hooks/use-toast";
-import { db } from '@/lib/firebase';
-import { collection, getDocs, query, where, orderBy, limit } from 'firebase/firestore';
 import { startOfMonth, endOfMonth, format } from 'date-fns';
+import { useData } from '@/context/DataContext';
 
 export default function AdminFinances() {
+  const { bills, expenses, patients, loading: dataLoading } = useData();
   const [stats, setStats] = useState({
     totalRevenue: 0,
     totalExpenses: 0,
@@ -24,95 +25,66 @@ export default function AdminFinances() {
   const currentMonthStart = startOfMonth(new Date());
   const currentMonthEnd = endOfMonth(new Date());
 
-  const fetchFinancialData = async () => {
-    setLoading(true);
-    setError(null);
+  useEffect(() => {
+    if (dataLoading) return;
 
     try {
-      // 1. Revenue from bills (current month)
-      const billsQuery = query(
-        collection(db, 'bills'),
-        where('createdDate', '>=', currentMonthStart.toISOString()),
-        where('createdDate', '<=', currentMonthEnd.toISOString())
-      );
-      const billsSnapshot = await getDocs(billsQuery);
+      setLoading(true);
+
+      // 1. Filter bills for current month
+      const currentMonthBills = bills.filter(bill => {
+        const date = bill.createdDate || bill.date;
+        if (!date) return false;
+        const billDate = new Date(date);
+        return billDate >= currentMonthStart && billDate <= currentMonthEnd;
+      });
 
       let revenue = 0;
       const transactions: any[] = [];
-      billsSnapshot.forEach((doc) => {
-        const data = doc.data();
-        const amount = Number(data.totalAmount || data.amountPaid || 0);
+
+      currentMonthBills.forEach((bill) => {
+        const amount = Number(bill.totalAmount || bill.amountPaid || 0);
         revenue += amount;
 
-        // Collect for recent transactions
         transactions.push({
-          id: doc.id,
+          id: bill.id,
           type: 'Bill',
           amount,
-          date: data.createdDate || data.createdAt || new Date().toISOString(),
-          patient: data.patientName || 'Unknown',
-          status: data.paymentStatus || 'Pending',
+          date: bill.createdDate || bill.date || new Date().toISOString(),
+          patient: bill.patientName || 'Unknown',
+          status: bill.paymentStatus || 'Pending',
         });
       });
 
-      // 2. Expenses from expenses collection (current month)
-      let expenses = 0;
-      try {
-        const expensesQuery = query(
-          collection(db, 'expenses'),
-          where('date', '>=', currentMonthStart.toISOString()),
-          where('date', '<=', currentMonthEnd.toISOString())
-        );
-        const expensesSnapshot = await getDocs(expensesQuery);
+      // 2. Filter expenses for current month
+      const currentMonthExpenses = expenses.filter(exp => {
+        if (!exp.date) return false;
+        const expDate = new Date(exp.date);
+        return expDate >= currentMonthStart && expDate <= currentMonthEnd;
+      });
 
-        expensesSnapshot.forEach((doc) => {
-          const data = doc.data();
-          expenses += Number(data.amount || 0);
-        });
-      } catch (expErr) {
-        console.warn('Expenses collection not found or empty:', expErr);
-        // If no expenses collection yet, keep 0
-      }
+      const totalExpenses = currentMonthExpenses.reduce((sum, exp) => sum + Number(exp.amount || 0), 0);
 
       // 3. Outstanding from patients
-      const patientsSnapshot = await getDocs(collection(db, 'patients'));
-      let outstanding = 0;
-      patientsSnapshot.forEach((doc) => {
-        const data = doc.data();
-        outstanding += Number(data.pendingBalance || 0);
-      });
+      const outstanding = patients.reduce((sum, p) => sum + Number(p.pendingBalance || 0), 0);
 
       // 4. Net Profit
-      const netProfit = revenue - expenses;
+      const netProfit = revenue - totalExpenses;
 
-      // 5. Sort recent transactions by date (latest first)
+      // 5. Sort transactions
       const sortedTransactions = transactions
         .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
         .slice(0, 5);
 
-      setStats({ totalRevenue: revenue, totalExpenses: expenses, netProfit, outstanding });
+      setStats({ totalRevenue: revenue, totalExpenses, netProfit, outstanding });
       setRecentTransactions(sortedTransactions);
-
-      toast({
-        title: "Financial Data Loaded",
-        description: "Current month overview updated",
-      });
-    } catch (err: any) {
-      console.error('Financial fetch error:', err);
-      setError('Failed to load financial data. Please try again.');
-      toast({
-        title: "Error",
-        description: "Could not load financial overview.",
-        variant: "destructive",
-      });
-    } finally {
+      setLoading(false);
+    } catch (err) {
+      console.error('Error calculating financial stats:', err);
+      setError('Error processing data');
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchFinancialData();
-  }, []);
+  }, [bills, expenses, patients, dataLoading]);
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-US', {
@@ -148,7 +120,7 @@ export default function AdminFinances() {
         <div className="flex flex-col sm:flex-row gap-3">
           <Button
             variant="outline"
-            onClick={fetchFinancialData}
+            onClick={() => window.location.reload()}
             disabled={loading}
             className="gap-2"
           >
@@ -265,8 +237,8 @@ export default function AdminFinances() {
                       variant="outline"
                       className={
                         tx.status === 'paid' ? 'bg-green-100 text-green-800' :
-                        tx.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                        'bg-gray-100 text-gray-800'
+                          tx.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-gray-100 text-gray-800'
                       }
                     >
                       {tx.status.toUpperCase()}

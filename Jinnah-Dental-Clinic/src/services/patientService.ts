@@ -22,12 +22,12 @@ export const getPatientByNumber = async (patientNumber: string): Promise<Patient
   try {
     const q = query(patientsRef, where("patientNumber", "==", patientNumber));
     const snapshot = await getDocs(q);
-    
+
     if (snapshot.empty) return null;
-    
+
     const docSnap = snapshot.docs[0];
     const data = docSnap.data();
-    
+
     return {
       id: docSnap.id,
       patientNumber: data.patientNumber || patientNumber,
@@ -102,9 +102,9 @@ export const getPatientById = async (patientId: string): Promise<Patient | null>
   try {
     const patientRef = doc(db, 'patients', patientId);
     const snapshot = await getDoc(patientRef);
-    
+
     if (!snapshot.exists()) return null;
-    
+
     const data = snapshot.data();
     return {
       id: snapshot.id,
@@ -139,32 +139,20 @@ export const getPatientById = async (patientId: string): Promise<Patient | null>
 
 export const addPatient = async (data: Omit<Patient, "id">): Promise<{ id: string; patientNumber: string }> => {
   try {
-    const patientData = {
-      patientNumber: data.patientNumber,
-      name: data.name || '',
-      phone: data.phone || '',
-      age: data.age || 0,
-      gender: data.gender || 'other',
-      address: data.address || '',
-      openingBalance: data.openingBalance || 0,
-      email: data.email || '',
-      emergencyContact: data.emergencyContact || '',
-      bloodGroup: data.bloodGroup || '',
-      allergies: data.allergies || '',
-      medicalHistory: data.medicalHistory || '',
-      notes: data.notes || '',
+    const { smartSync } = await import('./syncService');
+
+    const patientDataSnippet = {
+      ...data,
       registrationDate: new Date().toISOString(),
       totalVisits: 0,
       totalPaid: 0,
       pendingBalance: data.openingBalance || 0,
       totalTreatmentFees: 0,
-      isActive: true,
-      createdAt: Timestamp.now(),
-      updatedAt: Timestamp.now()
+      isActive: true
     };
 
-    const docRef = await addDoc(patientsRef, patientData);
-    return { id: docRef.id, patientNumber: data.patientNumber };
+    const id = await smartSync("patients", patientDataSnippet);
+    return { id: id as string, patientNumber: data.patientNumber };
   } catch (error) {
     console.error("Error adding patient:", error);
     throw error;
@@ -173,27 +161,13 @@ export const addPatient = async (data: Omit<Patient, "id">): Promise<{ id: strin
 
 export const updatePatient = async (id: string, data: Partial<Patient>) => {
   try {
-    const patientRef = doc(db, "patients", id);
-    
-    const sanitizeValue = (value: any): any => {
-      if (value === undefined || value === null) return null;
-      if (value instanceof Date) return value.toISOString();
-      if (typeof value === 'string' && value.includes('T') && value.includes('Z')) return value;
-      return value;
-    };
-    
-    const firestoreData: Record<string, any> = {};
-    
-    for (const [key, value] of Object.entries(data)) {
-      const sanitized = sanitizeValue(value);
-      if (sanitized !== undefined) {
-        firestoreData[key] = sanitized;
-      }
-    }
-    
-    firestoreData.updatedAt = serverTimestamp();
-    
-    await updateDoc(patientRef, firestoreData);
+    const { smartSync } = await import('./syncService');
+
+    // Get current local data
+    const { getFromLocal } = await import('./indexedDbUtils');
+    const currentData = await getFromLocal("patients", id) as any;
+
+    await smartSync("patients", { ...currentData, ...data, id });
   } catch (error) {
     console.error("Error updating patient:", error);
     throw error;
@@ -202,7 +176,8 @@ export const updatePatient = async (id: string, data: Partial<Patient>) => {
 
 export const deletePatient = async (id: string) => {
   try {
-    await deleteDoc(doc(db, "patients", id));
+    const { smartDelete } = await import('./syncService');
+    await smartDelete("patients", id);
   } catch (error) {
     console.error("Error deleting patient:", error);
     throw error;
@@ -249,11 +224,11 @@ export const getPatientStats = async (patientNumber: string) => {
 
   const lastVisit = completedTreatments.length
     ? completedTreatments
-        .sort(
-          (a, b) =>
-            new Date(b.treatmentEndTime || b.checkInTime || 0).getTime() -
-            new Date(a.treatmentEndTime || a.checkInTime || 0).getTime()
-        )[0].treatmentEndTime
+      .sort(
+        (a, b) =>
+          new Date(b.treatmentEndTime || b.checkInTime || 0).getTime() -
+          new Date(a.treatmentEndTime || a.checkInTime || 0).getTime()
+      )[0].treatmentEndTime
     : undefined;
 
   return {
@@ -270,20 +245,20 @@ export const updatePatientWithStats = async (patientId: string) => {
   try {
     const patient = await getPatientById(patientId);
     if (!patient) return null;
-    
+
     const stats = await getPatientStats(patient.patientNumber);
-    
+
     const updateData = {
       totalVisits: stats.totalVisits,
       totalPaid: stats.totalPaid,
       pendingBalance: stats.pendingBalance,
       totalTreatmentFees: stats.totalTreatmentFees, // optional but good to store
       ...(stats.lastVisit && { lastVisit: stats.lastVisit }),
-      updatedAt: serverTimestamp()
+      updatedAt: new Date().toISOString()
     };
-    
+
     await updatePatient(patientId, updateData);
-    
+
     return {
       ...patient,
       ...updateData,
@@ -299,7 +274,7 @@ export const syncAllPatientsStats = async () => {
   try {
     const patients = await getAllPatients();
     const results = [];
-    
+
     for (const patient of patients) {
       try {
         const updated = await updatePatientWithStats(patient.id);
@@ -318,7 +293,7 @@ export const syncAllPatientsStats = async () => {
         });
       }
     }
-    
+
     return results;
   } catch (error) {
     console.error('Error syncing all patients:', error);
@@ -332,7 +307,7 @@ export const syncAllPatientsStats = async () => {
  */
 export const calculatePatientPendingBalance = (patient: Patient, stats?: any) => {
   const openingBalance = patient.openingBalance || 0;
-  
+
   // Preferred: use real stats if available
   if (stats?.pendingBalance !== undefined) {
     return stats.pendingBalance;
@@ -342,6 +317,6 @@ export const calculatePatientPendingBalance = (patient: Patient, stats?: any) =>
   // WARNING: This is NOT accurate - only for display when real stats unavailable
   const totalTreatmentFeesApprox = patient.totalVisits ? patient.totalVisits * 100 : 0;
   const totalPaid = patient.totalPaid || 0;
-  
+
   return Math.max(0, openingBalance + totalTreatmentFeesApprox - totalPaid);
 };

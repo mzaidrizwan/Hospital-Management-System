@@ -5,3 +5,5 @@
 5. Re-arranged elements of Admin Dashboard page.
 6. re-designed the patient-details-modal at Patient Management page.
 7. re-structured Add-Patient-modal at Patient Management page.
+8. introduced Auto-Syncing feature.
+9. Changed data stages and data pickup points.

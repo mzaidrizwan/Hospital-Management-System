@@ -1,19 +1,27 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { FileText, Download, Calendar, Users, DollarSign, Package, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  FileText,
+  Download,
+  Calendar,
+  Users,
+  DollarSign,
+  Package,
+  AlertCircle,
+  Loader2,
+  RefreshCw,
+  TrendingUp,
+  BarChart,
+  ClipboardList
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { toast } from "@/hooks/use-toast";
-import { db } from '@/lib/firebase';
-import {
-  collection,
-  getDocs,
-  query,
-  where,
-  orderBy,
-} from 'firebase/firestore';
-import { format, startOfDay, endOfDay, startOfMonth, endOfMonth } from 'date-fns';
+import { toast } from "sonner";
+import { format, startOfDay, endOfDay, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
+import { useData } from '@/context/DataContext';
+
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 
 interface ReportStat {
   title: string;
@@ -23,143 +31,137 @@ interface ReportStat {
   loading?: boolean;
 }
 
-export default function AdminReports() {
-  const [stats, setStats] = useState({
-    todayRevenue: 0,
-    todayPatients: 0,
-    monthlyRevenue: 0,
-    monthlyExpenses: 0, // Placeholder
-    totalPatients: 0,
-    activePatients: 0,
-    newPatientsThisMonth: 0,
-    totalInventoryItems: 0,
-    lowStockItems: 0,
-    totalStaff: 0,
-    activeStaff: 0,
-  });
+const formatCurrency = (amount: number) => {
+  if (isNaN(amount)) return 'PKR 0';
+  return new Intl.NumberFormat('en-PK', {
+    style: 'currency',
+    currency: 'PKR',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(amount);
+};
 
-  const [loading, setLoading] = useState(true);
+export default function AdminReports() {
+  const {
+    bills,
+    queue,
+    patients,
+    inventory,
+    staff,
+    loading: dataLoading
+  } = useData();
+
   const [generating, setGenerating] = useState<string | null>(null);
 
-  const todayStart = startOfDay(new Date());
-  const todayEnd = endOfDay(new Date());
-  const monthStart = startOfMonth(new Date());
-  const monthEnd = endOfMonth(new Date());
+  const stats = useMemo(() => {
+    if (dataLoading) {
+      return {
+        todayRevenue: 0,
+        todayPatients: 0,
+        monthlyRevenue: 0,
+        monthlyExpenses: 0,
+        totalPatients: 0,
+        activePatients: 0,
+        newPatientsThisMonth: 0,
+        totalInventoryItems: 0,
+        lowStockItems: 0,
+        totalStaff: 0,
+        activeStaff: 0,
+      };
+    }
 
-  const fetchReportData = async () => {
-    setLoading(true);
-    try {
-      // 1. Today's revenue & patients (from bills & queue)
-      const todayBillsQuery = query(
-        collection(db, 'bills'),
-        where('createdDate', '>=', todayStart.toISOString()),
-        where('createdDate', '<=', todayEnd.toISOString())
-      );
-      const todayBillsSnap = await getDocs(todayBillsQuery);
-      let todayRevenue = 0;
-      todayBillsSnap.forEach(doc => {
-        const data = doc.data();
-        todayRevenue += Number(data.totalAmount || data.amountPaid || 0);
-      });
+    const now = new Date();
+    const todayStart = startOfDay(now);
+    const todayEnd = endOfDay(now);
+    const monthStart = startOfMonth(now);
+    const monthEnd = endOfMonth(now);
 
-      const todayQueueQuery = query(
-        collection(db, 'queue'),
-        where('status', '==', 'completed'),
-        where('treatmentEndTime', '>=', todayStart.toISOString()),
-        where('treatmentEndTime', '<=', todayEnd.toISOString())
-      );
-      const todayQueueSnap = await getDocs(todayQueueQuery);
-      const todayPatients = todayQueueSnap.size;
+    // 1. Revenue calculations
+    let todayRevenue = 0;
+    let monthlyRevenue = 0;
 
-      // 2. Monthly revenue
-      const monthlyBillsQuery = query(
-        collection(db, 'bills'),
-        where('createdDate', '>=', monthStart.toISOString()),
-        where('createdDate', '<=', monthEnd.toISOString())
-      );
-      const monthlyBillsSnap = await getDocs(monthlyBillsQuery);
-      let monthlyRevenue = 0;
-      monthlyBillsSnap.forEach(doc => {
-        const data = doc.data();
-        monthlyRevenue += Number(data.totalAmount || data.amountPaid || 0);
-      });
+    (bills || []).forEach(bill => {
+      if (!bill) return;
+      // Fixed: Removed createdAt as it might not exist according to lint
+      const dateStr = bill.createdDate || bill.date;
+      if (!dateStr) return;
 
-      // 3. Patients stats
-      const patientsSnap = await getDocs(collection(db, 'patients'));
-      let totalPatients = patientsSnap.size;
-      let activePatients = 0;
-      let newThisMonth = 0;
+      try {
+        const date = new Date(dateStr);
+        if (isNaN(date.getTime())) return;
 
-      patientsSnap.forEach(doc => {
-        const data = doc.data();
-        if (data.isActive !== false) activePatients++;
-        if (data.registrationDate) {
-          const regDate = new Date(data.registrationDate);
-          if (regDate >= monthStart && regDate <= monthEnd) {
+        const amount = Number(bill.totalAmount || bill.amountPaid || 0);
+
+        if (isWithinInterval(date, { start: todayStart, end: todayEnd })) {
+          todayRevenue += amount;
+        }
+
+        if (isWithinInterval(date, { start: monthStart, end: monthEnd })) {
+          monthlyRevenue += amount;
+        }
+      } catch (e) {
+        console.error('Error parsing bill date:', e);
+      }
+    });
+
+    // 2. Patient calculations
+    const todayPatients = (queue || []).filter(item => {
+      if (!item || item.status !== 'completed') return false;
+      const dateStr = item.treatmentEndTime || item.checkInTime || item.createdAt;
+      if (!dateStr) return false;
+      try {
+        const date = new Date(dateStr);
+        return !isNaN(date.getTime()) && isWithinInterval(date, { start: todayStart, end: todayEnd });
+      } catch (e) {
+        return false;
+      }
+    }).length;
+
+    let activePatients = 0;
+    let newThisMonth = 0;
+    (patients || []).forEach(p => {
+      if (!p) return;
+      if (p.isActive !== false) activePatients++;
+      if (p.registrationDate) {
+        try {
+          const regDate = new Date(p.registrationDate);
+          if (!isNaN(regDate.getTime()) && isWithinInterval(regDate, { start: monthStart, end: monthEnd })) {
             newThisMonth++;
           }
-        }
-      });
+        } catch (e) { }
+      }
+    });
 
-      // 4. Inventory stats (placeholder - add real inventory fetch)
-      const inventorySnap = await getDocs(collection(db, 'inventory'));
-      let totalInventory = inventorySnap.size;
-      let lowStock = 0;
-      inventorySnap.forEach(doc => {
-        const data = doc.data();
-        if (data.quantity < (data.min || 0)) lowStock++;
-      });
+    // 3. Inventory stats
+    let lowStock = (inventory || []).filter(item => item && item.quantity < (item.min || 0)).length;
 
-      // 5. Staff stats
-      const staffSnap = await getDocs(collection(db, 'staff'));
-      let totalStaff = staffSnap.size;
-      let activeStaff = 0;
-      staffSnap.forEach(doc => {
-        const data = doc.data();
-        if (data.status === 'Active') activeStaff++;
-      });
+    // 4. Staff stats
+    let activeStaff = (staff || []).filter(s => s && s.status === 'Active').length;
 
-      setStats({
-        todayRevenue,
-        todayPatients,
-        monthlyRevenue,
-        monthlyExpenses: 0, // ← Replace when expenses collection exists
-        totalPatients,
-        activePatients,
-        newPatientsThisMonth: newThisMonth,
-        totalInventoryItems: totalInventory,
-        lowStockItems: lowStock,
-        totalStaff,
-        activeStaff,
-      });
+    return {
+      todayRevenue,
+      todayPatients,
+      monthlyRevenue,
+      monthlyExpenses: 0, // Placeholder
+      totalPatients: (patients || []).length,
+      activePatients,
+      newPatientsThisMonth: newThisMonth,
+      totalInventoryItems: (inventory || []).length,
+      lowStockItems: lowStock,
+      totalStaff: (staff || []).length,
+      activeStaff,
+    };
+  }, [bills, queue, patients, inventory, staff, dataLoading]);
 
-      toast({
-        title: "Reports Loaded",
-        description: "All statistics updated from live data",
-      });
-    } catch (err: any) {
-      console.error('Reports fetch error:', err);
-      toast({
-        title: "Error",
-        description: "Failed to load report data",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchReportData();
-  }, []);
+  const hasAnyData = useMemo(() => {
+    return stats.totalPatients > 0 || stats.totalInventoryItems > 0 || stats.totalStaff > 0 || stats.monthlyRevenue > 0;
+  }, [stats]);
 
   const generateReport = async (reportName: string) => {
     setGenerating(reportName);
     try {
-      // Simulate report generation delay
-      await new Promise(resolve => setTimeout(resolve, 1200));
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // Simple CSV generation example (you can make it more advanced)
       let csvContent = "data:text/csv;charset=utf-8,";
       let filename = `${reportName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`;
 
@@ -195,16 +197,10 @@ export default function AdminReports() {
       link.click();
       document.body.removeChild(link);
 
-      toast({
-        title: "Report Generated",
-        description: `${reportName} downloaded successfully`,
-      });
+      toast.success(`${reportName} downloaded successfully`);
     } catch (err) {
-      toast({
-        title: "Error",
-        description: "Failed to generate report",
-        variant: "destructive",
-      });
+      console.error('Report generation error:', err);
+      toast.error("Failed to generate report");
     } finally {
       setGenerating(null);
     }
@@ -213,91 +209,122 @@ export default function AdminReports() {
   const reportTypes = [
     {
       name: 'Daily Summary',
-      description: `Revenue: $${stats.todayRevenue} • Patients: ${stats.todayPatients}`,
+      description: `Revenue: ${formatCurrency(stats.todayRevenue)} • Patients: ${stats.todayPatients}`,
       icon: Calendar,
-      stat: `$${stats.todayRevenue} today`,
+      stat: `${formatCurrency(stats.todayRevenue)} today`,
+      available: stats.todayRevenue > 0 || stats.todayPatients > 0
     },
     {
       name: 'Monthly Financial',
-      description: `Revenue: $${stats.monthlyRevenue} • Expenses: $${stats.monthlyExpenses}`,
+      description: `Revenue: ${formatCurrency(stats.monthlyRevenue)} • Expenses: ${formatCurrency(stats.monthlyExpenses)}`,
       icon: DollarSign,
-      stat: `Profit: $${stats.monthlyRevenue - stats.monthlyExpenses}`,
+      stat: `Profit: ${formatCurrency(stats.monthlyRevenue - stats.monthlyExpenses)}`,
+      available: stats.monthlyRevenue > 0
     },
     {
       name: 'Patient Statistics',
       description: `Total: ${stats.totalPatients} • Active: ${stats.activePatients}`,
       icon: Users,
       stat: `${stats.newPatientsThisMonth} new this month`,
+      available: stats.totalPatients > 0
     },
     {
       name: 'Inventory Report',
       description: `Total Items: ${stats.totalInventoryItems}`,
       icon: Package,
-      stat: `${stats.lowStockItems} low stock`,
+      stat: `${stats.lowStockItems} low stock items`,
+      available: stats.totalInventoryItems > 0
     },
     {
       name: 'Staff Performance',
-      description: `Total Staff: ${stats.totalStaff}`,
-      icon: Users,
-      stat: `${stats.activeStaff} active`,
+      description: `Total Staff: ${stats.totalStaff} • Active: ${stats.activeStaff}`,
+      icon: ClipboardList,
+      stat: `${stats.activeStaff} staff currently active`,
+      available: stats.totalStaff > 0
     },
   ];
+
+  if (dataLoading) {
+    return <LoadingSpinner message="Compiling clinic reports..." />;
+  }
+
+  const handleRefresh = () => {
+    window.location.reload();
+  };
 
   return (
     <div className="space-y-6 animate-fade-in p-4 md:p-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold">Reports</h1>
-          <p className="text-muted-foreground">Generate and download clinic reports</p>
+          <div className="flex items-center gap-2">
+            <FileText className="w-6 h-6 text-primary" />
+            <h1 className="text-2xl md:text-3xl font-bold">Reports</h1>
+          </div>
+          <p className="text-muted-foreground">Generate and download clinic performance reports</p>
         </div>
         <Button
           variant="outline"
-          onClick={fetchReportData}
-          disabled={loading}
+          onClick={handleRefresh}
           className="gap-2"
         >
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+          <RefreshCw className="w-4 h-4" />
           Refresh Data
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {reportTypes.map((report) => (
-          <Card key={report.name} className="hover:shadow-md transition-all">
-            <CardContent className="p-6">
-              <div className="flex items-start justify-between">
-                <div className="flex items-start gap-4">
-                  <div className="p-3 rounded-lg bg-primary/10">
-                    <report.icon className="w-5 h-5 text-primary" />
+      {!hasAnyData ? (
+        <Card className="p-12 text-center border-dashed">
+          <CardContent className="flex flex-col items-center gap-4">
+            <ClipboardList className="w-12 h-12 text-muted-foreground opacity-20" />
+            <div className="space-y-1">
+              <h3 className="text-lg font-semibold">No Activity To Report</h3>
+              <p className="text-muted-foreground max-w-xs mx-auto text-sm">
+                Reports will be available once you start registering patients, inventory, or financial transactions.
+              </p>
+            </div>
+            <Button variant="outline" onClick={() => window.location.reload()}>
+              Refresh Dashboard
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {reportTypes.map((report) => (
+            <Card key={report.name} className="hover:shadow-md transition-all border-l-4 border-l-primary">
+              <CardContent className="p-6">
+                <div className="flex flex-col h-full justify-between">
+                  <div className="flex items-start gap-4 mb-6">
+                    <div className="p-3 rounded-xl bg-primary/10">
+                      <report.icon className="w-6 h-6 text-primary" />
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="font-bold text-lg leading-tight">{report.name}</h3>
+                      <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{report.description}</p>
+                      <div className="mt-3 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary/5 text-primary border border-primary/10">
+                        {report.stat}
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-semibold text-lg">{report.name}</h3>
-                    <p className="text-sm text-muted-foreground mt-1">{report.description}</p>
-                    <p className="text-xs font-medium mt-2 text-primary">
-                      {report.stat}
-                    </p>
-                  </div>
+                  <Button
+                    variant="default"
+                    className="w-full gap-2 shadow-sm"
+                    onClick={() => generateReport(report.name)}
+                    disabled={generating === report.name || !report.available}
+                  >
+                    {generating === report.name ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
+                    {generating === report.name ? 'Generating...' : (!report.available ? 'No Data Available' : 'Download Report')}
+                  </Button>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-2"
-                  onClick={() => generateReport(report.name)}
-                  disabled={generating === report.name || loading}
-                >
-                  {generating === report.name ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Download className="w-4 h-4" />
-                  )}
-                  {generating === report.name ? 'Generating...' : 'Generate'}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

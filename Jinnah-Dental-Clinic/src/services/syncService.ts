@@ -18,40 +18,35 @@ import { toast } from 'sonner';
  * If offline, adds to a sync queue for future reconciliation.
  */
 export const smartSync = async (collectionName: string, data: any) => {
-  const docId = data.id || data.role;
-  if (!docId) {
-    console.error('smartSync error: No ID or Role provided', data);
-    return;
-  }
+  // 1. Ensure we have an ID. If not, generate a local one.
+  const docId = data.id || data.role || `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
   const enrichedData = {
     ...data,
+    id: docId, // Ensure ID is present in the object itself
     lastUpdated: Date.now(),
+    updatedAt: new Date().toISOString(),
     needsSync: false
   };
 
-  // 1. Save to IndexedDB (Always first, local source of truth)
+  // 2. Save to IndexedDB (Always first, local source of truth)
   try {
     await saveToLocal(collectionName, enrichedData);
-    console.log(`Local save success: ${collectionName}/${docId}`);
   } catch (err) {
     console.error(`Local save failed for ${collectionName}:`, err);
-    throw err; // Critical failure if we can't save locally
+    throw err;
   }
 
-  // 2. Attempt Firebase Sync
+  // 3. Attempt Firebase Sync
   try {
     const docRef = doc(db, collectionName, docId);
     await setDoc(docRef, enrichedData);
-    console.log(`Firebase sync success: ${collectionName}/${docId}`);
-
-    // If successfully synced, ensure it's removed from syncQueue if it was there
     await deleteFromLocal('syncQueue', `${collectionName}_${docId}`).catch(() => { });
   } catch (err: any) {
-    // 3. Handle Offline/Connectivity failure
+    // 4. Handle Offline/Connectivity failure
     console.warn(`Firebase sync failed for ${collectionName}. Adding to queue.`, err);
 
-    // Update local record with needsSync flag
+    // Update local record with needsSync flag so UI can optionally show it
     await saveToLocal(collectionName, {
       ...enrichedData,
       needsSync: true
@@ -60,6 +55,7 @@ export const smartSync = async (collectionName: string, data: any) => {
     // Add to specific syncQueue store
     await saveToLocal('syncQueue', {
       id: `${collectionName}_${docId}`,
+      type: 'PATCH',
       collectionName,
       docId,
       timestamp: Date.now()
@@ -69,6 +65,55 @@ export const smartSync = async (collectionName: string, data: any) => {
     toast.error("Offline Mode: Data saved locally.", {
       id: "offline-sync-toast",
       description: "It will be synced automatically when you're back online."
+    });
+  }
+
+  return docId; // Return the ID so callers (like addQueueItem) know what it is
+};
+
+/**
+ * smartDelete
+ * Removes data locally immediately, then attempts to delete from Firebase.
+ * If offline, adds a deletion task to the sync queue.
+ */
+export const smartDelete = async (collectionName: string, docId: string) => {
+  if (!docId) {
+    console.error('smartDelete error: No ID provided');
+    return;
+  }
+
+  // 1. Delete from IndexedDB (Immediate UI update via Context)
+  try {
+    await deleteFromLocal(collectionName, docId);
+    console.log(`Local delete success: ${collectionName}/${docId}`);
+  } catch (err) {
+    console.error(`Local delete failed for ${collectionName}:`, err);
+    throw err;
+  }
+
+  // 2. Attempt Firebase Deletion
+  try {
+    const { deleteDoc } = await import('firebase/firestore');
+    await deleteDoc(doc(db, collectionName, docId));
+    console.log(`Firebase delete success: ${collectionName}/${docId}`);
+
+    // Remove any pending sync tasks for this document
+    await deleteFromLocal('syncQueue', `${collectionName}_${docId}`).catch(() => { });
+  } catch (err) {
+    console.warn(`Firebase delete failed for ${collectionName}. Queueing deletion.`, err);
+
+    // Add deletion task to syncQueue
+    await saveToLocal('syncQueue', {
+      id: `${collectionName}_${docId}`,
+      type: 'DELETE',
+      collectionName,
+      docId,
+      timestamp: Date.now()
+    });
+
+    toast.error("Offline: Change saved locally.", {
+      id: "offline-sync-toast",
+      description: "Deletion will be synced when online."
     });
   }
 };
@@ -87,24 +132,26 @@ export const processSyncQueue = async () => {
 
     for (const task of queue) {
       try {
-        const { collectionName, docId } = task;
-        const localData = await getFromLocal(collectionName, docId);
+        const { collectionName, docId, type } = task;
 
-        if (localData) {
-          const docRef = doc(db, collectionName, docId);
-          await setDoc(docRef, { ...localData, needsSync: false });
-
-          // Clear from local as synced
-          await saveToLocal(collectionName, { ...localData, needsSync: false });
+        if (type === 'DELETE') {
+          const { deleteDoc } = await import('firebase/firestore');
+          await deleteDoc(doc(db, collectionName, docId));
           await deleteFromLocal('syncQueue', task.id);
-          console.log(`Re-sync success: ${collectionName}/${docId}`);
         } else {
-          // Item missing locally, just remove from queue
-          await deleteFromLocal('syncQueue', task.id);
+          const localData = await getFromLocal(collectionName, docId);
+
+          if (localData) {
+            const docRef = doc(db, collectionName, docId);
+            await setDoc(docRef, { ...localData, needsSync: false });
+            await saveToLocal(collectionName, { ...localData, needsSync: false });
+            await deleteFromLocal('syncQueue', task.id);
+          } else {
+            await deleteFromLocal('syncQueue', task.id);
+          }
         }
       } catch (err) {
         console.error(`Re-sync failed for ${task.id}:`, err);
-        // Continue to next item
       }
     }
 

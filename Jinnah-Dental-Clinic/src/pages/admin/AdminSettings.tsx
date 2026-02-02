@@ -1,11 +1,15 @@
 import React from 'react';
-import { Settings, Shield, Database, Bell, Users } from 'lucide-react';
+import { Settings, Shield, Database } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { useAuth } from '@/context/AuthContext';
+import { ChangePasswordForm } from '@/components/auth/ChangePasswordForm';
 
 export default function AdminSettings() {
+  const { user } = useAuth();
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
@@ -50,7 +54,7 @@ export default function AdminSettings() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="font-medium">Last Sync</p>
-                <p className="text-sm text-muted-foreground">5 minutes ago</p>
+                <p className="text-sm text-muted-foreground">Just now</p>
               </div>
               <Button variant="outline">Sync Now</Button>
             </div>
@@ -65,7 +69,7 @@ export default function AdminSettings() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <Button variant="outline">Change Password</Button>
+            {user && <ChangePasswordForm userId={user.role} />}
           </CardContent>
         </Card>
       </div>
