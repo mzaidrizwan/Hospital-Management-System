@@ -32,27 +32,11 @@ import { Treatment } from '@/types';
 import TreatmentFormModal from '@/components/modals/TreatmentFormModal';
 import Papa from 'papaparse';
 import { useAuth } from '@/context/AuthContext';
-import { ChangePasswordForm } from '@/components/auth/ChangePasswordForm';
-
-// IndexedDB Utilities
-import { saveToLocal, getFromLocal, deleteFromLocal, openDB } from '@/services/indexedDbUtils';
-import { smartSync, smartDelete } from '@/services/syncService';
-
-// Firebase sync helpers
-const syncToFirebase = (collectionName: string, item: any) => {
-  setDoc(doc(db, collectionName, item.id || item.role), item).catch(console.error);
-};
-
-const loadFromFirebase = async (collectionName: string): Promise<any[]> => {
-  try {
-    const q = query(collection(db, collectionName));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => doc.data());
-  } catch (err) {
-    console.error("Firebase load failed:", err);
-    return [];
-  }
-};
+import OperatorChangePassword from '@/components/settings/OperatorChangePassword';
+import { useData } from '@/context/DataContext';
+// IndexedDB Utilities (Removed direct usage in favor of DataContext)
+// import { saveToLocal, getFromLocal, deleteFromLocal, openDB } from '@/services/indexedDbUtils';
+// import { smartSync, smartDelete } from '@/services/syncService';
 
 // Format currency function
 const formatCurrency = (amount: number) => {
@@ -64,17 +48,28 @@ const formatCurrency = (amount: number) => {
 
 export default function OperatorSettings() {
   const { changePassword } = useAuth();
+  const {
+    treatments: contextTreatments,
+    clinicSettings: contextClinicSettings,
+    updateLocal,
+    deleteLocal
+  } = useData();
+
   const [activeTab, setActiveTab] = useState('security');
-  const [treatments, setTreatments] = useState<Treatment[]>([]);
+
+  // Use context data directly
+  const treatments = contextTreatments || [];
+
+  // Local state for UI forms/backups only
   const [selectedTreatment, setSelectedTreatment] = useState<Treatment | null>(null);
   const [showTreatmentForm, setShowTreatmentForm] = useState(false);
   const [isEditingTreatment, setIsEditingTreatment] = useState(false);
-  const [backupHistory, setBackupHistory] = useState<any[]>([]);
-  // User info from localStorage
+  const [backupHistory, setBackupHistory] = useState<any[]>([]); // Keep backups local/manual fetch for now
+
   const [isSyncing, setIsSyncing] = useState(false);
   const [userInfo, setUserInfo] = useState<{ role: string; name: string } | null>(null);
 
-  // Clinic Settings
+  // Initialize clinicData from context
   const [clinicData, setClinicData] = useState({
     id: 'clinic-settings',
     clinicName: '',
@@ -85,6 +80,13 @@ export default function OperatorSettings() {
     currency: 'USD',
     businessHours: ''
   });
+
+  // Sync local clinicData state with context updates
+  useEffect(() => {
+    if (contextClinicSettings) {
+      setClinicData(prev => ({ ...prev, ...contextClinicSettings }));
+    }
+  }, [contextClinicSettings]);
 
   // Backup Selection
   const [backupSelection, setBackupSelection] = useState({
@@ -106,30 +108,16 @@ export default function OperatorSettings() {
     }
   }, []);
 
-  // Auto sync if online
+  // No manual loadData useEffect needed for treatments/clinicSettings as useData handles it.
+  // We might still want to load backups from IDB if it's there.
   useEffect(() => {
-    if (navigator.onLine) {
-      handleSync();
-    } else {
-      toast.warning('Offline mode: Using local data');
-    }
-  }, []);
-
-  // Load data on mount: Local first
-  useEffect(() => {
-    async function loadLocalData() {
-      let localTreatments = await getFromLocal('treatments') as Treatment[];
-      setTreatments(localTreatments);
-
-      let localClinic = await getFromLocal('clinicSettings', 'clinic-settings');
-      if (localClinic) {
-        setClinicData(localClinic);
-      }
-
+    async function loadBackups() {
+      // Lazy load backups since they aren't in context
+      const { getFromLocal } = await import('@/services/indexedDbUtils');
       let localBackups = await getFromLocal('backups') as any[];
-      setBackupHistory(localBackups);
+      if (localBackups) setBackupHistory(localBackups);
     }
-    loadLocalData().catch(console.error);
+    loadBackups();
   }, []);
 
   // Manual Sync (Optional now, as it happens automatically)
@@ -141,7 +129,7 @@ export default function OperatorSettings() {
   // Handle save clinic settings (Write-Through)
   const handleSaveClinicSettings = async () => {
     try {
-      await smartSync('clinicSettings', { ...clinicData, role: 'clinic-settings' });
+      await updateLocal('clinicSettings', { ...clinicData, role: 'clinic-settings' });
       toast.success('Clinic settings saved');
     } catch (error) {
       toast.error('Failed to save clinic settings');
@@ -185,7 +173,9 @@ export default function OperatorSettings() {
 
     // Local save and background sync (Write-Through)
     try {
-      await smartSync('backups', newBackup);
+      // Backups not in context, so we still manually save. 
+      // Or we can use updateLocal even if it's not in stateMap (it handles it gracefully for IDB+Sync)
+      await updateLocal('backups', newBackup);
     } catch (error) {
       console.error('Backup sync failed:', error);
     }
@@ -317,10 +307,8 @@ export default function OperatorSettings() {
 
   const handleDeleteTreatment = async (treatment: Treatment) => {
     if (confirm(`Delete treatment "${treatment.name}"?`)) {
-      setTreatments(prev => prev.filter(t => t.id !== treatment.id));
-
       try {
-        await smartDelete('treatments', treatment.id);
+        await deleteLocal('treatments', treatment.id);
         toast.success(`Treatment "${treatment.name}" deleted`);
       } catch (error) {
         console.error('Failed to delete treatment:', error);
@@ -340,7 +328,6 @@ export default function OperatorSettings() {
         duration: parseInt(treatmentData.duration),
         description: treatmentData.description
       };
-      setTreatments(prev => prev.map(t => t.id === selectedTreatment.id ? updatedTreatment : t));
     } else {
       updatedTreatment = {
         id: `t${Date.now()}`,
@@ -350,11 +337,10 @@ export default function OperatorSettings() {
         duration: parseInt(treatmentData.duration),
         description: treatmentData.description
       };
-      setTreatments(prev => [...prev, updatedTreatment]);
     }
 
     try {
-      await smartSync('treatments', updatedTreatment);
+      await updateLocal('treatments', updatedTreatment);
       toast.success(`Treatment "${treatmentData.name}" saved`);
     } catch (error) {
       console.error('Failed to save treatment:', error);
@@ -435,7 +421,7 @@ export default function OperatorSettings() {
             )}
 
             <h3 className="text-lg font-medium mb-4">Change Password</h3>
-            {userInfo && <ChangePasswordForm userId={userInfo.role} />}
+            {userInfo && <OperatorChangePassword userId={userInfo.role} />}
           </div>
         </TabsContent>
 

@@ -12,12 +12,12 @@ export function SyncIndicator() {
             {isOnline ? (
                 <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 gap-1.5 py-1 px-3">
                     <Wifi className="w-3.5 h-3.5" />
-                    <span className="text-xs font-medium">Synced</span>
+                    <span className="text-xs font-medium">Online</span>
                 </Badge>
             ) : (
                 <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200 gap-1.5 py-1 px-3 animate-pulse">
                     <WifiOff className="w-3.5 h-3.5" />
-                    <span className="text-xs font-medium">Saving Locally</span>
+                    <span className="text-xs font-medium">You are Offline</span>
                 </Badge>
             )}
         </div>

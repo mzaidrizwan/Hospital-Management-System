@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { 
+import {
   X, Calendar, CheckCircle, XCircle, Clock, CalendarDays,
   ChevronLeft, ChevronRight, TrendingUp
 } from 'lucide-react';
@@ -79,7 +79,7 @@ export default function AttendanceModal({
   const generateCalendarDays = () => {
     const firstDay = new Date(currentYear, currentMonth, 1).getDay();
     const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-    
+
     const days = [];
     // Empty slots
     for (let i = 0; i < firstDay; i++) days.push(null);
@@ -90,7 +90,7 @@ export default function AttendanceModal({
       const attendance = staffAttendance.find(a => a.date === dateStr);
 
       let displayStatus = attendance?.status;
-      
+
       // Past unmarked days → consider Absent
       if (!attendance && dateObj < today && dateObj >= new Date(staff?.joinDate || '1970-01-01')) {
         displayStatus = 'absent';
@@ -161,48 +161,48 @@ export default function AttendanceModal({
   if (!open || !staff) return null;
 
   return (
-    <div 
+    <div
       className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[94vh] flex flex-col shadow-2xl">
+      <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl">
         {/* Header */}
-        <div className="p-6 border-b flex items-center justify-between bg-gradient-to-r from-indigo-50 to-blue-50">
+        <div className="p-4 border-b flex items-center justify-between bg-gradient-to-r from-indigo-50 to-blue-50 shrink-0">
           <div>
-            <h2 className="text-2xl font-bold text-gray-800">{staff.name} - Attendance</h2>
-            <p className="text-sm text-gray-600 mt-1">
+            <h2 className="text-xl font-bold text-gray-800">{staff.name} - Attendance</h2>
+            <p className="text-xs text-gray-600">
               Join Date: {new Date(staff.joinDate).toLocaleDateString()}
             </p>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition-colors">
-            <X className="w-6 h-6 text-gray-600" />
+          <button onClick={onClose} className="p-1.5 hover:bg-gray-200 rounded-full transition-colors">
+            <X className="w-5 h-5 text-gray-600" />
           </button>
         </div>
 
         <div className="flex-1 flex flex-col overflow-hidden">
-          <Tabs defaultValue="calendar" className="flex-1 flex flex-col">
-            <div className="px-6 pt-4 border-b bg-gray-50">
-              <TabsList className="grid w-full max-w-md grid-cols-2">
-                <TabsTrigger value="calendar">Calendar</TabsTrigger>
-                <TabsTrigger value="mark">Mark / Edit</TabsTrigger>
+          <Tabs defaultValue="calendar" className="flex-1 flex flex-col overflow-hidden">
+            <div className="px-6 py-2 border-b bg-gray-50 shrink-0">
+              <TabsList className="grid w-full max-w-xs grid-cols-2 h-9">
+                <TabsTrigger value="calendar" className="text-sm">Calendar</TabsTrigger>
+                <TabsTrigger value="mark" className="text-sm">Mark / Edit</TabsTrigger>
               </TabsList>
             </div>
 
             {/* Calendar View */}
-            <TabsContent value="calendar" className="flex-1 p-6 overflow-auto">
-              <div className="space-y-6">
+            <TabsContent value="calendar" className="flex-1 p-4 overflow-y-auto outline-none">
+              <div className="space-y-4">
                 {/* Month Navigation */}
                 <div className="flex items-center justify-between px-2">
-                  <Button variant="outline" size="sm" onClick={() => navigateMonth('prev')}>
-                    <ChevronLeft className="mr-2 h-4 w-4" /> Prev
+                  <Button variant="outline" size="sm" onClick={() => navigateMonth('prev')} className="h-8 px-3">
+                    <ChevronLeft className="mr-1.5 h-4 w-4" /> Prev
                   </Button>
-                  
-                  <h3 className="text-xl font-bold">
+
+                  <h3 className="text-lg font-bold">
                     {monthNames[currentMonth]} {currentYear}
                   </h3>
-                  
-                  <Button variant="outline" size="sm" onClick={() => navigateMonth('next')}>
-                    Next <ChevronRight className="ml-2 h-4 w-4" />
+
+                  <Button variant="outline" size="sm" onClick={() => navigateMonth('next')} className="h-8 px-3">
+                    Next <ChevronRight className="ml-1.5 h-4 w-4" />
                   </Button>
                 </div>
 
@@ -211,7 +211,7 @@ export default function AttendanceModal({
                   {/* Week days */}
                   <div className="grid grid-cols-7 bg-gray-100">
                     {dayNames.map(day => (
-                      <div key={day} className="py-3 text-center text-sm font-medium text-gray-600">
+                      <div key={day} className="py-2 text-center text-xs font-semibold text-gray-600">
                         {day}
                       </div>
                     ))}
@@ -224,7 +224,7 @@ export default function AttendanceModal({
                         key={idx}
                         onClick={() => day && handleDayClick(day)}
                         className={`
-                          min-h-[90px] p-2 border-r border-b relative
+                          aspect-square sm:aspect-auto sm:min-h-[80px] p-2 border-r border-b relative
                           ${!day ? 'bg-gray-50' : 'cursor-pointer hover:bg-gray-50 transition-colors'}
                           ${day?.isToday ? 'bg-blue-50' : ''}
                           ${day?.isFuture ? 'bg-gray-100 opacity-60 cursor-not-allowed' : ''}
@@ -234,31 +234,31 @@ export default function AttendanceModal({
                           <>
                             <div className="flex justify-between items-start">
                               <span className={`
-                                text-lg font-semibold
+                                text-sm sm:text-base font-semibold
                                 ${day.isToday ? 'text-blue-600' : 'text-gray-800'}
                               `}>
                                 {day.day}
                               </span>
-                              
+
                               {day.displayStatus && (
                                 <div className={`
-                                  w-3 h-3 rounded-full mt-1
+                                  w-2.5 h-2.5 rounded-full mt-1
                                   ${day.displayStatus === 'present' ? 'bg-green-500' :
                                     day.displayStatus === 'absent' ? 'bg-red-500' :
-                                    'bg-yellow-500'}
+                                      'bg-yellow-500'}
                                 `} />
                               )}
                             </div>
 
                             {day.displayStatus && (
-                              <div className="mt-2">
+                              <div className="mt-1 hidden sm:block">
                                 <Badge
                                   variant="outline"
                                   className={`
-                                    text-xs font-medium px-2 py-0 h-5
+                                    text-[10px] font-medium px-1.5 py-0 h-4
                                     ${day.displayStatus === 'present' ? 'bg-green-50 text-green-700 border-green-200' :
                                       day.displayStatus === 'absent' ? 'bg-red-50 text-red-700 border-red-200' :
-                                      'bg-yellow-50 text-yellow-700 border-yellow-200'}
+                                        'bg-yellow-50 text-yellow-700 border-yellow-200'}
                                   `}
                                 >
                                   {day.displayStatus.toUpperCase()}
@@ -267,7 +267,7 @@ export default function AttendanceModal({
                             )}
 
                             {day.attendance?.notes && (
-                              <div className="text-xs text-gray-500 mt-1 line-clamp-2" title={day.attendance.notes}>
+                              <div className="text-[10px] text-gray-500 mt-1 line-clamp-1 hidden sm:block">
                                 {day.attendance.notes}
                               </div>
                             )}
@@ -279,86 +279,93 @@ export default function AttendanceModal({
                 </div>
 
                 {/* Legend */}
-                <div className="flex flex-wrap gap-6 justify-center text-sm text-gray-600">
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 bg-green-500 rounded-full"></div> Present
+                <div className="flex flex-wrap gap-4 justify-center text-xs text-gray-600 pt-2 shrink-0">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-3 h-3 bg-green-500 rounded-full"></div> Present
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 bg-red-500 rounded-full"></div> Absent
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-3 h-3 bg-red-500 rounded-full"></div> Absent
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 bg-yellow-500 rounded-full"></div> Leave
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-3 h-3 bg-yellow-500 rounded-full"></div> Leave
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 bg-blue-50 rounded"></div> Today
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-3 h-3 bg-blue-50 border border-blue-200 rounded"></div> Today
                   </div>
                 </div>
               </div>
             </TabsContent>
 
             {/* Mark/Edit Tab */}
-            <TabsContent value="mark" className="flex-1 p-6 overflow-auto">
-              <form onSubmit={handleSubmit} className="max-w-xl mx-auto space-y-8">
-                <Card>
-                  <CardContent className="pt-6 space-y-6">
-                    <div className="space-y-2">
-                      <Label className="text-base">Date</Label>
-                      <Input
-                        type="date"
-                        value={formData.date}
-                        onChange={e => setFormData({...formData, date: e.target.value})}
-                        max={todayStr}
-                        disabled={!!formData.id} // Optional: prevent date change on edit
-                        className="text-lg"
-                      />
-                      {formData.date && formData.date > todayStr && (
-                        <p className="text-sm text-red-600">Future dates are not allowed</p>
-                      )}
-                    </div>
+            <TabsContent value="mark" className="flex-1 flex flex-col overflow-hidden outline-none">
+              <form onSubmit={handleSubmit} className="flex-1 flex flex-col overflow-hidden">
+                <div className="flex-1 p-6 overflow-y-auto">
+                  <div className="max-w-2xl mx-auto space-y-4">
+                    <Card className="border-none shadow-none bg-gray-50/50">
+                      <CardContent className="pt-6">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="space-y-1.5">
+                            <Label className="text-sm font-semibold">Date</Label>
+                            <Input
+                              type="date"
+                              value={formData.date}
+                              onChange={e => setFormData({ ...formData, date: e.target.value })}
+                              max={todayStr}
+                              disabled={!!formData.id}
+                              className="h-10 text-sm"
+                            />
+                            {formData.date && formData.date > todayStr && (
+                              <p className="text-[10px] text-red-600">Future dates are not allowed</p>
+                            )}
+                          </div>
 
-                    <div className="space-y-2">
-                      <Label className="text-base">Status</Label>
-                      <Select 
-                        value={formData.status} 
-                        onValueChange={v => setFormData({...formData, status: v as any})}
-                      >
-                        <SelectTrigger className="h-12">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="present">Present</SelectItem>
-                          <SelectItem value="absent">Absent</SelectItem>
-                          <SelectItem value="leave">Leave</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-sm font-semibold">Status</Label>
+                            <Select
+                              value={formData.status}
+                              onValueChange={v => setFormData({ ...formData, status: v as any })}
+                            >
+                              <SelectTrigger className="h-10 text-sm">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="present">Present</SelectItem>
+                                <SelectItem value="absent">Absent</SelectItem>
+                                <SelectItem value="leave">Leave</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
 
-                    <div className="space-y-2">
-                      <Label className="text-base">Notes (optional)</Label>
-                      <Textarea
-                        value={formData.notes}
-                        onChange={e => setFormData({...formData, notes: e.target.value})}
-                        placeholder="Any remarks or reason..."
-                        className="min-h-[120px]"
-                      />
-                    </div>
-                  </CardContent>
-                </Card>
+                          <div className="space-y-1.5 sm:col-span-2">
+                            <Label className="text-sm font-semibold">Notes (optional)</Label>
+                            <Textarea
+                              value={formData.notes}
+                              onChange={e => setFormData({ ...formData, notes: e.target.value })}
+                              placeholder="Any remarks or reason..."
+                              className="min-h-[100px] text-sm resize-none"
+                            />
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
 
-                <div className="flex justify-between pt-4">
-                  <Button 
-                    type="button" 
-                    variant="outline" 
+                <div className="p-4 border-t bg-gray-50 flex items-center justify-end gap-3 shrink-0">
+                  <Button
+                    type="button"
+                    variant="ghost"
                     onClick={onClose}
+                    className="h-9 px-4 text-sm"
                   >
                     Cancel
                   </Button>
-                  <Button 
-                    type="submit" 
+                  <Button
+                    type="submit"
                     disabled={!formData.date || formData.date > todayStr}
-                    className="px-8"
+                    className="h-9 px-6 text-sm font-semibold shadow-sm"
                   >
-                    {formData.id ? 'Update Attendance' : 'Mark Attendance'}
+                    {formData.id ? 'Save Changes' : 'Mark Attendance'}
                   </Button>
                 </div>
               </form>

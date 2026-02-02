@@ -11,153 +11,63 @@ import PatientFormModal from '@/components/modals/PatientFormModal';
 import PaymentModal from '@/components/modals/PaymentModal';
 import PatientDetailsModal from '@/components/modals/PatientDetailsModal';
 import TreatmentModal from '@/components/modals/TreatmentModal';
-import {
-  addPatient,
-  getAllPatients,
-  updatePatient,
-  getPatientByNumber,
-  updatePatientWithStats
-} from '@/services/patientService';
-import {
-  addQueueItem,
-  getAllQueueItems,
-  updateQueueItem,
-  deleteQueueItem
-} from '@/services/queueService';
-import { addBill, getPatientBills } from '@/services/billingService';
-import { format, startOfDay, endOfDay, parseISO } from 'date-fns';
-import { doc, getDoc } from 'firebase/firestore';
+import { startOfDay, endOfDay, parseISO, format } from 'date-fns';
 import { useData } from '@/context/DataContext';
+import { v4 as uuidv4 } from 'uuid';
+import { smartSync } from '@/services/syncService';
 
 const doctors = ['Dr. Smith', 'Dr. Johnson', 'Dr. Wilson', 'Dr. Brown', 'Dr. Taylor'];
 
 export default function OperatorQueue() {
-  const [queueData, setQueueData] = useState<QueueItem[]>([]);
-  const [patients, setPatients] = useState<Patient[]>([]);
+  const { queue: contextQueue, patients: contextPatients, bills: contextBills, updateLocal, deleteLocal, loading: contextLoading } = useData();
+
+  // Restoring missing state variables
   const [searchTerm, setSearchTerm] = useState('');
-  const [showPatientModal, setShowPatientModal] = useState(false);
-
-  // Updated state structure for payment modal
-  const [showPaymentModal, setShowPaymentModal] = useState<{
-    queueItem: QueueItem;
-    patientData: Patient;
-    patientBills: any[];
-  } | null>(null);
-
   const [selectedDoctor, setSelectedDoctor] = useState('all');
-  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
-  const [showPatientDetails, setShowPatientDetails] = useState<QueueItem | null>(null);
-  const [modalMode, setModalMode] = useState<'patient' | 'walk-in'>('walk-in');
-  const [loading, setLoading] = useState({ queue: true, patients: true });
-  const [saving, setSaving] = useState(false);
-  const [selectedPatientData, setSelectedPatientData] = useState<Patient | null>(null);
-
-  // Treatment Modal states
-  const [showTreatmentModal, setShowTreatmentModal] = useState(false);
-  const [selectedQueueItemForTreatment, setSelectedQueueItemForTreatment] = useState<QueueItem | null>(null);
-
   const [dateRange, setDateRange] = useState({
     startDate: format(new Date(), 'yyyy-MM-dd'),
     endDate: format(new Date(), 'yyyy-MM-dd')
   });
 
-  const { queue: contextQueue, patients: contextPatients, loading: contextLoading } = useData();
+  // UI States
+  const [showPatientModal, setShowPatientModal] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState<any>(null);
+  const [showTreatmentModal, setShowTreatmentModal] = useState(false);
+  const [showPatientDetails, setShowPatientDetails] = useState<any>(null);
+  const [selectedPatient, setSelectedPatient] = useState<any>(null);
+  const [modalMode, setModalMode] = useState<'patient' | 'walk-in'>('walk-in');
+  const [selectedPatientData, setSelectedPatientData] = useState<any>(null);
+  const [selectedQueueItemForTreatment, setSelectedQueueItemForTreatment] = useState<any>(null);
 
-  // Sync with context for instant load
-  useEffect(() => {
-    if (contextQueue && contextQueue.length > 0) {
+  // Derived state for queue filtering
+  const queueData = React.useMemo(() => {
+    if (!contextQueue) return [];
+    try {
       const start = startOfDay(parseISO(dateRange.startDate));
       const end = endOfDay(parseISO(dateRange.endDate));
-      const filtered = contextQueue.filter(item => {
+      return contextQueue.filter(item => {
+        if (!item.checkInTime) return false;
         const itemDate = parseISO(item.checkInTime);
         return itemDate >= start && itemDate <= end;
       });
-      setQueueData(filtered);
-      setLoading(prev => ({ ...prev, queue: false }));
+    } catch (err) {
+      console.warn('Date parsing error', err);
+      return [];
     }
   }, [contextQueue, dateRange]);
 
-  useEffect(() => {
-    if (contextPatients && contextPatients.length > 0) {
-      setPatients(contextPatients);
-      setLoading(prev => ({ ...prev, patients: false }));
-    }
-  }, [contextPatients]);
-
-  // Initial Fetch remains as background revalidation
-  useEffect(() => {
-    // If context is still loading, don't show custom loading screens unless necessary
-    if (!contextLoading) {
-      setLoading({ queue: false, patients: false });
-    }
-  }, [contextLoading]);
-
-  // Memoized data fetching for background sync
-  const fetchAllData = useCallback(async () => {
-    // Non-blocking background fetch
-    fetchQueueData();
-    fetchPatientsData();
-  }, [dateRange]);
-
-  useEffect(() => {
-    fetchAllData();
-  }, [fetchAllData]);
-
-  const fetchQueueData = async () => {
-    try {
-      const data = await getAllQueueItems();
-      const start = startOfDay(parseISO(dateRange.startDate));
-      const end = endOfDay(parseISO(dateRange.endDate));
-      const filtered = data.filter(item => {
-        const itemDate = parseISO(item.checkInTime);
-        return itemDate >= start && itemDate <= end;
-      });
-      setQueueData(filtered);
-    } catch (error) {
-      console.error('Error fetching queue:', error);
-    } finally {
-      setLoading(prev => ({ ...prev, queue: false }));
-    }
-  };
-
-  const fetchPatientsData = async () => {
-    try {
-      const data = await getAllPatients();
-      setPatients(data);
-    } catch (error) {
-      console.error('Error fetching patients:', error);
-    } finally {
-      setLoading(prev => ({ ...prev, patients: false }));
-    }
-  };
+  const patients = contextPatients || [];
+  const loading = { queue: contextLoading, patients: contextLoading };
 
   const getPatientDataForQueueItem = useCallback(async (queueItem: QueueItem) => {
     try {
+      // Look in context (local state) first - O(1) if map or O(n) if array
+      // Since patients is an array, O(n).
       const cachedPatient = patients.find(p =>
         p.patientNumber === queueItem.patientNumber ||
         p.id === queueItem.patientId
       );
       if (cachedPatient) return cachedPatient;
-
-      let patientRef;
-      if (queueItem.patientId) {
-        patientRef = doc(db, 'patients', queueItem.patientId);
-      } else if (queueItem.patientNumber) {
-        return await getPatientByNumber(queueItem.patientNumber);
-      }
-
-      if (patientRef) {
-        const patientDoc = await getDoc(patientRef);
-        if (patientDoc.exists()) {
-          const patientData = { id: patientDoc.id, ...patientDoc.data() } as Patient;
-          setPatients(prev => {
-            const exists = prev.some(p => p.id === patientData.id);
-            if (!exists) return [...prev, patientData];
-            return prev;
-          });
-          return patientData;
-        }
-      }
       return null;
     } catch (error) {
       console.error('Error fetching patient data:', error);
@@ -167,13 +77,8 @@ export default function OperatorQueue() {
 
   // Fetch bills for a patient
   const getBillsForPatient = async (patientId: string) => {
-    try {
-      if (!patientId) return [];
-      return await getPatientBills(patientId);
-    } catch (error) {
-      console.error('Error fetching bills:', error);
-      return [];
-    }
+    if (!patientId || !contextBills) return [];
+    return contextBills.filter(b => b.patientId === patientId);
   };
 
   const filteredQueueData = queueData.filter(item => {
@@ -212,6 +117,7 @@ export default function OperatorQueue() {
   };
 
   // ------------------ Payment Handler ------------------
+  // ------------------ Payment Handler ------------------
   const handleAddPayment = async (queueItem: QueueItem, paymentData: any) => {
     const toastId = toast.loading('Processing payment...');
 
@@ -226,8 +132,7 @@ export default function OperatorQueue() {
       const currentPaid = queueItem.amountPaid || 0;
       const totalPaid = currentPaid + newPayment;
 
-      const totalDue =
-        (queueItem.fee || 0) + (queueItem.previousPending || 0);
+      const totalDue = (queueItem.fee || 0) + (queueItem.previousPending || 0);
 
       let paymentStatus: 'pending' | 'partial' | 'paid';
 
@@ -239,20 +144,20 @@ export default function OperatorQueue() {
         paymentStatus = 'pending';
       }
 
-      // 1️⃣ Update queue item payment info
+      // 1. Update queue item payment info
       const updateData = {
         amountPaid: totalPaid,
         paymentStatus,
         discount: paymentData.discount || 0,
-        notes:
-          (queueItem.notes || '') +
-          `\nPayment: ${newPayment} (${paymentData.paymentMethod})`
+        notes: (queueItem.notes || '') + `\nPayment: ${newPayment} (${paymentData.paymentMethod})`
       };
 
-      await updateQueueItem(queueItem.id, updateData);
+      const updatedQueueItem = { ...queueItem, ...updateData };
+      await updateLocal('queue', updatedQueueItem);
 
-      // 2️⃣ Create bill (single source of truth)
-      await addBill({
+      // 2. Create bill
+      const newBill = {
+        id: `BILL-${Date.now()}`, // Consistent ID generation
         billNumber: `BILL-${Date.now()}`,
         patientId: patientData.id,
         patientNumber: patientData.patientNumber,
@@ -266,25 +171,27 @@ export default function OperatorQueue() {
         createdDate: new Date().toISOString(),
         notes: paymentData.notes || '',
         queueItemId: queueItem.id
-      });
+      };
+      await updateLocal('bills', newBill);
 
-      // 3️⃣ Update local queue UI only
-      setQueueData(prev =>
-        prev.map(item =>
-          item.id === queueItem.id
-            ? { ...item, ...updateData }
-            : item
-        )
-      );
+      // 3. Update patient stats (reduce pending balance)
+      // NOTE: We rely on logic here instead of calling updatePatientWithStats service
+      // Assuming 'pendingBalance' tracks what is OWED. 
+      // If fee was added previously to pendingBalance, we subtract payment.
+      // However, often pendingBalance is authoritative. 
+      // Let's assume pendingBalance = (Previous + Fee) - Paid.
+      // But wait, user system might track "pendingBalance" as persistent debt.
+      // In `handleTreatmentSubmit`, we added `fee` to `pendingBalance`.
+      // So here we should subtract `newPayment` from `pendingBalance`.
 
-      // 4️⃣ 🔑 FINAL & MOST IMPORTANT STEP
-      await updatePatientWithStats(patientData.id);
+      const newPending = (patientData.pendingBalance || 0) - newPayment;
+      const updatedPatient = {
+        ...patientData,
+        pendingBalance: newPending
+      };
+      await updateLocal('patients', updatedPatient);
 
-      toast.success(
-        `Payment of $${newPayment.toFixed(2)} processed successfully`,
-        { id: toastId }
-      );
-
+      toast.success(`Payment of $${newPayment.toFixed(2)} processed successfully`, { id: toastId });
       setShowPaymentModal(null);
 
     } catch (error) {
@@ -296,83 +203,34 @@ export default function OperatorQueue() {
 
   // ------------------ Walk-in & Edit Patient Handler ------------------
   const handleWalkInPatient = async (patientData: any) => {
-    const toastId = toast.loading('Processing patient...');
+    const toastId = toast.loading('Adding to queue...');
     try {
-      let isNewPatient = false;
-      let patientId = patientData.id;
+      const patientId = patientData.id;
+      const isEditing = patientData.isEditing;
 
-      if (patientData.isExistingPatient && patientData.isEditing) {
-        // Update existing patient
-        await updatePatient(patientData.id, {
-          name: patientData.name,
-          phone: patientData.phone,
-          age: patientData.age ? Number(patientData.age) : 0,
-          gender: patientData.gender || '',
-          address: patientData.address || '',
-          pendingBalance: Number(patientData.pendingBalance || 0)
-        });
-
-        setPatients(prev => prev.map(p =>
-          p.id === patientData.id ? {
-            ...p,
-            name: patientData.name,
-            phone: patientData.phone,
-            age: patientData.age ? Number(patientData.age) : 0,
-            gender: patientData.gender || '',
-            address: patientData.address || '',
-            pendingBalance: Number(patientData.pendingBalance || 0)
-          } : p
-        ));
-
-        toast.success(`Patient ${patientData.name} updated successfully`, { id: toastId });
+      if (isEditing) {
+        toast.success(`Patient ${patientData.name} updated`, { id: toastId });
         setShowPatientModal(false);
         return;
       }
 
-      // New patient logic
-      if (!patientData.isExistingPatient) {
-        const exists = patients.some(p => p.patientNumber === patientData.patientNumber);
-        if (exists) {
-          toast.error(`Patient Number ${patientData.patientNumber} already exists!`, { id: toastId });
-          return;
-        }
+      // Calculate next token from contextQueue
+      // Filter for TODAY's queue items only globally (or use derived queueData if dateRange is today)
+      // Usually token is per day.
+      const today = new Date();
+      const todayString = today.toDateString();
 
-        const newPatientData = {
-          patientNumber: patientData.patientNumber,
-          name: patientData.name || '',
-          phone: patientData.phone || '',
-          age: patientData.age ? Number(patientData.age) : 0,
-          gender: patientData.gender || '',
-          address: patientData.address || '',
-          pendingBalance: Number(patientData.openingBalance || 0),
-          totalPaid: 0,
-          totalVisits: 0,
-          createdAt: new Date().toISOString()
-        };
-
-        patientId = await addPatient(newPatientData);
-        isNewPatient = true;
-        setPatients(prev => [{ id: patientId, ...newPatientData }, ...prev]);
-      }
-
-      // Add to queue
-      const todayQueue = queueData.filter(item => {
+      const todayQueueItems = contextQueue.filter(item => {
         const d = parseISO(item.checkInTime);
-        const today = new Date();
-        return d.getDate() === today.getDate() &&
-          d.getMonth() === today.getMonth() &&
-          d.getFullYear() === today.getFullYear();
+        return d.toDateString() === todayString;
       });
 
-      const nextToken = todayQueue.length > 0
-        ? Math.max(...todayQueue.map(q => q.tokenNumber)) + 1
+      const nextToken = todayQueueItems.length > 0
+        ? Math.max(...todayQueueItems.map(q => q.tokenNumber)) + 1
         : 1;
 
-      const currentPatient = isNewPatient
-        ? null
-        : patients.find(p => p.patientNumber === patientData.patientNumber);
-
       const queueItemData = {
+        id: `Q-${Date.now()}`,
         patientId: patientId,
         patientNumber: patientData.patientNumber,
         patientName: patientData.name || '',
@@ -387,56 +245,24 @@ export default function OperatorQueue() {
         fee: 0,
         paymentStatus: 'pending' as const,
         amountPaid: 0,
-        previousPending: currentPatient?.pendingBalance || Number(patientData.openingBalance || 0)
-      };
+        previousPending: patientData.pendingBalance || 0
+      } as QueueItem;
 
-      const newQueueId = await addQueueItem(queueItemData);
-      setQueueData(prev => [...prev, { id: newQueueId, ...queueItemData }]);
+      // Local-first update
+      await updateLocal('queue', queueItemData);
 
-      toast.success(
-        isNewPatient
-          ? `New patient ${patientData.name} added (Token #${nextToken})`
-          : `Patient ${patientData.name} added to queue (Token #${nextToken})`,
-        { id: toastId }
-      );
-
+      toast.success(`Patient added to queue (Token #${nextToken})`, { id: toastId });
       setShowPatientModal(false);
     } catch (error) {
       console.error('Walk-in error:', error);
-      toast.error('Failed to process', { id: toastId });
+      toast.error('Failed to add to queue', { id: toastId });
     }
   };
 
   // ------------------ Save New Patient (non-walk-in) ------------------
-  const handleSavePatient = async (patientData: any) => {
-    const toastId = toast.loading('Saving patient...');
-    try {
-      const newPatientData = {
-        name: patientData.name || '',
-        phone: patientData.phone || '',
-        age: patientData.age ? Number(patientData.age) : 0,
-        gender: patientData.gender || '',
-        address: patientData.address || '',
-        pendingBalance: Number(patientData.openingBalance || 0),
-        totalPaid: 0,
-        totalVisits: 0,
-        createdAt: new Date().toISOString()
-      };
-
-      if (patientData.id && modalMode === 'walk-in') {
-        await updatePatient(patientData.id, newPatientData);
-        setPatients(prev => prev.map(p => p.id === patientData.id ? { ...p, ...newPatientData } : p));
-      } else {
-        const newPatientId = await addPatient(newPatientData);
-        setPatients(prev => [{ id: newPatientId, ...newPatientData }, ...prev]);
-      }
-
-      toast.success(`${patientData.name} saved`, { id: toastId });
-      setShowPatientModal(false);
-    } catch (error) {
-      console.error('Error saving patient:', error);
-      toast.error('Failed to save patient', { id: toastId });
-    }
+  const handleSavePatient = (patientData: any) => {
+    // Note: PatientFormModal now handles updateLocal and smartSync internally
+    // This handler is now minimal or non-blocking
   };
 
   // ------------------ Queue Actions ------------------
@@ -485,103 +311,68 @@ export default function OperatorQueue() {
     const toastId = toast.loading('Updating queue...');
     try {
       const now = new Date().toISOString();
+      let updateData = {};
 
       if (action === 'start-treatment') {
-        const updateData = {
+        updateData = {
           status: 'in_treatment' as const,
           treatmentStartTime: now
         };
-
-        await updateQueueItem(item.id, updateData);
-
-        setQueueData(prev =>
-          prev.map(p => p.id === item.id ? { ...p, ...updateData } : p)
-        );
-
-        // 🔊 ANNOUNCE TOKEN ONLY
         speakAnnouncement(item.tokenNumber);
-
-        toast.success(`Token ${item.tokenNumber} moved to treatment`, { id: toastId });
       } else if (action === 'complete') {
-
         const patientData = await getPatientDataForQueueItem(item);
         if (patientData) {
           setSelectedPatientData(patientData);
           setSelectedQueueItemForTreatment(item);
           setShowTreatmentModal(true);
-        } else {
-          toast.error('Could not load patient data', { id: toastId });
+          toast.dismiss(toastId);
+          return; // Exit here, handled by modal
         }
-
       } else if (action === 'back-to-waiting') {
-
-        const updateData = {
+        updateData = {
           status: 'waiting' as const,
           treatmentStartTime: null,
           treatment: '',
           fee: 0,
           doctor: ''
         };
-
-        await updateQueueItem(item.id, updateData);
-        setQueueData(prev =>
-          prev.map(p => p.id === item.id ? { ...p, ...updateData } : p)
-        );
-
-        toast.info(`${item.patientName} moved back to waiting`, { id: toastId });
-
       } else if (action === 'back-to-treatment') {
-
-        const updateData = {
+        updateData = {
           status: 'in_treatment' as const,
           treatmentEndTime: null
         };
-
-        await updateQueueItem(item.id, updateData);
-        setQueueData(prev =>
-          prev.map(p => p.id === item.id ? { ...p, ...updateData } : p)
-        );
-
-        toast.info(`${item.patientName} moved back to treatment`, { id: toastId });
-
       } else if (action === 'cancel') {
-
         const reason = prompt('Cancellation reason:') || 'Patient request';
-
-        await updateQueueItem(item.id, {
+        updateData = {
           status: 'cancelled' as const,
           cancelledAt: now,
           notes: `${item.notes || ''}\nCancelled: ${reason}`
-        });
-
-        setQueueData(prev =>
-          prev.map(p =>
-            p.id === item.id
-              ? { ...p, status: 'cancelled', cancelledAt: now, notes: `${p.notes || ''}\nCancelled: ${reason}` }
-              : p
-          )
-        );
-
-        toast.info(`Cancelled treatment for ${item.patientName}`, { id: toastId });
-
+        };
       } else if (action === 'edit') {
-
         const patient = patients.find(pt => pt.patientNumber === item.patientNumber);
         if (patient) {
           setSelectedPatient(patient);
           setModalMode('walk-in');
           setShowPatientModal(true);
         } else {
-          toast.error('Patient record not found', { id: toastId });
+          toast.error('Patient record not found');
         }
-
+        toast.dismiss(toastId);
+        return;
       } else if (action === 'delete') {
-
         if (confirm(`Remove ${item.patientName} from queue?`)) {
-          await deleteQueueItem(item.id);
-          setQueueData(prev => prev.filter(q => q.id !== item.id));
+          await deleteLocal('queue', item.id);
           toast.success(`Removed ${item.patientName} from queue`, { id: toastId });
+        } else {
+          toast.dismiss(toastId);
         }
+        return;
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        const updatedItem = { ...item, ...updateData };
+        await updateLocal('queue', updatedItem);
+        toast.success('Queue updated', { id: toastId });
       }
 
     } catch (error) {
@@ -699,74 +490,44 @@ export default function OperatorQueue() {
         doctor: data.doctor
       };
 
-      // 1️⃣ Update queue item
-      await updateQueueItem(selectedQueueItemForTreatment.id, updateData);
-
+      // 1. Update queue item
       const updatedItem = {
         ...selectedQueueItemForTreatment,
         ...updateData
       };
+      await updateLocal('queue', updatedItem);
 
-      setQueueData(prev =>
-        prev.map(p =>
-          p.id === selectedQueueItemForTreatment.id ? updatedItem : p
-        )
-      );
+      // 2. Update patient basic stats
+      const newPendingBalance = (selectedPatientData.pendingBalance || 0) + data.fee;
+      const newTotalVisits = (selectedPatientData.totalVisits || 0) + 1;
 
-      // 2️⃣ Update patient basic stats (quick UI sync)
-      const newPendingBalance =
-        (selectedPatientData.pendingBalance || 0) + data.fee;
-      const newTotalVisits =
-        (selectedPatientData.totalVisits || 0) + 1;
-
-      await updatePatient(selectedPatientData.id, {
+      const updatedPatient = {
+        ...selectedPatientData,
         pendingBalance: newPendingBalance,
         totalVisits: newTotalVisits,
         lastVisit: now
-      });
+      };
+      await updateLocal('patients', updatedPatient);
 
-      setPatients(prev =>
-        prev.map(p =>
-          p.id === selectedPatientData.id
-            ? {
-              ...p,
-              pendingBalance: newPendingBalance,
-              totalVisits: newTotalVisits,
-              lastVisit: now
-            }
-            : p
-        )
-      );
+      toast.success(`Treatment completed for ${updatedItem.patientName}`, { id: toastId });
 
-      toast.success(`Treatment completed for ${updatedItem.patientName}`, {
-        id: toastId
-      });
-
-      // 3️⃣ 🔑 IMPORTANT: Delay before opening payment modal
+      // 3. Delay before opening payment modal
       setTimeout(async () => {
-        const updatedPatientData =
-          await getPatientDataForQueueItem(updatedItem);
+        // Fetch patient again from context or use updatedPatient
+        // We use updatedPatient directly since it's the latest
+        const patientBills = contextBills.filter(b => b.patientId === updatedPatient.id);
 
-        if (updatedPatientData) {
-          const patientBills = await getBillsForPatient(
-            updatedPatientData.id
-          );
-
-          setShowPaymentModal({
-            queueItem: updatedItem,
-            patientData: updatedPatientData,
-            patientBills
-          });
-        }
+        setShowPaymentModal({
+          queueItem: updatedItem,
+          patientData: updatedPatient,
+          patientBills
+        });
       }, 800);
 
-      // 4️⃣ Close treatment modal
+      // 4. Close treatment modal
       setShowTreatmentModal(false);
       setSelectedQueueItemForTreatment(null);
       setSelectedPatientData(null);
-
-      // 5️⃣ 🔑 FINAL SYNC — authoritative recalculation
-      await updatePatientWithStats(selectedPatientData.id);
 
     } catch (error) {
       console.error('Error completing treatment:', error);

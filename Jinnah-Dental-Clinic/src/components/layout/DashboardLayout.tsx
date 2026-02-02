@@ -4,15 +4,23 @@ import { SidebarProvider, SidebarTrigger, SidebarInset } from '@/components/ui/s
 import { AppSidebar } from './AppSidebar';
 import { SyncIndicator } from '@/components/common/SyncIndicator';
 import { useAuth } from '@/context/AuthContext';
+import { useData } from '@/context/DataContext';
+import { LicenseModal } from '@/components/modals/LicenseModal';
 import { Bell, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
 export function DashboardLayout() {
   const { user } = useAuth();
+  const { licenseStatus } = useData();
 
   return (
     <SidebarProvider>
+      {/* Blocking License Modal for Expired State */}
+      <LicenseModal
+        open={licenseStatus === 'expired'}
+        onOpenChange={() => { }} // No-op to prevent closing
+      />
       <div className="min-h-screen flex w-full bg-background">
         <AppSidebar />
         <SidebarInset className="flex flex-col flex-1">

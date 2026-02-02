@@ -59,7 +59,8 @@ export default function OperatorPatients() {
     patients: contextPatients,
     queue: contextQueue,
     bills: contextBills,
-    loading: contextLoading
+    loading: contextLoading,
+    deleteLocal
   } = useData();
 
   // State Management
@@ -102,7 +103,7 @@ export default function OperatorPatients() {
         const term = searchTerm.toLowerCase().trim();
         result = result.filter(patient => {
           if (!patient) return false;
-          
+
           const nameMatch = patient.name?.toLowerCase().includes(term) || false;
           const phoneMatch = patient.phone?.toLowerCase().includes(term) || false;
           const patientNumberMatch = patient.patientNumber?.toLowerCase().includes(term) || false;
@@ -225,14 +226,21 @@ export default function OperatorPatients() {
   // Handle delete patient
   const handleDeletePatient = async (patient: Patient) => {
     if (!patient || !patient.id) return;
-    
+
     if (!confirm(`Are you sure you want to delete patient ${patient.name} (${patient.patientNumber})?\nThis action cannot be undone.`)) {
       return;
     }
 
     try {
-      await smartDelete('patients', patient.id);
-      toast.success(`Patient ${patient.name} deleted successfully`);
+      // 1. Local-first delete (State + IndexedDB Updates UI instantly)
+      await deleteLocal('patients', patient.id);
+
+      // 2. Background Firebase delete (non-blocking)
+      smartDelete('patients', patient.id).catch(err => {
+        console.error('Background delete failed:', err);
+      });
+
+      toast.success(`Patient ${patient.name} removed successfully`);
 
       if (selectedPatient?.id === patient.id) {
         setShowPatientDetails(false);
@@ -245,60 +253,16 @@ export default function OperatorPatients() {
   };
 
   // Handle save patient
-  const handleSavePatient = async (patientData: any) => {
-    try {
-      if (!patientData) return;
-      
-      setSaving(true);
-
-      const patientPayload: any = {
-        name: patientData.name?.trim() || '',
-        phone: patientData.phone?.trim() || '',
-        age: patientData.age ? Number(patientData.age) : 0,
-        gender: patientData.gender || 'other',
-        address: patientData.address?.trim() || '',
-        email: patientData.email?.trim() || '',
-        emergencyContact: patientData.emergencyContact?.trim() || '',
-        bloodGroup: patientData.bloodGroup?.trim() || '',
-        allergies: patientData.allergies?.trim() || '',
-        medicalHistory: patientData.medicalHistory?.trim() || '',
-        notes: patientData.notes?.trim() || '',
-        openingBalance: Number(patientData.openingBalance || 0),
-        id: patientData.id || Date.now().toString()
-      };
-
-      if (patientData.id && patientData.isEditing) {
-        await smartSync('patients', patientPayload);
-        toast.success('Patient updated successfully');
-      } else {
-        const newPatientData = {
-          ...patientPayload,
-          patientNumber: patientData.patientNumber || `P-${Date.now().toString().slice(-6)}`,
-          registrationDate: new Date().toISOString(),
-          totalVisits: 0,
-          totalPaid: 0,
-          pendingBalance: Number(patientData.openingBalance || 0),
-          isActive: true
-        };
-
-        await smartSync('patients', newPatientData);
-        toast.success(`${patientData.name} added successfully`);
-      }
-
-      setShowPatientForm(false);
-      setSelectedPatient(null);
-    } catch (error) {
-      console.error('Error saving patient:', error);
-      toast.error('Failed to save patient');
-    } finally {
-      setSaving(false);
-    }
+  const handleSavePatient = (patientData: any) => {
+    // Note: PatientFormModal now handles updateLocal and smartSync internally
+    // for immediate UI feedback and non-blocking submission.
+    setSelectedPatient(null);
   };
 
   // Handle view patient details - derived from context
   const handleViewPatientDetails = (patient: Patient) => {
     if (!patient) return;
-    
+
     setSelectedPatient(patient);
 
     try {
@@ -326,7 +290,7 @@ export default function OperatorPatients() {
   // Handle local recalculate (no cloud sync button needed)
   const handleRecalculateStats = async (patient: Patient) => {
     if (!patient) return;
-    
+
     toast.info(`Recalculating ${patient.name} local stats...`);
     // Calculation logic stays local
     toast.success(`${patient.name} stats updated`);
@@ -518,7 +482,7 @@ export default function OperatorPatients() {
     onRecalculate: (p: Patient) => void;
   }) => {
     if (!patient) return null;
-    
+
     return (
       <TableRow key={patient.id} className="hover:bg-gray-50 transition-colors">
         <TableCell className="font-medium text-blue-600">

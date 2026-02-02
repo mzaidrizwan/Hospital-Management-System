@@ -1,203 +1,96 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { X, Save, Plus, Trash, DollarSign, CreditCard, History, User } from 'lucide-react';
+import { X, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { QueueItem, Bill } from '@/types';
+import { Textarea } from '@/components/ui/textarea';
+import { Treatment } from '@/types';
+import { useData } from '@/context/DataContext'; // 1. Use DataContext
 import { toast } from 'sonner';
-import { updateQueueItem } from '@/services/queueService'; // Assuming this handles Firebase update
 
-// IndexedDB Utilities
-import { saveToLocal, openDB } from '@/services/indexedDbUtils';
-
-interface TreatmentModalProps {
+interface TreatmentFormModalProps {
   open: boolean;
   onClose: () => void;
-  onSubmit: (data: { treatment: string; fee: number; doctor: string }) => void;
-  queueItem: QueueItem | null;
-  doctors: string[];
-  patientHistory?: {
-    queueHistory: QueueItem[];
-    paymentHistory: Bill[];
-    bills: Bill[];
-  };
-  patientInfo?: {
-    pendingBalance?: number;
-  };
+  onSubmit?: (data: any) => void; // Optional now as modal handles save
+  treatment?: Treatment | null;
+  isEditing?: boolean;
 }
 
-interface SelectedTreatment {
-  name: string;
-  fee: number;
-}
-
-export default function TreatmentModal({
+export default function TreatmentFormModal({
   open,
   onClose,
   onSubmit,
-  queueItem,
-  doctors,
-  patientHistory = { queueHistory: [], paymentHistory: [], bills: [] },
-  patientInfo = { pendingBalance: 0 }
-}: TreatmentModalProps) {
-  const defaultTreatments = [
-    'Teeth Cleaning',
-    'Root Canal',
-    'Filling',
-    'Extraction',
-    'Braces Adjustment',
-    'Whitening',
-    'Crown Placement',
-    'Scaling & Polishing',
-  ];
-
-  const [selectedTreatments, setSelectedTreatments] = useState<SelectedTreatment[]>([]);
-  const [newTreatmentName, setNewTreatmentName] = useState('');
-  const [newTreatmentFee, setNewTreatmentFee] = useState('');
-  const [manualTotal, setManualTotal] = useState('');
-  const [discount, setDiscount] = useState(0);
-  const [selectedDoctor, setSelectedDoctor] = useState('');
-  const [paymentBreakdown, setPaymentBreakdown] = useState({
-    totalTreatments: 0,
-    totalAmount: 0,
-    totalPaid: 0,
-    pendingBalance: 0,
-    currentPending: 0,
-    newPending: 0
+  treatment,
+  isEditing = false
+}: TreatmentFormModalProps) {
+  const { updateLocal } = useData(); // 2. Get updateLocal
+  const [formData, setFormData] = useState({
+    name: '',
+    fee: '',
+    actions: '', // Mapped to description/actions
+    duration: '30', // Default
+    category: 'General' // Default
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isManualEdited, setIsManualEdited] = useState(false);
 
-  if (!open || !queueItem) return null;
-
-  // Calculate payment statistics from patient history
   useEffect(() => {
-    const totalTreatments = patientHistory?.queueHistory?.length || 0;
-    const totalAmount = (patientHistory?.queueHistory || []).reduce((sum, item) => sum + (item.fee || 0), 0);
-    const totalPaid = (patientHistory?.paymentHistory || []).reduce((sum, payment) => sum + (payment.amountPaid || 0), 0);
-    const pendingBalance = patientInfo?.pendingBalance || 0;
-    const currentPending = totalAmount - totalPaid + pendingBalance;
-
-    setPaymentBreakdown({
-      totalTreatments,
-      totalAmount,
-      totalPaid,
-      pendingBalance,
-      currentPending,
-      newPending: currentPending
-    });
-  }, [patientHistory, patientInfo]);
-
-  // Auto-calculate actual total (current treatments)
-  const actualTotal = selectedTreatments.reduce((sum, t) => sum + t.fee, 0);
-
-  // Auto-set manualTotal to actualTotal + currentPending initially or when actualTotal changes (if not edited)
-  useEffect(() => {
-    if (!isManualEdited && paymentBreakdown.currentPending !== undefined) {
-      setManualTotal((actualTotal + paymentBreakdown.currentPending).toFixed(2));
-    }
-  }, [actualTotal, paymentBreakdown.currentPending, isManualEdited]);
-
-  // Calculate discount and new pending
-  useEffect(() => {
-    const manual = parseFloat(manualTotal) || 0;
-    const totalDue = actualTotal + paymentBreakdown.currentPending;
-
-    // Prevent manual total from going below previous pending
-    if (manual < paymentBreakdown.currentPending) {
-      toast.warning('Amount cannot be less than previous pending balance');
-      setManualTotal(paymentBreakdown.currentPending.toFixed(2));
-      setDiscount(0);
-      return;
-    }
-
-    // Discount = total due - what user entered
-    const effectiveDiscount = totalDue - manual;
-    setDiscount(effectiveDiscount > 0 ? effectiveDiscount : 0);
-
-    // New pending after this treatment (before any new payment)
-    // = previous pending + current fee (after discount)
-    const effectiveFee = manual - paymentBreakdown.currentPending;
-    const newPending = paymentBreakdown.currentPending + effectiveFee;
-    setPaymentBreakdown(prev => ({ ...prev, newPending }));
-  }, [manualTotal, actualTotal, paymentBreakdown.currentPending]);
-
-  const handleManualChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setIsManualEdited(true);
-    setManualTotal(e.target.value);
-  };
-
-  const handleAddTreatment = () => {
-    const feeNum = parseFloat(newTreatmentFee) || 0;
-    if (newTreatmentName && feeNum >= 0 && !selectedTreatments.some(t => t.name === newTreatmentName)) {
-      setSelectedTreatments([...selectedTreatments, { name: newTreatmentName, fee: feeNum }]);
-      setNewTreatmentName('');
-      setNewTreatmentFee('');
+    if (treatment && isEditing) {
+      setFormData({
+        name: treatment.name || '',
+        fee: treatment.fee?.toString() || '',
+        actions: treatment.description || '', // Mapping description to Actions
+        duration: treatment.duration?.toString() || '30',
+        category: treatment.category || 'General'
+      });
     } else {
-      toast.error('Enter valid treatment name and fee');
+      setFormData({
+        name: '',
+        fee: '',
+        actions: '',
+        duration: '30',
+        category: 'General'
+      });
     }
-  };
+  }, [treatment, isEditing, open]);
 
-  const handleRemoveTreatment = (name: string) => {
-    setSelectedTreatments(selectedTreatments.filter(t => t.name !== name));
-  };
-
-  const handleSubmit = async () => {
-    if (selectedTreatments.length === 0) {
-      toast.error('At least one treatment is required');
-      return;
-    }
-    const manual = parseFloat(manualTotal);
-    if (isNaN(manual) || manual < 0) {
-      toast.error('Enter valid manual total amount');
-      return;
-    }
-    if (manual < paymentBreakdown.currentPending) {
-      toast.error('Amount cannot be less than previous pending balance');
-      return;
-    }
-    if (!selectedDoctor) {
-      toast.error('Please select a doctor');
-      return;
-    }
-
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     setIsSubmitting(true);
     const toastId = toast.loading('Saving treatment...');
 
     try {
-      const treatmentString = selectedTreatments.map(t => `${t.name} ($${t.fee})`).join(', ');
-      const manual = parseFloat(manualTotal);
-      const effectiveFee = manual - paymentBreakdown.currentPending; // Discounted fee for current treatment
+      // 1. Construct Data
+      const treatmentId = treatment?.id || `t${Date.now()}`;
+      const feeVal = parseFloat(formData.fee) || 0;
 
-      const data = {
-        treatment: treatmentString,
-        fee: effectiveFee,          // Yeh fee queue mein save hoga (current visit ka net amount)
-        doctor: selectedDoctor
+      const newTreatment: Treatment = {
+        id: treatmentId,
+        name: formData.name,
+        fee: feeVal,
+        description: formData.actions, // Saving Actions as description
+        category: formData.category,
+        duration: parseInt(formData.duration) || 30,
+        createdAt: treatment?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       };
 
-      // Save to IndexedDB first → fast close
-      await saveToLocal('queue', {
-        ...queueItem,
-        ...data,
-        updatedAt: new Date().toISOString()
-      });
+      // 2. Save to Local (IndexedDB + State update)
+      await updateLocal('treatments', newTreatment);
 
-      // Modal immediately close
+      // 3. Notify User
+      toast.success(isEditing ? 'Treatment updated' : 'Treatment added', { id: toastId });
+
+      // 4. Close Modal Instantly
       onClose();
-      toast.success('Treatment saved locally!', { id: toastId });
 
-      // Background Firebase sync
-      updateQueueItem(queueItem.id, data).catch(err => {
-        console.error('Firebase sync failed:', err);
-        toast.error('Failed to sync to cloud (saved locally only)');
-      });
-
-      // Parent onSubmit for any additional logic
-      onSubmit(data);
+      // 5. Call parent callback if provided (for any extra side effects)
+      if (onSubmit) {
+        // We pass the data, but parent might re-save. 
+        // Ideally parent should just refresh/ignore if modal handles it.
+        onSubmit(newTreatment);
+      }
 
     } catch (error) {
       console.error('Error saving treatment:', error);
@@ -207,267 +100,70 @@ export default function TreatmentModal({
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD'
-    }).format(amount);
-  };
+  if (!open) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl">
-        <div className="flex items-center justify-between p-5 border-b sticky top-0 bg-white z-10">
-          <div>
-            <h2 className="text-xl font-bold">Complete Treatment - {queueItem.patientName}</h2>
-            <p className="text-sm text-gray-500">Patient ID: {queueItem.patientId || 'N/A'}</p>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full" disabled={isSubmitting}>
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-md animate-in fade-in zoom-in duration-200">
+        <div className="flex items-center justify-between p-4 border-b">
+          <h2 className="text-xl font-semibold">
+            {isEditing ? 'Edit Treatment' : 'Add New Treatment'}
+          </h2>
+          <Button variant="ghost" size="icon" onClick={onClose} disabled={isSubmitting}>
             <X className="w-5 h-5" />
-          </button>
+          </Button>
         </div>
 
-        <div className="p-6 space-y-6">
-          {/* Patient Info & Payment Summary */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Patient Details */}
-            <div className="border rounded-lg p-4 bg-gray-50">
-              <h3 className="font-semibold mb-3 flex items-center gap-2">
-                <User className="w-4 h-4" />
-                Patient Details
-              </h3>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <Label className="text-xs text-gray-500">Name</Label>
-                  <p className="font-medium">{queueItem.patientName}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Phone</Label>
-                  <p className="font-medium">{queueItem.patientPhone || 'N/A'}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Total Visits</Label>
-                  <p className="font-medium">{paymentBreakdown.totalTreatments}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Lifetime Total</Label>
-                  <p className="font-medium text-green-700">{formatCurrency(paymentBreakdown.totalAmount)}</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Payment Summary */}
-            <div className="border rounded-lg p-4 bg-blue-50">
-              <h3 className="font-semibold mb-3 flex items-center gap-2">
-                <CreditCard className="w-4 h-4" />
-                Payment Summary
-              </h3>
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm">Previous Total:</span>
-                  <span className="font-medium">{formatCurrency(paymentBreakdown.totalAmount)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm">Amount Paid:</span>
-                  <span className="font-medium text-green-600">{formatCurrency(paymentBreakdown.totalPaid)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm">Pending Balance:</span>
-                  <span className={`font-medium ${paymentBreakdown.pendingBalance > 0 ? 'text-red-600' : 'text-gray-600'}`}>
-                    {formatCurrency(paymentBreakdown.pendingBalance)}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center border-t pt-2">
-                  <span className="text-sm font-semibold">Current Pending:</span>
-                  <span className="font-bold text-red-600">{formatCurrency(paymentBreakdown.currentPending)}</span>
-                </div>
-              </div>
-            </div>
+        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="name">Treatment Name</Label>
+            <Input
+              id="name"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              placeholder="e.g. Scaling & Polishing"
+              required
+              disabled={isSubmitting}
+            />
           </div>
 
-          {/* Add Treatments */}
-          <div className="space-y-3">
-            <Label className="flex items-center gap-2">
-              <Plus className="w-4 h-4" />
-              Add Treatment
-            </Label>
-            <div className="flex flex-col sm:flex-row gap-3">
-              <div className="flex-1">
-                <Select onValueChange={setNewTreatmentName} value={newTreatmentName}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select or type..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {defaultTreatments.map(t => (
-                      <SelectItem key={t} value={t}>{t}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Input
-                placeholder="Or type new treatment"
-                value={newTreatmentName}
-                onChange={e => setNewTreatmentName(e.target.value)}
-                className="flex-1"
-              />
-              <Input
-                type="number"
-                placeholder="Fee ($)"
-                value={newTreatmentFee}
-                onChange={e => setNewTreatmentFee(e.target.value)}
-                className="w-32"
-                min="0"
-                step="0.01"
-              />
-              <Button onClick={handleAddTreatment} className="gap-1" disabled={isSubmitting}>
-                <Plus className="w-4 h-4" /> Add
-              </Button>
-            </div>
+          <div className="space-y-2">
+            <Label htmlFor="fee">Fee ($)</Label>
+            <Input
+              id="fee"
+              type="number"
+              min="0"
+              step="0.01"
+              value={formData.fee}
+              onChange={(e) => setFormData({ ...formData, fee: e.target.value })}
+              placeholder="0.00"
+              required
+              disabled={isSubmitting}
+            />
           </div>
 
-          {/* Selected Treatments Table */}
-          {selectedTreatments.length > 0 ? (
-            <div className="border rounded-lg overflow-hidden">
-              <Table>
-                <TableHeader className="bg-gray-100">
-                  <TableRow>
-                    <TableHead>Treatment</TableHead>
-                    <TableHead className="text-right">Fee ($)</TableHead>
-                    <TableHead className="w-16 text-center">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {selectedTreatments.map((t, index) => (
-                    <TableRow key={index}>
-                      <TableCell>{t.name}</TableCell>
-                      <TableCell className="text-right font-medium">{formatCurrency(t.fee)}</TableCell>
-                      <TableCell className="text-center">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleRemoveTreatment(t.name)}
-                          disabled={isSubmitting}
-                        >
-                          <Trash className="w-4 h-4 text-red-600" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-
-              {/* Actual Total */}
-              <div className="p-4 bg-gray-50 border-t flex justify-between items-center">
-                <span className="font-semibold">Actual Total (Sum of Treatments):</span>
-                <span className="text-xl font-bold text-green-700">{formatCurrency(actualTotal)}</span>
-              </div>
-            </div>
-          ) : (
-            <div className="text-center py-8 text-gray-500 border rounded-lg">
-              No treatments added yet
-            </div>
-          )}
-
-          {/* Current Treatment Calculation */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="manualTotal" className="flex items-center gap-2 mb-2">
-                  <DollarSign className="w-4 h-4" />
-                  Final Amount to Collect (Previous + Treatments)
-                </Label>
-                <Input
-                  id="manualTotal"
-                  type="number"
-                  value={manualTotal}
-                  onChange={handleManualChange}
-                  placeholder="Auto: previous + treatments sum"
-                  min={paymentBreakdown.currentPending}
-                  step="0.01"
-                  disabled={isSubmitting}
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Default: Previous pending + current treatments. Edit to apply discount.
-                </p>
-              </div>
-
-              <div>
-                <Label className="mb-2">Discount (Auto Calculated)</Label>
-                <Input value={formatCurrency(discount)} disabled className="bg-gray-100" />
-                <p className="text-xs text-gray-500 mt-1">
-                  {discount > 0
-                    ? `Discount applied: ${formatCurrency(discount)} (user entered less amount)`
-                    : 'No discount (full amount entered)'}
-                </p>
-              </div>
-            </div>
-
-            {/* New Pending Summary */}
-            <div className="border rounded-lg p-4 bg-amber-50">
-              <h3 className="font-semibold mb-3 flex items-center gap-2">
-                <History className="w-4 h-4" />
-                Updated Pending Amount
-              </h3>
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm">Current Pending:</span>
-                  <span className="font-medium text-red-600">{formatCurrency(paymentBreakdown.currentPending)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm">This Treatment (after discount):</span>
-                  <span className="font-medium text-blue-600">
-                    {formatCurrency(paymentBreakdown.newPending - paymentBreakdown.currentPending || 0)}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center border-t pt-2">
-                  <span className="text-sm font-semibold">New Total Pending (after this):</span>
-                  <span className="font-bold text-red-700">
-                    {formatCurrency(paymentBreakdown.newPending)}
-                  </span>
-                </div>
-                <p className="text-xs text-gray-500 mt-2">
-                  After adding this treatment, patient&apos;s total pending amount will be updated
-                </p>
-              </div>
-            </div>
+          <div className="space-y-2">
+            <Label htmlFor="actions">Actions / Description</Label>
+            <Textarea
+              id="actions"
+              value={formData.actions}
+              onChange={(e) => setFormData({ ...formData, actions: e.target.value })}
+              placeholder="Enter treatment details or actions..."
+              rows={4}
+              disabled={isSubmitting}
+            />
           </div>
 
-          {/* Doctor Selection */}
-          <div>
-            <Label className="flex items-center gap-2 mb-2">
-              <User className="w-4 h-4" />
-              Assign Doctor
-            </Label>
-            <Select onValueChange={setSelectedDoctor} value={selectedDoctor} disabled={isSubmitting}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select doctor" />
-              </SelectTrigger>
-              <SelectContent>
-                {doctors.map(d => (
-                  <SelectItem key={d} value={d}>{d}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Buttons */}
-          <div className="flex justify-end gap-3 pt-4 border-t">
-            <Button variant="outline" onClick={onClose} disabled={isSubmitting}>Cancel</Button>
-            <Button
-              onClick={handleSubmit}
-              disabled={selectedTreatments.length === 0 || !manualTotal || !selectedDoctor || isSubmitting}
-              className="gap-2 bg-green-600 hover:bg-green-700"
-            >
-              {isSubmitting ? (
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-              ) : (
-                <>
-                  <Save className="w-4 h-4" /> Save & Complete Treatment
-                </>
-              )}
+          <div className="flex justify-end gap-3 pt-4 border-t mt-4">
+            <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting}>
+              Cancel
+            </Button>
+            <Button type="submit" className="bg-green-600 hover:bg-green-700" disabled={isSubmitting}>
+              <Save className="w-4 h-4 mr-2" />
+              {isSubmitting ? 'Saving...' : (isEditing ? 'Update' : 'Save')}
             </Button>
           </div>
-        </div>
+        </form>
       </div>
     </div>
   );

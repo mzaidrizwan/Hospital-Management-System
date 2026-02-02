@@ -34,6 +34,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useData } from '@/context/DataContext';
 
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { InventoryFormModal } from '@/components/modals/InventoryFormModal';
 
 // IndexedDB Utilities
 import { saveToLocal, getFromLocal, deleteFromLocal, openDB } from '@/services/indexedDbUtils';
@@ -52,28 +53,18 @@ const formatCurrency = (amount: number) => {
 };
 
 export default function AdminInventory() {
-  const { inventory: contextInventory, sales: contextSales, loading: dataLoading, isOnline } = useData();
+  const { inventory: contextInventory, sales: contextSales, loading: dataLoading, isOnline, setInventory } = useData();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [editingItem, setEditingItem] = useState<any>(null);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isSellDialogOpen, setIsSellDialogOpen] = useState(false);
   const [selectedItemForSale, setSelectedItemForSale] = useState<any>(null);
-  const [editingItem, setEditingItem] = useState<any>(null);
   const [activeTab, setActiveTab] = useState('inventory');
   const [saleQuantity, setSaleQuantity] = useState(1);
   const [saleNotes, setSaleNotes] = useState('');
   const [isProcessingSale, setIsProcessingSale] = useState(false);
-
-  const [newItem, setNewItem] = useState({
-    name: '',
-    sku: '',
-    quantity: 0,
-    min: 0,
-    category: 'Supplies',
-    expiry: '',
-    price: 0
-  });
 
   // Filtered inventory based on search and category
   const filteredInventory = useMemo(() => {
@@ -109,67 +100,26 @@ export default function AdminInventory() {
   }, [contextInventory]);
 
   // CRUD Operations for Inventory - Local-first writes
-  const handleAddItem = async () => {
-    if (!newItem.name || !newItem.sku) {
-      toast.error("Name and SKU are required fields.");
-      return;
-    }
-
-    const newItemWithId = {
-      ...newItem,
-      id: `inv-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-      quantity: parseInt(newItem.quantity.toString()) || 0,
-      min: parseInt(newItem.min.toString()) || 0,
-      price: parseFloat(newItem.price.toString()) || 0,
-      createdAt: new Date().toISOString()
-    };
-
-    try {
-      await smartSync('inventory', newItemWithId);
-      toast.success("Item added successfully!");
-      setNewItem({ name: '', sku: '', quantity: 0, min: 0, category: 'Supplies', expiry: '', price: 0 });
-      setIsAddDialogOpen(false);
-    } catch (err) {
-      console.error('Failed to add item:', err);
-      toast.error("Failed to add item.");
-    }
-  };
-
   const handleEditItem = (item: any) => {
-    setEditingItem({ ...item });
+    setEditingItem(item);
     setIsEditDialogOpen(true);
-  };
-
-  const handleSaveEdit = async () => {
-    if (!editingItem?.name || !editingItem?.sku) {
-      toast.error("Name and SKU are required fields.");
-      return;
-    }
-
-    const updatedItem = {
-      ...editingItem,
-      quantity: parseInt(editingItem.quantity.toString()) || 0,
-      min: parseInt(editingItem.min.toString()) || 0,
-      price: parseFloat(editingItem.price.toString()) || 0,
-      updatedAt: new Date().toISOString()
-    };
-
-    try {
-      await smartSync('inventory', updatedItem);
-      toast.success("Item updated successfully!");
-      setIsEditDialogOpen(false);
-      setEditingItem(null);
-    } catch (err) {
-      console.error('Failed to update item:', err);
-      toast.error("Failed to update item.");
-    }
   };
 
   const handleDeleteItem = async (id: string) => {
     if (!window.confirm('Are you sure you want to delete this item?')) return;
 
     try {
-      await smartDelete('inventory', id);
+      // 1. Delete from IndexedDB immediately
+      await deleteFromLocal('inventory', id);
+
+      // 2. Manually update context state for instant UI update
+      setInventory(prev => prev.filter(i => i.id !== id));
+
+      // 3. Background Sync (No await)
+      smartDelete('inventory', id).catch(err => {
+        console.error('Background delete sync failed:', err);
+      });
+
       toast.success("Item removed from inventory.");
     } catch (error) {
       console.error('Delete failed:', error);
@@ -258,17 +208,6 @@ export default function AdminInventory() {
           )}
         </div>
         <div className="flex flex-wrap gap-2 items-center">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted/50 border text-xs font-medium mr-2">
-            {isOnline ? (
-              <><div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" /> <span className="text-green-700">Online</span></>
-            ) : (
-              <><div className="w-2 h-2 rounded-full bg-amber-500" /> <span className="text-amber-700">Offline</span></>
-            )}
-          </div>
-          <Button variant="outline" onClick={handleRefresh} className="gap-2">
-            <RefreshCw className="w-4 h-4" />
-            Refresh
-          </Button>
           <Button className="gap-2 shadow-sm" onClick={() => setIsAddDialogOpen(true)}>
             <Plus className="w-4 h-4" />
             Add New Item
@@ -306,7 +245,7 @@ export default function AdminInventory() {
                 <SelectTrigger className="w-[180px] h-10 shadow-sm">
                   <SelectValue placeholder="All Categories" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper" className="max-h-60 overflow-y-auto">
                   <SelectItem value="All">All Categories</SelectItem>
                   {categories.map(category => (
                     <SelectItem key={category} value={category}>{category}</SelectItem>
@@ -500,121 +439,19 @@ export default function AdminInventory() {
         </TabsContent>
       </Tabs>
 
-      {/* Dialogs - Consistent Style */}
+      <InventoryFormModal
+        open={isAddDialogOpen}
+        onOpenChange={setIsAddDialogOpen}
+      />
 
-      {/* Add Item Dialog */}
-      <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-        <DialogContent className="max-w-md rounded-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-black">Add New Inventory Item</DialogTitle>
-            {!isOnline && (
-              <div className="flex items-center gap-2 text-amber-600 bg-amber-50 p-2 rounded-lg border border-amber-100 mt-2">
-                <WifiOff className="w-4 h-4" />
-                <span className="text-[10px] font-bold uppercase tracking-widest">Offline Mode: Syncing queued</span>
-              </div>
-            )}
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="name" className="text-xs font-bold uppercase text-muted-foreground">Item Name *</Label>
-              <Input
-                id="name"
-                name="name"
-                value={newItem.name}
-                onChange={(e) => setNewItem(prev => ({ ...prev, name: e.target.value }))}
-                placeholder="Ex: Alginate Powder"
-                className="h-10 font-medium"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="sku" className="text-xs font-bold uppercase text-muted-foreground">SKU / Code *</Label>
-              <Input
-                id="sku"
-                name="sku"
-                value={newItem.sku}
-                onChange={(e) => setNewItem(prev => ({ ...prev, sku: e.target.value }))}
-                placeholder="Ex: MAT-001"
-                className="h-10 font-mono"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="quantity" className="text-xs font-bold uppercase text-muted-foreground">Initial Stock</Label>
-                <Input id="quantity" type="number" value={newItem.quantity} onChange={(e) => setNewItem(prev => ({ ...prev, quantity: parseInt(e.target.value) || 0 }))} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="min" className="text-xs font-bold uppercase text-muted-foreground">Low Stock Limit</Label>
-                <Input id="min" type="number" value={newItem.min} onChange={(e) => setNewItem(prev => ({ ...prev, min: parseInt(e.target.value) || 0 }))} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="price" className="text-xs font-bold uppercase text-muted-foreground">Price (PKR)</Label>
-                <Input id="price" type="number" value={newItem.price} onChange={(e) => setNewItem(prev => ({ ...prev, price: parseFloat(e.target.value) || 0 }))} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="category" className="text-xs font-bold uppercase text-muted-foreground">Category</Label>
-                <Select value={newItem.category} onValueChange={(value) => setNewItem(prev => ({ ...prev, category: value }))}>
-                  <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
-                  <SelectContent>{categories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setIsAddDialogOpen(false)} className="font-bold">Cancel</Button>
-            <Button onClick={handleAddItem} className="font-bold px-8 bg-primary hover:bg-primary/90 shadow-md">Add Item</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Edit Item Dialog */}
-      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent className="max-w-md rounded-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-black">Edit Inventory Item</DialogTitle>
-          </DialogHeader>
-          {editingItem && (
-            <div className="space-y-4 py-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="edit-name" className="text-xs font-bold uppercase text-muted-foreground">Item Name *</Label>
-                <Input id="edit-name" value={editingItem.name} onChange={(e) => setEditingItem((p: any) => ({ ...p, name: e.target.value }))} className="h-10 font-medium" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="edit-sku" className="text-xs font-bold uppercase text-muted-foreground">SKU / Code *</Label>
-                <Input id="edit-sku" value={editingItem.sku} onChange={(e) => setEditingItem((p: any) => ({ ...p, sku: e.target.value }))} className="h-10 font-mono" />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="edit-quantity" className="text-xs font-bold uppercase text-muted-foreground">Current Stock</Label>
-                  <Input id="edit-quantity" type="number" value={editingItem.quantity} onChange={(e) => setEditingItem((p: any) => ({ ...p, quantity: parseInt(e.target.value) || 0 }))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="edit-min" className="text-xs font-bold uppercase text-muted-foreground">Low Stock Limit</Label>
-                  <Input id="edit-min" type="number" value={editingItem.min} onChange={(e) => setEditingItem((p: any) => ({ ...p, min: parseInt(e.target.value) || 0 }))} />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="edit-price" className="text-xs font-bold uppercase text-muted-foreground">Price (PKR)</Label>
-                  <Input id="edit-price" type="number" value={editingItem.price} onChange={(e) => setEditingItem((p: any) => ({ ...p, price: parseFloat(e.target.value) || 0 }))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="edit-category" className="text-xs font-bold uppercase text-muted-foreground">Category</Label>
-                  <Select value={editingItem.category} onValueChange={(v) => setEditingItem((p: any) => ({ ...p, category: v }))}>
-                    <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
-                    <SelectContent>{categories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setIsEditDialogOpen(false)} className="font-bold">Cancel</Button>
-            <Button onClick={handleSaveEdit} className="font-bold px-8">Save Changes</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <InventoryFormModal
+        open={isEditDialogOpen}
+        onOpenChange={(open) => {
+          setIsEditDialogOpen(open);
+          if (!open) setEditingItem(null);
+        }}
+        editingItem={editingItem}
+      />
 
       {/* Sell Item Dialog */}
       <Dialog open={isSellDialogOpen} onOpenChange={setIsSellDialogOpen}>

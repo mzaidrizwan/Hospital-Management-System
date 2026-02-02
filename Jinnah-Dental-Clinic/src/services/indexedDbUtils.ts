@@ -1,5 +1,5 @@
 const DB_NAME = 'ClinicDB';
-const DB_VERSION = 5; // Bumped to 5 to include all new stores
+const DB_VERSION = 6; // Bumped to 6 to ensure settings store exists for clinic_license
 const ALL_STORES = [
     // Existing stores
     'bills',
@@ -15,7 +15,7 @@ const ALL_STORES = [
     'backups',
     'users',
     'syncQueue',
-    
+
     // New stores from requirements
     'staff',
     'attendance',
@@ -42,7 +42,7 @@ const STORE_CONFIGS: Record<string, { keyPath: string }> = {
     'attendance': { keyPath: 'id' },
     'billing': { keyPath: 'id' },
     'settings': { keyPath: 'id' },
-    
+
     // Special cases
     'users': { keyPath: 'role' } // Based on previous code, users uses 'role' as keyPath
 };
@@ -60,7 +60,7 @@ export const openDB = (): Promise<IDBDatabase> => {
             console.log(`Upgrading database from version ${event.oldVersion} to ${DB_VERSION}`);
             isUpgrading = true;
             const db = (event.target as IDBOpenDBRequest).result;
-            
+
             // For each required store, check if it exists and create if not
             ALL_STORES.forEach(storeName => {
                 if (!db.objectStoreNames.contains(storeName)) {
@@ -73,7 +73,7 @@ export const openDB = (): Promise<IDBDatabase> => {
                     console.log(`Object store ${storeName} already exists`);
                 }
             });
-            
+
             // Optional: Handle migration from old versions
             if (event.oldVersion > 0 && event.oldVersion < DB_VERSION) {
                 handleDatabaseMigration(db, event.oldVersion);
@@ -82,13 +82,13 @@ export const openDB = (): Promise<IDBDatabase> => {
 
         request.onsuccess = (event) => {
             const db = (event.target as IDBOpenDBRequest).result;
-            
+
             // Double-check all stores exist (for safety)
             if (isUpgrading) {
-                const missingStores = ALL_STORES.filter(storeName => 
+                const missingStores = ALL_STORES.filter(storeName =>
                     !db.objectStoreNames.contains(storeName)
                 );
-                
+
                 if (missingStores.length > 0) {
                     console.warn('Some stores are missing after upgrade:', missingStores);
                     // Try to create missing stores in a new transaction
@@ -101,16 +101,16 @@ export const openDB = (): Promise<IDBDatabase> => {
                     tx.commit?.();
                 }
             }
-            
+
             isUpgrading = false;
             resolve(db);
         };
-        
+
         request.onerror = (event) => {
             console.error('Error opening IndexedDB:', (event.target as IDBOpenDBRequest).error);
             reject((event.target as IDBOpenDBRequest).error);
         };
-        
+
         request.onblocked = () => {
             console.warn('IndexedDB blocked - waiting for other connections to close');
             // You could show a message to the user here
@@ -123,10 +123,10 @@ export const openDB = (): Promise<IDBDatabase> => {
 // Helper function to handle database migrations
 function handleDatabaseMigration(db: IDBDatabase, oldVersion: number) {
     console.log(`Migrating from version ${oldVersion} to ${DB_VERSION}`);
-    
+
     // Migration from version 1 to 2, etc.
     // Add specific migration logic here if needed
-    
+
     // Example migration:
     if (oldVersion < 3) {
         // Create any new stores added in version 3
@@ -136,7 +136,7 @@ function handleDatabaseMigration(db: IDBDatabase, oldVersion: number) {
             }
         });
     }
-    
+
     if (oldVersion < 4) {
         // Create any new stores added in version 4
         ['staff', 'attendance'].forEach(storeName => {
@@ -145,10 +145,19 @@ function handleDatabaseMigration(db: IDBDatabase, oldVersion: number) {
             }
         });
     }
-    
+
     if (oldVersion < 5) {
         // Create any new stores added in version 5
-        ['billing', 'settings'].forEach(storeName => {
+        ['billing'].forEach(storeName => {
+            if (!db.objectStoreNames.contains(storeName)) {
+                db.createObjectStore(storeName, { keyPath: 'id' });
+            }
+        });
+    }
+
+    if (oldVersion < 6) {
+        // Ensure settings store exists (for clinic_license)
+        ['settings'].forEach(storeName => {
             if (!db.objectStoreNames.contains(storeName)) {
                 db.createObjectStore(storeName, { keyPath: 'id' });
             }
@@ -166,10 +175,10 @@ export async function saveToLocal(storeName: string, data: any): Promise<void> {
                 reject(new Error(`Object store "${storeName}" does not exist`));
                 return;
             }
-            
+
             const tx = db.transaction(storeName, 'readwrite');
             const store = tx.objectStore(storeName);
-            
+
             // Ensure data has the correct key based on store configuration
             const config = STORE_CONFIGS[storeName] || { keyPath: 'id' };
             if (!data[config.keyPath]) {
@@ -177,11 +186,11 @@ export async function saveToLocal(storeName: string, data: any): Promise<void> {
                 reject(new Error(`Data missing keyPath "${config.keyPath}" for store "${storeName}"`));
                 return;
             }
-            
+
             const request = store.put(data);
             request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error);
-            
+
             // Ensure transaction completes
             tx.oncomplete = () => {
                 // Transaction completed successfully
@@ -206,10 +215,10 @@ export async function getFromLocal(storeName: string, id?: string): Promise<any>
                 resolve(id ? undefined : []);
                 return;
             }
-            
+
             const tx = db.transaction(storeName, 'readonly');
             const store = tx.objectStore(storeName);
-            
+
             if (id) {
                 const config = STORE_CONFIGS[storeName] || { keyPath: 'id' };
                 // If the provided id doesn't match the keyPath type, handle it
@@ -221,7 +230,7 @@ export async function getFromLocal(storeName: string, id?: string): Promise<any>
                 request.onsuccess = () => resolve(request.result || []);
                 request.onerror = () => reject(request.error);
             }
-            
+
             // Ensure transaction completes
             tx.oncomplete = () => {
                 // Transaction completed successfully
@@ -247,13 +256,13 @@ export async function deleteFromLocal(storeName: string, id: string): Promise<vo
                 reject(new Error(`Object store "${storeName}" does not exist`));
                 return;
             }
-            
+
             const tx = db.transaction(storeName, 'readwrite');
             const store = tx.objectStore(storeName);
             const request = store.delete(id);
             request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error);
-            
+
             // Ensure transaction completes
             tx.oncomplete = () => {
                 // Transaction completed successfully
@@ -278,13 +287,13 @@ export async function clearStore(storeName: string): Promise<void> {
                 reject(new Error(`Object store "${storeName}" does not exist`));
                 return;
             }
-            
+
             const tx = db.transaction(storeName, 'readwrite');
             const store = tx.objectStore(storeName);
             const request = store.clear();
             request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error);
-            
+
             // Ensure transaction completes
             tx.oncomplete = () => {
                 // Transaction completed successfully
@@ -319,7 +328,7 @@ export async function getStoreCount(storeName: string): Promise<number> {
                 resolve(0);
                 return;
             }
-            
+
             const tx = db.transaction(storeName, 'readonly');
             const store = tx.objectStore(storeName);
             const request = store.count();
@@ -342,21 +351,21 @@ export async function saveMultipleToLocal(storeName: string, items: any[]): Prom
                 reject(new Error(`Object store "${storeName}" does not exist`));
                 return;
             }
-            
+
             const tx = db.transaction(storeName, 'readwrite');
             const store = tx.objectStore(storeName);
-            
+
             const config = STORE_CONFIGS[storeName] || { keyPath: 'id' };
-            
+
             // Validate all items have the required key
             const invalidItems = items.filter(item => !item[config.keyPath]);
             if (invalidItems.length > 0) {
                 reject(new Error(`${invalidItems.length} items missing keyPath "${config.keyPath}"`));
                 return;
             }
-            
+
             items.forEach(item => store.put(item));
-            
+
             tx.oncomplete = () => resolve();
             tx.onerror = (event) => reject((event.target as IDBTransaction).error);
         });

@@ -102,7 +102,8 @@ export default function AdminStaff() {
     salaryPayments: contextPayments,
     attendance: contextAttendance,
     loading: dataLoading,
-    updateLocal
+    updateLocal,
+    deleteLocal
   } = useData();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -213,10 +214,20 @@ export default function AdminStaff() {
 
   const handleDeleteStaff = async (staffMember: Staff) => {
     if (!window.confirm(`Are you sure you want to remove ${staffMember.name}?`)) return;
+
     try {
-      await smartDelete('staff', staffMember.id);
+      // 1. Update LOCAL immediately (State + IndexedDB)
+      // This makes the card disappear instantly
+      await deleteLocal('staff', staffMember.id);
+
+      // 2. Trigger Firebase Delete in background (no await)
+      smartDelete('staff', staffMember.id).catch(err => {
+        console.error('Background delete failed:', err);
+      });
+
       toast.success(`${staffMember.name} removed from record`);
     } catch (error) {
+      console.error('Delete operation failed:', error);
       toast.error('Failed to remove staff member');
     }
   };

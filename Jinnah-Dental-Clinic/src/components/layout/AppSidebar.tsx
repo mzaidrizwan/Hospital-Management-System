@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import {
@@ -14,6 +14,9 @@ import {
   SidebarFooter,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { LicenseModal } from '@/components/modals/LicenseModal';
+import { useData } from '@/context/DataContext';
+import { ShieldCheck, ShieldAlert, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Calendar,
@@ -58,7 +61,11 @@ export function AppSidebar() {
   const { user, logout } = useAuth();
   const location = useLocation();
   const { state } = useSidebar();
+  const { licenseStatus, licenseDaysLeft } = useData();
+  const [showLicenseModal, setShowLicenseModal] = useState(false);
   const collapsed = state === 'collapsed';
+
+  const isLicensed = licenseStatus === 'valid';
 
   const items = user?.role === 'admin' ? adminItems : operatorItems;
   const isActive = (path: string) => location.pathname === path;
@@ -120,7 +127,41 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="p-4 border-t border-sidebar-border">
+      {!collapsed && (
+        <div className="px-4 py-2">
+          <button
+            onClick={() => setShowLicenseModal(true)}
+            className={cn(
+              "w-full flex items-center gap-3 p-3 rounded-xl border transition-all duration-200 text-left",
+              isLicensed
+                ? "bg-emerald-50/50 border-emerald-100 hover:bg-emerald-50 hover:border-emerald-200"
+                : "bg-amber-50/50 border-amber-100 hover:bg-amber-50 hover:border-amber-200"
+            )}
+          >
+            <div className={cn(
+              "flex items-center justify-center w-8 h-8 rounded-lg",
+              isLicensed ? "bg-emerald-100 text-emerald-600" : "bg-amber-100 text-amber-600"
+            )}>
+              {isLicensed ? <ShieldCheck className="w-5 h-5" /> : <ShieldAlert className="w-5 h-5" />}
+            </div>
+            <div className="flex flex-col">
+              <span className={cn(
+                "text-xs font-bold uppercase tracking-wider",
+                isLicensed ? "text-emerald-700" : "text-amber-700"
+              )}>
+                {isLicensed ? "License Active" : "License Expired"}
+              </span>
+              <span className="text-[10px] font-medium text-muted-foreground">
+                {isLicensed ? `${licenseDaysLeft} days remaining` : "Click to activate"}
+              </span>
+            </div>
+          </button>
+        </div>
+      )}
+
+      <LicenseModal open={showLicenseModal} onOpenChange={setShowLicenseModal} />
+
+      <SidebarFooter className="p-4 pt-2 border-t border-sidebar-border">
         <div className={cn(
           "flex items-center gap-3",
           collapsed && "justify-center"

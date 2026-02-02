@@ -24,6 +24,20 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import ExpenseFormModal from '@/components/modals/ExpenseFormModal';
 
+// Firebase imports
+import { db } from '@/lib/firebase';
+import { 
+  collection, 
+  query, 
+  orderBy, 
+  getDocs, 
+  setDoc, 
+  doc 
+} from 'firebase/firestore';
+
+// IndexedDB imports
+import { saveToLocal, clearStore } from '@/services/indexedDbUtils';
+
 // Types
 export type ExpenseCategory = 'rent' | 'salary' | 'supplies' | 'utilities' | 'equipment' | 'medication' | 'maintenance' | 'other';
 export type PaymentMethod = 'cash' | 'card' | 'bank_transfer' | 'cheque' | 'online';
@@ -45,45 +59,20 @@ export interface Expense {
   attachment?: string;
 }
 
-// Firebase
-import { db } from '@/lib/firebase';
-import {
-  collection,
-  getDocs,
-  doc,
-  setDoc,
-  deleteDoc,
-  query,
-  orderBy
-} from 'firebase/firestore';
+// Data Context
+import { useData } from '@/context/DataContext';
 
-// IndexedDB Utilities
-import { saveToLocal, getFromLocal, deleteFromLocal, clearStore, openDB } from '@/services/indexedDbUtils';
-
-// Firebase sync helpers
-const syncToFirebase = async (collectionName: string, item: any) => {
-  try {
-    await setDoc(doc(db, collectionName, item.id), item);
-    console.log(`Synced ${item.id} to Firebase ${collectionName}`);
-  } catch (error) {
-    console.error('Firebase sync error:', error);
-    throw error;
-  }
-};
-
-const loadFromFirebase = async (collectionName: string): Promise<any[]> => {
-  try {
-    const q = query(
-      collection(db, collectionName),
-      orderBy('createdAt', 'desc')
-    );
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  } catch (err) {
-    console.error("Firebase load failed:", err);
-    return [];
-  }
-};
+// Salary Payment Interface (for mapping)
+interface SalaryPayment {
+  id: string;
+  staffName: string;
+  amount: number;
+  paymentMethod: string;
+  date: string;
+  period: string;
+  notes?: string;
+  status: 'paid' | 'pending' | 'cancelled';
+}
 
 // Category Labels
 const categoryLabels: Record<ExpenseCategory, { label: string; color: string }> = {
@@ -113,20 +102,51 @@ const statusLabels: Record<Expense['status'], { label: string; color: string }> 
   cancelled: { label: 'Cancelled', color: 'bg-red-100 text-red-800 border-red-200' }
 };
 
-// Salary Payment Interface (for mapping)
-interface SalaryPayment {
-  id: string;
-  staffName: string;
-  amount: number;
-  paymentMethod: string;
-  date: string;
-  period: string;
-  notes?: string;
-  status: 'paid' | 'pending' | 'cancelled';
-}
+// Firebase sync helpers
+const syncToFirebase = async (collectionName: string, item: any) => {
+  try {
+    await setDoc(doc(db, collectionName, item.id), item);
+    console.log(`Synced ${item.id} to Firebase ${collectionName}`);
+  } catch (error) {
+    console.error('Firebase sync error:', error);
+    throw error;
+  }
+};
+
+const loadFromFirebase = async (collectionName: string): Promise<any[]> => {
+  try {
+    const q = query(
+      collection(db, collectionName),
+      orderBy('createdAt', 'desc')
+    );
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  } catch (err) {
+    console.error("Firebase load failed:", err);
+    return [];
+  }
+};
+
+// Format currency function
+const formatCurrency = (amount: number): string => {
+  return new Intl.NumberFormat('en-PK', {
+    style: 'currency',
+    currency: 'PKR',
+    minimumFractionDigits: 0
+  }).format(amount).replace('PKR', 'Rs');
+};
+
+// Format date function
+const formatDate = (dateString: string): string => {
+  return new Date(dateString).toLocaleDateString('en-US', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  });
+};
 
 export default function OperatorExpenses() {
-  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const { expenses, updateLocal, deleteLocal, loading } = useData();
   const [isSyncing, setIsSyncing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
@@ -135,105 +155,9 @@ export default function OperatorExpenses() {
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedCategory, setSelectedCategory] = useState<ExpenseCategory | 'all'>('all');
   const [selectedStatus, setSelectedStatus] = useState<Expense['status'] | 'all'>('all');
-  const [isLoading, setIsLoading] = useState(true);
-
+  const [dateRange, setDateRange] = useState({ from: new Date(), to: new Date() });
   const itemsPerPage = 8;
-
-  // Load data from IndexedDB and Firebase
-  useEffect(() => {
-    async function loadData() {
-      setIsLoading(true);
-
-      try {
-        // Initialize IndexedDB first
-        console.log('Initializing IndexedDB...');
-        await openDB();
-        console.log('IndexedDB initialized successfully');
-
-        // Load from IndexedDB first
-        console.log('Loading expenses from IndexedDB...');
-        const localExpenses = await getFromLocal('expenses') as Expense[];
-        console.log(`Loaded ${localExpenses.length} expenses from IndexedDB`);
-
-        let finalExpenses = localExpenses;
-
-        // If no local data, try to load from Firebase
-        if (localExpenses.length === 0) {
-          console.log('No local expenses found, loading from Firebase...');
-          const remoteExpenses = await loadFromFirebase('expenses') as Expense[];
-          console.log(`Loaded ${remoteExpenses.length} expenses from Firebase`);
-
-          if (remoteExpenses.length > 0) {
-            finalExpenses = remoteExpenses;
-            // Save to IndexedDB for offline use
-            const savePromises = remoteExpenses.map(item =>
-              saveToLocal('expenses', item).catch(err => {
-                console.warn(`Failed to save expense ${item.id} to IndexedDB:`, err);
-                return Promise.resolve(); // Continue even if one fails
-              })
-            );
-            await Promise.all(savePromises);
-            console.log('Saved expenses to IndexedDB');
-          }
-        }
-
-        // Load and map salary payments
-        try {
-          console.log('Loading salary payments from IndexedDB...');
-          const localSalaries = await getFromLocal('salaryPayments') as SalaryPayment[];
-          console.log(`Loaded ${localSalaries.length} salary payments from IndexedDB`);
-
-          const mappedSalaries = localSalaries.map(salary => ({
-            id: `salary-${salary.id}`,
-            title: `Salary for ${salary.staffName} - ${salary.period}`,
-            amount: salary.amount,
-            category: 'salary' as ExpenseCategory,
-            paymentMethod: salary.paymentMethod as PaymentMethod,
-            date: salary.date,
-            description: salary.notes || 'Salary payment',
-            vendor: salary.staffName,
-            receiptNumber: salary.id,
-            status: salary.status,
-            createdAt: salary.date,
-            updatedAt: salary.date,
-            paidBy: 'Admin'
-          }));
-
-          // Merge salaries into expenses if not already present
-          const existingIds = new Set(finalExpenses.map(e => e.id));
-          const newSalaries = mappedSalaries.filter(s => !existingIds.has(s.id));
-          finalExpenses = [...finalExpenses, ...newSalaries];
-          console.log(`Merged ${newSalaries.length} salary payments into expenses`);
-
-          // Save merged data to IndexedDB
-          if (newSalaries.length > 0) {
-            const savePromises = newSalaries.map(salaryExpense =>
-              saveToLocal('expenses', salaryExpense).catch(err => {
-                console.warn(`Failed to save salary expense ${salaryExpense.id} to IndexedDB:`, err);
-                return Promise.resolve(); // Continue even if one fails
-              })
-            );
-            await Promise.all(savePromises);
-            console.log('Saved merged salary expenses to IndexedDB');
-          }
-        } catch (salaryError) {
-          console.error('Error loading salary payments:', salaryError);
-          // Continue without salary payments
-        }
-
-        setExpenses(finalExpenses);
-        toast.success(`Loaded ${finalExpenses.length} expenses`);
-      } catch (error) {
-        console.error('Error loading expenses data:', error);
-        toast.error('Failed to load expenses data');
-        setExpenses([]);
-      } finally {
-        setIsLoading(false);
-      }
-    }
-
-    loadData();
-  }, []);
+  const isLoading = loading;
 
   // Manual Sync with Firebase
   const handleSync = async () => {
@@ -260,8 +184,8 @@ export default function OperatorExpenses() {
       );
       await Promise.all(savePromises);
 
-      // Update state
-      setExpenses(remoteExpenses);
+      // Update state through context (if available) - note: this might not be needed
+      // as the DataContext should handle updates automatically
 
       // Also sync salary payments
       try {
@@ -310,16 +234,7 @@ export default function OperatorExpenses() {
           paidBy: 'Admin'
         }));
 
-        // Merge salaries with expenses
-        setExpenses(prev => {
-          // Filter out old salary entries
-          const nonSalaryExpenses = prev.filter(expense => !expense.id.startsWith('salary-'));
-          const merged = [...nonSalaryExpenses, ...mappedSalaries];
-          console.log(`Merged ${mappedSalaries.length} salary payments`);
-          return merged;
-        });
-
-        // Save merged salaries to expenses store
+        // Save mapped salaries to expenses store
         const mergedSavePromises = mappedSalaries.map(salaryExpense =>
           saveToLocal('expenses', salaryExpense).catch(err => {
             console.warn(`Failed to save merged salary expense ${salaryExpense.id}:`, err);
@@ -396,23 +311,7 @@ export default function OperatorExpenses() {
     e.stopPropagation();
     if (confirm(`Are you sure you want to delete expense "${expense.title}"?`)) {
       try {
-        // Remove from local state
-        setExpenses(prev => prev.filter(e => e.id !== expense.id));
-
-        // Remove from IndexedDB
-        await deleteFromLocal('expenses', expense.id).catch(err => {
-          console.warn(`Failed to delete expense ${expense.id} from IndexedDB:`, err);
-        });
-
-        // Remove from Firebase (only if not a salary expense)
-        if (!expense.id.startsWith('salary-')) {
-          try {
-            await deleteDoc(doc(db, 'expenses', expense.id));
-          } catch (firebaseError) {
-            console.warn(`Failed to delete expense ${expense.id} from Firebase:`, firebaseError);
-          }
-        }
-
+        await deleteLocal('expenses', expense.id);
         toast.success(`Expense "${expense.title}" deleted successfully`);
       } catch (error) {
         console.error('Error deleting expense:', error);
@@ -434,45 +333,22 @@ export default function OperatorExpenses() {
           amount: parseFloat(expenseData.amount) || 0,
           updatedAt: new Date().toISOString()
         };
-
-        setExpenses(prev => prev.map(e =>
-          e.id === selectedExpense.id ? updatedExpense : e
-        ));
-
-        toast.success('Expense updated successfully');
       } else {
         // Add new expense
         updatedExpense = {
           ...expenseData,
           id: expenseData.id || `exp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           amount: parseFloat(expenseData.amount) || 0,
+          status: 'pending', // Default status
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
-
-        setExpenses(prev => [updatedExpense, ...prev]);
-        toast.success(`Expense "${expenseData.title}" added successfully`);
       }
 
-      // Save to IndexedDB - handle errors gracefully
-      try {
-        await saveToLocal('expenses', updatedExpense);
-      } catch (indexedDBError) {
-        console.warn('Failed to save to IndexedDB:', indexedDBError);
-        toast.warning('Expense saved locally but failed to save offline');
-      }
+      // Use Context's updateLocal (which includes smartSync)
+      await updateLocal('expenses', updatedExpense);
 
-      // Sync to Firebase (only if not a salary expense)
-      if (!updatedExpense.id.startsWith('salary-')) {
-        try {
-          await syncToFirebase('expenses', updatedExpense);
-          toast.success('Expense synced to Firebase!');
-        } catch (firebaseError) {
-          console.warn('Failed to sync to Firebase:', firebaseError);
-          toast.warning('Expense saved locally but failed to sync to Firebase');
-        }
-      }
-
+      toast.success(isEditing ? 'Expense updated successfully' : `Expense "${expenseData.title}" added successfully`);
       setShowExpenseForm(false);
     } catch (error) {
       console.error('Error saving expense:', error);
@@ -489,46 +365,12 @@ export default function OperatorExpenses() {
         updatedAt: new Date().toISOString()
       };
 
-      setExpenses(prev => prev.map(e =>
-        e.id === expense.id ? updatedExpense : e
-      ));
-
-      // Update IndexedDB
-      await saveToLocal('expenses', updatedExpense).catch(err => {
-        console.warn(`Failed to update expense status in IndexedDB:`, err);
-      });
-
-      // Sync to Firebase (only if not a salary expense)
-      if (!expense.id.startsWith('salary-')) {
-        try {
-          await syncToFirebase('expenses', updatedExpense);
-        } catch (firebaseError) {
-          console.warn(`Failed to sync status update to Firebase:`, firebaseError);
-        }
-      }
-
+      await updateLocal('expenses', updatedExpense);
       toast.success(`Status updated to ${newStatus}`);
     } catch (error) {
       console.error('Error updating status:', error);
       toast.error('Failed to update status');
     }
-  };
-
-  // Format currency
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD'
-    }).format(amount);
-  };
-
-  // Format date
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric'
-    });
   };
 
   // Export to CSV

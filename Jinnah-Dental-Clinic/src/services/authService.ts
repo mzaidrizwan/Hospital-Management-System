@@ -51,3 +51,47 @@ export const updateUserPassword = async (userId: string, currentPassword: string
         throw error;
     }
 };
+/**
+ * updateUserPasswordLocally
+ * Direct local password update with background sync and session preservation.
+ */
+export const updateUserPasswordLocally = async (userId: string, newPassword: string): Promise<boolean> => {
+    try {
+        // 1. Update password in the 'users' store within IndexedDB immediately
+        const storedUser = await getFromLocal('users', userId);
+        if (!storedUser) throw new Error('User record not found in local storage.');
+
+        const updatedUser = {
+            ...storedUser,
+            password: newPassword,
+            lastUpdated: Date.now(),
+            updatedAt: new Date().toISOString()
+        };
+
+        await saveToLocal('users', updatedUser);
+
+        // 2. Add a 'passwordUpdate' task to the 'syncQueue' for Firebase
+        // smartSync handles naming and queueing if offline. We trigger it in background.
+        smartSync('users', updatedUser).catch(err => {
+            console.error('Background password sync failed:', err);
+        });
+
+        // 3. Update the current user session in localStorage so they don't get logged out
+        const currentUserStr = localStorage.getItem('currentUser');
+        if (currentUserStr) {
+            const currentUser = JSON.parse(currentUserStr);
+            // Check if this updated user is the one currently logged in
+            if (currentUser.role === userId || currentUser.id === userId) {
+                localStorage.setItem('currentUser', JSON.stringify({
+                    ...currentUser,
+                    password: newPassword
+                }));
+            }
+        }
+
+        return true;
+    } catch (error: any) {
+        console.error('updateUserPasswordLocally error:', error);
+        throw error;
+    }
+};

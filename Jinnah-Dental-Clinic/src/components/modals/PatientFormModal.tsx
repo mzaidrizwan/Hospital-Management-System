@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
+import { useData } from '@/context/DataContext';
+import { smartSync } from '@/services/syncService';
 
 interface Patient {
   id: string;           // Firebase document ID
@@ -51,6 +53,7 @@ export default function PatientFormModal({
     openingBalance: '0'
   });
 
+  const { updateLocal } = useData();
   const [idError, setIdError] = useState('');
   const [lastGeneratedId, setLastGeneratedId] = useState('');
 
@@ -147,7 +150,7 @@ export default function PatientFormModal({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     // Basic validation
@@ -159,31 +162,53 @@ export default function PatientFormModal({
 
     // Duplicate number prevention
     if (checkNumberExists(formData.patientNumber) && !(isEditing && patient?.patientNumber === formData.patientNumber)) {
-      toast.error(`Patient Number ${formData.patientNumber} already exists! Please use a different number.`);
+      toast.error(`Patient Number ${formData.patientNumber} already exists!`);
       setIdError(`Number ${formData.patientNumber} already exists`);
       return;
     }
 
-    let openingBalance = 0;
-    if (formData.openingBalance) {
-      const num = parseFloat(formData.openingBalance);
-      if (!isNaN(num)) openingBalance = num;
-    }
+    const patientId = patient?.id || `P-${Date.now()}`;
+    const openingBalance = parseFloat(formData.openingBalance) || 0;
 
-    const submitData = {
-      id: patient?.id,
+    // Construct full patient object following local-first pattern
+    const patientPayload = {
+      ...patient,
+      id: patientId,
       patientNumber: formData.patientNumber,
       name: formData.name.trim(),
       phone: formData.phone.trim(),
-      age: formData.age ? parseInt(formData.age) : undefined,
-      gender: formData.gender || undefined,
-      address: formData.address?.trim() || undefined,
+      age: formData.age ? parseInt(formData.age) : 0,
+      gender: formData.gender || 'other',
+      address: formData.address?.trim() || '',
       openingBalance,
-      isEditing,
-    };
+      registrationDate: patient?.registrationDate || new Date().toISOString(),
+      isActive: true,
+      pendingBalance: isEditing ? (patient?.pendingBalance || 0) : openingBalance,
+      totalVisits: patient?.totalVisits || 0,
+      totalPaid: patient?.totalPaid || 0,
+      updatedAt: new Date().toISOString()
+    } as Patient;
 
-    console.log('Submitting:', submitData);
-    onSubmit(submitData);
+    try {
+      // 1. Local-first update: State + IndexedDB (Updates UI instantly)
+      await updateLocal('patients', patientPayload);
+
+      // 2. Dismiss modal immediately for better UX
+      onClose();
+
+      // 3. Background Sync (No await, non-blocking)
+      smartSync('patients', patientPayload).catch(err => {
+        console.error('Background sync failed for patient:', err);
+      });
+
+      // 4. Trigger parent callback for any side-effects (e.g. queue management)
+      onSubmit({ ...patientPayload, isEditing });
+
+      toast.success(isEditing ? 'Patient updated' : 'Patient registered successfully');
+    } catch (error) {
+      console.error('Error saving patient:', error);
+      toast.error('Failed to save patient information');
+    }
   };
 
   const handleGenerateNewNumber = () => {
@@ -229,7 +254,7 @@ export default function PatientFormModal({
                     Generate New
                   </button>
                 </div>
-                
+
                 <div className="flex items-center gap-4">
                   <Input
                     id="patientNumber"
@@ -248,7 +273,7 @@ export default function PatientFormModal({
                     <div className="text-blue-600 font-bold">{generateNextSequentialNumber()}</div>
                   </div>
                 </div>
-                
+
                 {idError && (
                   <p className="text-red-600 text-sm flex items-center gap-1.5 bg-red-50 px-3 py-2 rounded-lg">
                     <AlertCircle size={16} />
@@ -260,7 +285,7 @@ export default function PatientFormModal({
               {/* Basic Information */}
               <div className="space-y-4">
                 <h3 className="text-base font-medium text-gray-700 pb-2 border-b">Basic Information</h3>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="name">Full Name <span className="text-red-500">*</span></Label>
                   <Input
@@ -295,7 +320,7 @@ export default function PatientFormModal({
             <div className="space-y-6">
               <div className="space-y-4">
                 <h3 className="text-base font-medium text-gray-700 pb-2 border-b">Additional Information</h3>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="age">Age</Label>
@@ -380,8 +405,8 @@ export default function PatientFormModal({
             <Button
               type="submit"
               disabled={loading || !!idError}
-              className={`h-11 px-8 ${mode === 'walk-in' 
-                ? "bg-green-600 hover:bg-green-700" 
+              className={`h-11 px-8 ${mode === 'walk-in'
+                ? "bg-green-600 hover:bg-green-700"
                 : "bg-blue-600 hover:bg-blue-700"}`}
             >
               {loading ? 'Saving...' : (
