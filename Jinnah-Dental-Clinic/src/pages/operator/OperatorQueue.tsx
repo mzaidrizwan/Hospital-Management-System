@@ -13,15 +13,20 @@ import PatientDetailsModal from '@/components/modals/PatientDetailsModal';
 import TreatmentModal from '@/components/modals/TreatmentModal';
 import { startOfDay, endOfDay, parseISO, format } from 'date-fns';
 import { useData } from '@/context/DataContext';
-import { v4 as uuidv4 } from 'uuid';
-import { smartSync } from '@/services/syncService';
 
 const doctors = ['Dr. Smith', 'Dr. Johnson', 'Dr. Wilson', 'Dr. Brown', 'Dr. Taylor'];
 
 export default function OperatorQueue() {
-  const { queue: contextQueue, patients: contextPatients, bills: contextBills, updateLocal, deleteLocal, loading: contextLoading } = useData();
+  const { 
+    queue: contextQueue, 
+    patients: contextPatients, 
+    bills: contextBills, 
+    updateLocal, 
+    deleteLocal, 
+    loading: contextLoading,
+    updateQueueItemOptimistic 
+  } = useData();
 
-  // Restoring missing state variables
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDoctor, setSelectedDoctor] = useState('all');
   const [dateRange, setDateRange] = useState({
@@ -29,7 +34,6 @@ export default function OperatorQueue() {
     endDate: format(new Date(), 'yyyy-MM-dd')
   });
 
-  // UI States
   const [showPatientModal, setShowPatientModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState<any>(null);
   const [showTreatmentModal, setShowTreatmentModal] = useState(false);
@@ -39,7 +43,6 @@ export default function OperatorQueue() {
   const [selectedPatientData, setSelectedPatientData] = useState<any>(null);
   const [selectedQueueItemForTreatment, setSelectedQueueItemForTreatment] = useState<any>(null);
 
-  // Derived state for queue filtering
   const queueData = React.useMemo(() => {
     if (!contextQueue) return [];
     try {
@@ -59,24 +62,19 @@ export default function OperatorQueue() {
   const patients = contextPatients || [];
   const loading = { queue: contextLoading, patients: contextLoading };
 
-  const getPatientDataForQueueItem = useCallback(async (queueItem: QueueItem) => {
+  const getPatientDataForQueueItem = useCallback((queueItem: QueueItem) => {
     try {
-      // Look in context (local state) first - O(1) if map or O(n) if array
-      // Since patients is an array, O(n).
-      const cachedPatient = patients.find(p =>
+      return patients.find(p =>
         p.patientNumber === queueItem.patientNumber ||
         p.id === queueItem.patientId
-      );
-      if (cachedPatient) return cachedPatient;
-      return null;
+      ) || null;
     } catch (error) {
       console.error('Error fetching patient data:', error);
       return null;
     }
   }, [patients]);
 
-  // Fetch bills for a patient
-  const getBillsForPatient = async (patientId: string) => {
+  const getBillsForPatient = (patientId: string) => {
     if (!patientId || !contextBills) return [];
     return contextBills.filter(b => b.patientId === patientId);
   };
@@ -94,16 +92,15 @@ export default function OperatorQueue() {
   const inTreatmentPatients = filteredQueueData.filter(p => p.status === 'in_treatment');
   const completedPatients = filteredQueueData.filter(p => p.status === 'completed');
 
-  // ------------------ Open Payment Modal with Bills ------------------
   const handleOpenPaymentModal = async (item: QueueItem) => {
     try {
-      const patientData = await getPatientDataForQueueItem(item);
+      const patientData = getPatientDataForQueueItem(item);
       if (!patientData) {
         toast.error('Patient data not found');
         return;
       }
 
-      const patientBills = await getBillsForPatient(patientData.id);
+      const patientBills = getBillsForPatient(patientData.id);
 
       setShowPaymentModal({
         queueItem: item,
@@ -116,22 +113,26 @@ export default function OperatorQueue() {
     }
   };
 
-  // ------------------ Payment Handler ------------------
-  // ------------------ Payment Handler ------------------
   const handleAddPayment = async (queueItem: QueueItem, paymentData: any) => {
     const toastId = toast.loading('Processing payment...');
+    // GLOBAL TOAST GUARD
+    const timeoutId = setTimeout(() => {
+      toast.dismiss(toastId);
+      console.warn('TOAST GUARD: Forced payment toast dismissal after 4 seconds');
+    }, 4000);
 
     try {
-      const patientData = await getPatientDataForQueueItem(queueItem);
+      const patientData = getPatientDataForQueueItem(queueItem);
       if (!patientData) {
-        toast.error('Patient data not found', { id: toastId });
+        clearTimeout(timeoutId);
+        toast.dismiss(toastId);
+        toast.error('Patient data not found');
         return;
       }
 
       const newPayment = paymentData.amount || 0;
       const currentPaid = queueItem.amountPaid || 0;
       const totalPaid = currentPaid + newPayment;
-
       const totalDue = (queueItem.fee || 0) + (queueItem.previousPending || 0);
 
       let paymentStatus: 'pending' | 'partial' | 'paid';
@@ -144,20 +145,17 @@ export default function OperatorQueue() {
         paymentStatus = 'pending';
       }
 
-      // 1. Update queue item payment info
-      const updateData = {
+      const updatedQueueItem = {
+        ...queueItem,
         amountPaid: totalPaid,
         paymentStatus,
         discount: paymentData.discount || 0,
         notes: (queueItem.notes || '') + `\nPayment: ${newPayment} (${paymentData.paymentMethod})`
       };
-
-      const updatedQueueItem = { ...queueItem, ...updateData };
       await updateLocal('queue', updatedQueueItem);
 
-      // 2. Create bill
       const newBill = {
-        id: `BILL-${Date.now()}`, // Consistent ID generation
+        id: `BILL-${Date.now()}`,
         billNumber: `BILL-${Date.now()}`,
         patientId: patientData.id,
         patientNumber: patientData.patientNumber,
@@ -174,16 +172,6 @@ export default function OperatorQueue() {
       };
       await updateLocal('bills', newBill);
 
-      // 3. Update patient stats (reduce pending balance)
-      // NOTE: We rely on logic here instead of calling updatePatientWithStats service
-      // Assuming 'pendingBalance' tracks what is OWED. 
-      // If fee was added previously to pendingBalance, we subtract payment.
-      // However, often pendingBalance is authoritative. 
-      // Let's assume pendingBalance = (Previous + Fee) - Paid.
-      // But wait, user system might track "pendingBalance" as persistent debt.
-      // In `handleTreatmentSubmit`, we added `fee` to `pendingBalance`.
-      // So here we should subtract `newPayment` from `pendingBalance`.
-
       const newPending = (patientData.pendingBalance || 0) - newPayment;
       const updatedPatient = {
         ...patientData,
@@ -191,35 +179,46 @@ export default function OperatorQueue() {
       };
       await updateLocal('patients', updatedPatient);
 
-      toast.success(`Payment of $${newPayment.toFixed(2)} processed successfully`, { id: toastId });
+      clearTimeout(timeoutId);
+      toast.dismiss(toastId);
+      toast.success(`Payment of $${newPayment.toFixed(2)} processed successfully`);
       setShowPaymentModal(null);
 
     } catch (error) {
       console.error('Payment error:', error);
-      toast.error('Failed to process payment', { id: toastId });
+      clearTimeout(timeoutId);
+      toast.dismiss(toastId);
+      toast.error('Failed to process payment');
+      
+      // Show alert for database errors
+      if (typeof window !== 'undefined' && error instanceof Error) {
+        window.alert(`Database Error: ${error.message}`);
+      }
     }
   };
 
-
-  // ------------------ Walk-in & Edit Patient Handler ------------------
   const handleWalkInPatient = async (patientData: any) => {
     const toastId = toast.loading('Adding to queue...');
+    // GLOBAL TOAST GUARD
+    const timeoutId = setTimeout(() => {
+      toast.dismiss(toastId);
+      console.warn('TOAST GUARD: Forced walk-in toast dismissal after 4 seconds');
+    }, 4000);
+    
     try {
       const patientId = patientData.id;
       const isEditing = patientData.isEditing;
 
       if (isEditing) {
-        toast.success(`Patient ${patientData.name} updated`, { id: toastId });
+        clearTimeout(timeoutId);
+        toast.dismiss(toastId);
+        toast.success(`Patient ${patientData.name} updated`);
         setShowPatientModal(false);
         return;
       }
 
-      // Calculate next token from contextQueue
-      // Filter for TODAY's queue items only globally (or use derived queueData if dateRange is today)
-      // Usually token is per day.
       const today = new Date();
       const todayString = today.toDateString();
-
       const todayQueueItems = contextQueue.filter(item => {
         const d = parseISO(item.checkInTime);
         return d.toDateString() === todayString;
@@ -248,24 +247,28 @@ export default function OperatorQueue() {
         previousPending: patientData.pendingBalance || 0
       } as QueueItem;
 
-      // Local-first update
       await updateLocal('queue', queueItemData);
 
-      toast.success(`Patient added to queue (Token #${nextToken})`, { id: toastId });
+      clearTimeout(timeoutId);
+      toast.dismiss(toastId);
+      toast.success(`Patient added to queue (Token #${nextToken})`);
       setShowPatientModal(false);
     } catch (error) {
       console.error('Walk-in error:', error);
-      toast.error('Failed to add to queue', { id: toastId });
+      clearTimeout(timeoutId);
+      toast.dismiss(toastId);
+      toast.error('Failed to add to queue');
+      
+      // Show alert for database errors
+      if (typeof window !== 'undefined' && error instanceof Error) {
+        window.alert(`Database Error: ${error.message}`);
+      }
     }
   };
 
-  // ------------------ Save New Patient (non-walk-in) ------------------
   const handleSavePatient = (patientData: any) => {
-    // Note: PatientFormModal now handles updateLocal and smartSync internally
-    // This handler is now minimal or non-blocking
+    // PatientFormModal handles updateLocal internally
   };
-
-  // ------------------ Queue Actions ------------------
 
   const speakAnnouncement = (tokenNumber: number | string) => {
     if (!('speechSynthesis' in window)) return;
@@ -274,8 +277,6 @@ export default function OperatorQueue() {
 
     const speak = () => {
       const voices = synth.getVoices();
-
-      // 🔥 STRONG female voice detection
       const femaleVoice =
         voices.find(v => v.name === 'Google UK English Female') ||
         voices.find(v => v.name.toLowerCase().includes('female')) ||
@@ -284,21 +285,18 @@ export default function OperatorQueue() {
         voices.find(v => v.lang === 'en-GB') ||
         voices.find(v => v.lang === 'en-US');
 
-      const text =
-        `Token number ${tokenNumber}. please proceed to the treatment room.`;
-
+      const text = `Token number ${tokenNumber}. please proceed to the treatment room.`;
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.voice = femaleVoice || null;
-      utterance.lang = 'en-GB';   // smoother female tone
+      utterance.lang = 'en-GB';
       utterance.rate = 0.9;
-      utterance.pitch = 1.15;     // female feel
-      utterance.volume = 1;       // 🔊 FULL
+      utterance.pitch = 1.15;
+      utterance.volume = 1;
 
       synth.cancel();
       synth.speak(utterance);
     };
 
-    // 🔧 Chrome voice-load fix
     if (synth.getVoices().length === 0) {
       synth.onvoiceschanged = speak;
     } else {
@@ -306,152 +304,107 @@ export default function OperatorQueue() {
     }
   };
 
-
   const handleQueueAction = async (item: QueueItem, action: string) => {
     const toastId = toast.loading('Updating queue...');
+    // GLOBAL TOAST GUARD: Force dismiss after 4 seconds
+    const timeoutId = setTimeout(() => {
+      toast.dismiss(toastId);
+      console.warn('TOAST GUARD: Forced queue action toast dismissal after 4 seconds');
+    }, 4000);
+    
     try {
-      const now = new Date().toISOString();
-      let updateData = {};
+        const now = new Date().toISOString();
+        let updateData: Partial<QueueItem> = {};
 
-      if (action === 'start-treatment') {
-        updateData = {
-          status: 'in_treatment' as const,
-          treatmentStartTime: now
-        };
-        speakAnnouncement(item.tokenNumber);
-      } else if (action === 'complete') {
-        const patientData = await getPatientDataForQueueItem(item);
-        if (patientData) {
-          setSelectedPatientData(patientData);
-          setSelectedQueueItemForTreatment(item);
-          setShowTreatmentModal(true);
-          toast.dismiss(toastId);
-          return; // Exit here, handled by modal
+        if (action === 'start-treatment') {
+            updateData = {
+                status: 'in_treatment' as const,
+                treatmentStartTime: now
+            };
+            speakAnnouncement(item.tokenNumber);
+        } else if (action === 'complete') {
+            const patientData = getPatientDataForQueueItem(item);
+            if (patientData) {
+                clearTimeout(timeoutId);
+                toast.dismiss(toastId);
+                setSelectedPatientData(patientData);
+                setSelectedQueueItemForTreatment(item);
+                setShowTreatmentModal(true);
+                return;
+            }
+        } else if (action === 'back-to-waiting') {
+            updateData = {
+                status: 'waiting' as const,
+                treatmentStartTime: null,
+                treatment: '',
+                fee: 0,
+                doctor: ''
+            };
+        } else if (action === 'back-to-treatment') {
+            updateData = {
+                status: 'in_treatment' as const,
+                treatmentEndTime: null
+            };
+        } else if (action === 'cancel') {
+            const reason = prompt('Cancellation reason:') || 'Patient request';
+            updateData = {
+                status: 'cancelled' as const,
+                cancelledAt: now,
+                notes: `${item.notes || ''}\nCancelled: ${reason}`
+            };
+        } else if (action === 'edit') {
+            const patient = patients.find(pt => pt.patientNumber === item.patientNumber);
+            if (patient) {
+                clearTimeout(timeoutId);
+                toast.dismiss(toastId);
+                setSelectedPatient(patient);
+                setModalMode('walk-in');
+                setShowPatientModal(true);
+            } else {
+                clearTimeout(timeoutId);
+                toast.dismiss(toastId);
+                toast.error('Patient record not found');
+            }
+            return;
+        } else if (action === 'delete') {
+            if (confirm(`Remove ${item.patientName} from queue?`)) {
+                await deleteLocal('queue', item.id);
+                clearTimeout(timeoutId);
+                toast.dismiss(toastId);
+                toast.success(`Removed ${item.patientName} from queue`);
+            } else {
+                clearTimeout(timeoutId);
+                toast.dismiss(toastId);
+            }
+            return;
         }
-      } else if (action === 'back-to-waiting') {
-        updateData = {
-          status: 'waiting' as const,
-          treatmentStartTime: null,
-          treatment: '',
-          fee: 0,
-          doctor: ''
-        };
-      } else if (action === 'back-to-treatment') {
-        updateData = {
-          status: 'in_treatment' as const,
-          treatmentEndTime: null
-        };
-      } else if (action === 'cancel') {
-        const reason = prompt('Cancellation reason:') || 'Patient request';
-        updateData = {
-          status: 'cancelled' as const,
-          cancelledAt: now,
-          notes: `${item.notes || ''}\nCancelled: ${reason}`
-        };
-      } else if (action === 'edit') {
-        const patient = patients.find(pt => pt.patientNumber === item.patientNumber);
-        if (patient) {
-          setSelectedPatient(patient);
-          setModalMode('walk-in');
-          setShowPatientModal(true);
-        } else {
-          toast.error('Patient record not found');
-        }
-        toast.dismiss(toastId);
-        return;
-      } else if (action === 'delete') {
-        if (confirm(`Remove ${item.patientName} from queue?`)) {
-          await deleteLocal('queue', item.id);
-          toast.success(`Removed ${item.patientName} from queue`, { id: toastId });
-        } else {
-          toast.dismiss(toastId);
-        }
-        return;
-      }
 
-      if (Object.keys(updateData).length > 0) {
-        const updatedItem = { ...item, ...updateData };
-        await updateLocal('queue', updatedItem);
-        toast.success('Queue updated', { id: toastId });
-      }
+        if (Object.keys(updateData).length > 0) {
+            // FIX: Use optimistic update function for immediate UI feedback
+            // IMPORTANT: Don't await - let it run in background
+            updateQueueItemOptimistic(item.id, updateData);
+            
+            // CRITICAL: Dismiss toast IMMEDIATELY after state update
+            clearTimeout(timeoutId);
+            toast.dismiss(toastId);
+            
+            // Show success toast immediately
+            toast.success('Queue updated successfully!', { duration: 2000 });
+        }
 
     } catch (error) {
-      console.error('Queue action error:', error);
-      toast.error('Failed to update queue', { id: toastId });
+        console.error('Queue action error:', error);
+        clearTimeout(timeoutId);
+        toast.dismiss(toastId);
+        toast.error('Failed to update queue');
+        
+        // Show alert for database errors
+        if (typeof window !== 'undefined' && error instanceof Error) {
+            window.alert(`Database Error: ${error.message}`);
+        }
     }
   };
 
-
-
-  // const handleQueueAction = async (item: QueueItem, action: string) => {
-  //   const toastId = toast.loading('Updating queue...');
-  //   try {
-  //     const now = new Date().toISOString();
-
-  //     if (action === 'start-treatment') {
-  //       const updateData = { status: 'in_treatment' as const, treatmentStartTime: now };
-  //       await updateQueueItem(item.id, updateData);
-  //       setQueueData(prev => prev.map(p => p.id === item.id ? { ...p, ...updateData } : p));
-  //       toast.success(`${item.patientName} moved to treatment`, { id: toastId });
-  //     } else if (action === 'complete') {
-  //       const patientData = await getPatientDataForQueueItem(item);
-  //       if (patientData) {
-  //         setSelectedPatientData(patientData);
-  //         setSelectedQueueItemForTreatment(item);
-  //         setShowTreatmentModal(true);
-  //       } else {
-  //         toast.error('Could not load patient data', { id: toastId });
-  //       }
-  //     } else if (action === 'back-to-waiting') {
-  //       const updateData = {
-  //         status: 'waiting' as const,
-  //         treatmentStartTime: null,
-  //         treatment: '',
-  //         fee: 0,
-  //         doctor: ''
-  //       };
-  //       await updateQueueItem(item.id, updateData);
-  //       setQueueData(prev => prev.map(p => p.id === item.id ? { ...p, ...updateData } : p));
-  //       toast.info(`${item.patientName} moved back to waiting`, { id: toastId });
-  //     } else if (action === 'back-to-treatment') {
-  //       const updateData = { status: 'in_treatment' as const, treatmentEndTime: null };
-  //       await updateQueueItem(item.id, updateData);
-  //       setQueueData(prev => prev.map(p => p.id === item.id ? { ...p, ...updateData } : p));
-  //       toast.info(`${item.patientName} moved back to treatment`, { id: toastId });
-  //     } else if (action === 'cancel') {
-  //       const reason = prompt('Cancellation reason:') || 'Patient request';
-  //       await updateQueueItem(item.id, {
-  //         status: 'cancelled' as const,
-  //         cancelledAt: now,
-  //         notes: `${item.notes || ''}\nCancelled: ${reason}`
-  //       });
-  //       setQueueData(prev => prev.map(p =>
-  //         p.id === item.id ? { ...p, status: 'cancelled', cancelledAt: now, notes: `${p.notes || ''}\nCancelled: ${reason}` } : p
-  //       ));
-  //       toast.info(`Cancelled treatment for ${item.patientName}`, { id: toastId });
-  //     } else if (action === 'edit') {
-  //       const patient = patients.find(pt => pt.patientNumber === item.patientNumber);
-  //       if (patient) {
-  //         setSelectedPatient(patient);
-  //         setModalMode('walk-in');
-  //         setShowPatientModal(true);
-  //       } else {
-  //         toast.error("Patient record not found", { id: toastId });
-  //       }
-  //     } else if (action === 'delete') {
-  //       if (confirm(`Remove ${item.patientName} from queue?`)) {
-  //         await deleteQueueItem(item.id);
-  //         setQueueData(prev => prev.filter(q => q.id !== item.id));
-  //         toast.success(`Removed ${item.patientName} from queue`, { id: toastId });
-  //       }
-  //     }
-  //   } catch (error) {
-  //     console.error('Queue action error:', error);
-  //     toast.error('Failed to update queue', { id: toastId });
-  //   }
-  // };
-
-  // Date handlers
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setDateRange(prev => ({ ...prev, [name]: value }));
@@ -469,77 +422,84 @@ export default function OperatorQueue() {
     setDateRange({ startDate: dateStr, endDate: dateStr });
   };
 
-  // OperatorQueue.tsx - handleTreatmentSubmit function ko update karein
   const handleTreatmentSubmit = async (data: {
     treatment: string;
     fee: number;
     doctor: string;
-  }) => {
+}) => {
     if (!selectedQueueItemForTreatment || !selectedPatientData) return;
 
     const toastId = toast.loading('Completing treatment...');
+    // GLOBAL TOAST GUARD
+    const timeoutId = setTimeout(() => {
+        toast.dismiss(toastId);
+        console.warn('TOAST GUARD: Forced treatment toast dismissal after 4 seconds');
+    }, 4000);
 
     try {
-      const now = new Date().toISOString();
+        const now = new Date().toISOString();
 
-      const updateData = {
-        status: 'completed' as const,
-        treatmentEndTime: now,
-        treatment: data.treatment,
-        fee: data.fee,
-        doctor: data.doctor
-      };
+        const updateData = {
+            status: 'completed' as const,
+            treatmentEndTime: now,
+            treatment: data.treatment,
+            fee: data.fee,
+            doctor: data.doctor
+        };
 
-      // 1. Update queue item
-      const updatedItem = {
-        ...selectedQueueItemForTreatment,
-        ...updateData
-      };
-      await updateLocal('queue', updatedItem);
+        // FIX: Use optimistic update for immediate UI feedback
+        // Don't await - just trigger it
+        updateQueueItemOptimistic(selectedQueueItemForTreatment.id, updateData);
 
-      // 2. Update patient basic stats
-      const newPendingBalance = (selectedPatientData.pendingBalance || 0) + data.fee;
-      const newTotalVisits = (selectedPatientData.totalVisits || 0) + 1;
+        const newPendingBalance = (selectedPatientData.pendingBalance || 0) + data.fee;
+        const newTotalVisits = (selectedPatientData.totalVisits || 0) + 1;
 
-      const updatedPatient = {
-        ...selectedPatientData,
-        pendingBalance: newPendingBalance,
-        totalVisits: newTotalVisits,
-        lastVisit: now
-      };
-      await updateLocal('patients', updatedPatient);
+        const updatedPatient = {
+            ...selectedPatientData,
+            pendingBalance: newPendingBalance,
+            totalVisits: newTotalVisits,
+            lastVisit: now
+        };
+        
+        // Update patient data - also don't await
+        updateLocal('patients', updatedPatient);
 
-      toast.success(`Treatment completed for ${updatedItem.patientName}`, { id: toastId });
+        // Dismiss toast immediately
+        clearTimeout(timeoutId);
+        toast.dismiss(toastId);
+        toast.success(`Treatment completed for ${selectedQueueItemForTreatment.patientName}`);
 
-      // 3. Delay before opening payment modal
-      setTimeout(async () => {
-        // Fetch patient again from context or use updatedPatient
-        // We use updatedPatient directly since it's the latest
-        const patientBills = contextBills.filter(b => b.patientId === updatedPatient.id);
+        // Trigger payment modal for receipt generation
+        setTimeout(() => {
+            const patientBills = contextBills.filter(b => b.patientId === updatedPatient.id);
+            setShowPaymentModal({
+                queueItem: { ...selectedQueueItemForTreatment, ...updateData },
+                patientData: updatedPatient,
+                patientBills
+            });
+        }, 800);
 
-        setShowPaymentModal({
-          queueItem: updatedItem,
-          patientData: updatedPatient,
-          patientBills
-        });
-      }, 800);
-
-      // 4. Close treatment modal
-      setShowTreatmentModal(false);
-      setSelectedQueueItemForTreatment(null);
-      setSelectedPatientData(null);
+        setShowTreatmentModal(false);
+        setSelectedQueueItemForTreatment(null);
+        setSelectedPatientData(null);
 
     } catch (error) {
-      console.error('Error completing treatment:', error);
-      toast.error('Failed to complete treatment', { id: toastId });
+        console.error('Error completing treatment:', error);
+        clearTimeout(timeoutId);
+        toast.dismiss(toastId);
+        toast.error('Failed to complete treatment');
+        
+        // Show alert for database errors
+        if (typeof window !== 'undefined' && error instanceof Error) {
+            window.alert(`Database Error: ${error.message}`);
+        }
     }
-  };
-
+};
 
   const handleOpenTreatmentModal = async (item: QueueItem) => {
     try {
       setSelectedQueueItemForTreatment(item);
-      const patientData = await getPatientDataForQueueItem(item);
+      const patientData = getPatientDataForQueueItem(item);
       if (patientData) {
         setSelectedPatientData(patientData);
         setShowTreatmentModal(true);
@@ -554,7 +514,7 @@ export default function OperatorQueue() {
 
   const handleOpenPatientDetails = async (item: QueueItem) => {
     try {
-      const patientData = await getPatientDataForQueueItem(item);
+      const patientData = getPatientDataForQueueItem(item);
       if (patientData) {
         setSelectedPatientData(patientData);
         setShowPatientDetails(item);
@@ -569,7 +529,6 @@ export default function OperatorQueue() {
 
   return (
     <div className="space-y-6 p-4">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Queue Management</h1>
@@ -593,7 +552,6 @@ export default function OperatorQueue() {
         </div>
       </div>
 
-      {/* Date Range Filter */}
       <div className="bg-white border rounded-lg p-4">
         <div className="flex items-center gap-2 mb-3">
           <Calendar className="w-5 h-5 text-gray-600" />
@@ -638,7 +596,6 @@ export default function OperatorQueue() {
         </div>
       </div>
 
-      {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
           <div className="flex items-center justify-between">
@@ -669,7 +626,6 @@ export default function OperatorQueue() {
         </div>
       </div>
 
-      {/* Search & Filters */}
       <div className="space-y-4">
         <div className="flex gap-3">
           <div className="relative flex-1">
@@ -703,7 +659,6 @@ export default function OperatorQueue() {
         </div>
       </div>
 
-      {/* Queue Sections */}
       {loading.queue ? (
         <div className="flex justify-center items-center h-64">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
@@ -743,7 +698,6 @@ export default function OperatorQueue() {
         </div>
       )}
 
-      {/* Modals */}
       <PatientFormModal
         open={showPatientModal}
         onClose={() => setShowPatientModal(false)}
@@ -810,8 +764,7 @@ export default function OperatorQueue() {
           onDelete={async () => {
             if (confirm(`Remove ${showPatientDetails.patientName} from queue?`)) {
               try {
-                await deleteQueueItem(showPatientDetails.id);
-                setQueueData(prev => prev.filter(q => q.id !== showPatientDetails.id));
+                await deleteLocal('queue', showPatientDetails.id);
                 toast.success(`Removed ${showPatientDetails.patientName} from queue`);
                 setShowPatientDetails(null);
                 setSelectedPatientData(null);

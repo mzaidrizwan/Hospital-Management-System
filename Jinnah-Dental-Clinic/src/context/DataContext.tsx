@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useMemo, useRef } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, query } from 'firebase/firestore';
+import { collection, onSnapshot, query, setDoc, doc } from 'firebase/firestore';
 import { getFromLocal, saveToLocal, openDB, getAllStores, saveMultipleToLocal, deleteFromLocal } from '@/services/indexedDbUtils';
 import { processSyncQueue, smartSync } from '@/services/syncService';
 import { useConnectionStatus } from '@/hooks/useConnectionStatus';
@@ -40,9 +40,12 @@ interface DataContextType {
     isOnline: boolean;
     licenseStatus: 'valid' | 'expired' | 'missing' | 'checking';
     licenseDaysLeft: number;
-    updateLocal: (collectionName: string, data: any) => Promise<void>;
-    deleteLocal: (collectionName: string, id: string) => Promise<void>;
+    updateLocal: (collectionName: string, data: any) => Promise<any>;
+    deleteLocal: (collectionName: string, id: string) => Promise<boolean>;
+    addItem: (collectionName: string, item: any) => Promise<any>;
     refreshCollection: (collectionName: string) => Promise<void>;
+    exportToCSV: (data: any[], filename: string) => void;
+    importFromCSV: (file: File, collectionName: string) => Promise<void>;
     setPatients: React.Dispatch<React.SetStateAction<Patient[]>>;
     setQueue: React.Dispatch<React.SetStateAction<QueueItem[]>>;
     setAppointments: React.Dispatch<React.SetStateAction<Appointment[]>>;
@@ -52,11 +55,12 @@ interface DataContextType {
     setExpenses: React.Dispatch<React.SetStateAction<Expense[]>>;
     setBills: React.Dispatch<React.SetStateAction<Bill[]>>;
     setTreatments: React.Dispatch<React.SetStateAction<Treatment[]>>;
+    // NEW: Optimistic update function for queue
+    updateQueueItemOptimistic: (itemId: string, updates: Partial<QueueItem>) => Promise<QueueItem>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
 
-// All collections that should be managed by DataContext
 const COLLECTIONS = [
     'patients',
     'queue',
@@ -68,7 +72,7 @@ const COLLECTIONS = [
     'sales',
     'expenses',
     'bills',
-    'treatments', // Added treatments to collections
+    'treatments',
     'clinicSettings',
     'users'
 ];
@@ -76,7 +80,6 @@ const COLLECTIONS = [
 export function DataProvider({ children }: { children: ReactNode }) {
     const isOnline = useConnectionStatus();
 
-    // State for all collections
     const [patients, setPatients] = useState<Patient[]>([]);
     const [queue, setQueue] = useState<QueueItem[]>([]);
     const [appointments, setAppointments] = useState<Appointment[]>([]);
@@ -87,48 +90,45 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const [sales, setSales] = useState<any[]>([]);
     const [expenses, setExpenses] = useState<Expense[]>([]);
     const [bills, setBills] = useState<Bill[]>([]);
-    const [treatments, setTreatments] = useState<Treatment[]>([]); // Added treatments state
+    const [treatments, setTreatments] = useState<Treatment[]>([]);
     const [clinicSettings, setClinicSettings] = useState<any>(null);
     const [licenseStatus, setLicenseStatus] = useState<'valid' | 'expired' | 'missing' | 'checking'>('checking');
     const [licenseDaysLeft, setLicenseDaysLeft] = useState(0);
 
     const [loading, setLoading] = useState(true);
-    const [listenersInitialized, setListenersInitialized] = useState(false);
     const [initialLoadComplete, setInitialLoadComplete] = useState(false);
 
-    // Refs to track if data has actually changed
     const dataChangedRef = useRef<Record<string, boolean>>({});
     const initialLoadDone = useRef(false);
-    const isSyncingRef = useRef(false); // FIX: Add syncing ref to prevent infinite loops
-    const stateSettersRef = useRef<any>({}); // FIX: Ref for all state setters
-    const listenersRef = useRef<(() => void)[]>([]); // FIX: Ref to hold listener unsubscribe functions
+    const isSyncingRef = useRef(false);
+    const stateSettersRef = useRef<any>({});
+    const listenersRef = useRef<(() => void)[]>([]);
 
-    // Initialize state setters ref once
+    const stateSetterMap = useMemo(() => ({
+        patients: setPatients,
+        queue: setQueue,
+        appointments: setAppointments,
+        staff: setStaff,
+        salaryPayments: setSalaryPayments,
+        attendance: setAttendance,
+        inventory: setInventory,
+        sales: setSales,
+        expenses: setExpenses,
+        bills: setBills,
+        treatments: setTreatments,
+        clinicSettings: setClinicSettings,
+    }), []);
+
     useEffect(() => {
-        stateSettersRef.current = {
-            patients: setPatients,
-            queue: setQueue,
-            appointments: setAppointments,
-            staff: setStaff,
-            salaryPayments: setSalaryPayments,
-            attendance: setAttendance,
-            inventory: setInventory,
-            sales: setSales,
-            expenses: setExpenses,
-            bills: setBills,
-            treatments: setTreatments,
-            clinicSettings: setClinicSettings,
-        };
-    }, []); // Empty dependency - run once
+        stateSettersRef.current = stateSetterMap;
+    }, [stateSetterMap]);
 
-    // Initialize database and load all data from IndexedDB
     const initializeData = async () => {
         if (initialLoadDone.current) return;
 
         try {
             await openDB();
 
-            // Load ALL collections from IndexedDB in parallel
             const results = await Promise.all(COLLECTIONS.map(async (collectionName) => {
                 try {
                     const data = await getFromLocal(collectionName);
@@ -139,27 +139,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }
             }));
 
-            // Update React state with data from IndexedDB
             results.forEach(({ collectionName, data }) => {
                 if (data === null || data === undefined) return;
 
-                const setter = stateSettersRef.current[collectionName];
+                const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
                 if (!setter) return;
 
                 if (collectionName === 'clinicSettings') {
                     if (Array.isArray(data) && data.length > 0) {
-                        setter(data[0]); // Take first item for settings
+                        setter(data[0]);
                     } else if (!Array.isArray(data) && data) {
-                        setter(data); // Already an object
+                        setter(data);
                     }
                 } else {
                     setter(Array.isArray(data) ? data : []);
                 }
             });
 
-            // --------------------------------------------------------
-            // License Validation Check
-            // --------------------------------------------------------
             try {
                 const licenseData = await getFromLocal('settings', 'clinic_license');
                 const settingsData = await getFromLocal('clinicSettings', 'clinic-settings');
@@ -198,30 +194,319 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
     };
 
-    // Helper to update state only if changed
-    const updateStateIfChanged = useCallback((setter: React.Dispatch<React.SetStateAction<any>>, newData: any) => {
-        setter((prev: any) => {
-            if (JSON.stringify(prev) === JSON.stringify(newData)) {
-                return prev;
+    /**
+     * Non-blocking Firebase sync that runs in background
+     */
+    const backgroundFirebaseSync = useCallback((collectionName: string, data: any) => {
+        // Run Firebase sync in background - DO NOT AWAIT
+        setTimeout(async () => {
+            try {
+                if (isOnline) {
+                    console.log(`[Background Sync] Syncing ${collectionName} to Firebase:`, data.id);
+                    await smartSync(collectionName, data);
+                    console.log(`[Background Sync] Successfully synced ${collectionName}:`, data.id);
+                }
+            } catch (syncError) {
+                console.error(`[Background Sync] Failed for ${collectionName}:`, syncError);
+                // Don't show alert for background sync failures
             }
-            return newData;
-        });
-    }, []);
+        }, 0);
+    }, [isOnline]);
 
     /**
-     * Handle Firebase snapshot updates - COMPLETELY ISOLATED
+     * Update local data (State + IndexedDB) - FIRE AND FORGET version
      */
-    const handleFirebaseUpdate = useCallback(async (collectionName: string, remoteData: any[]) => {
-        // FIX: Prevent infinite loop by checking syncing ref
-        if (isSyncingRef.current) return;
+    const updateLocal = useCallback(async (collectionName: string, data: any): Promise<any> => {
+        try {
+            // 1. Add timestamps and sync markers
+            const enrichedData = {
+                ...data,
+                createdAt: data.createdAt || new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                needsSync: true,
+                lastUpdated: Date.now()
+            };
+
+            console.log(`[updateLocal] Saving to ${collectionName}:`, enrichedData.id);
+
+            // 2. CRITICAL: Update React State immediately for instant UI feedback
+            const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
+            if (setter) {
+                if (collectionName === 'clinicSettings') {
+                    setter(enrichedData);
+                } else {
+                    setter((prev: any[]) => {
+                        const index = prev.findIndex((item: any) => item.id === enrichedData.id);
+                        if (index !== -1) {
+                            const next = [...prev];
+                            next[index] = enrichedData;
+                            return next;
+                        } else {
+                            return [enrichedData, ...prev];
+                        }
+                    });
+                }
+                console.log(`[updateLocal] Updated React state for ${collectionName}`);
+            }
+
+            // 3. Save to IndexedDB in background (fire and forget)
+            // Use setTimeout to not block the main thread
+            setTimeout(async () => {
+                try {
+                    await saveToLocal(collectionName, enrichedData);
+                    console.log(`[updateLocal] Saved to IndexedDB:`, enrichedData.id);
+                    
+                    // 4. Trigger Background Firebase Sync (NON-BLOCKING)
+                    backgroundFirebaseSync(collectionName, enrichedData);
+                } catch (dbError) {
+                    console.error(`[updateLocal] IndexedDB error for ${collectionName}:`, dbError);
+                    // Show browser alert for database failures
+                    if (typeof window !== 'undefined') {
+                        window.alert(`Database Error: Failed to save to ${collectionName}. Please check console.`);
+                    }
+                }
+            }, 0);
+
+            // 5. Return the saved data immediately (don't wait for IndexedDB/Firebase)
+            return enrichedData;
+
+        } catch (error) {
+            console.error(`[updateLocal] FATAL ERROR in updateLocal for ${collectionName}:`, error);
+            
+            // Show browser alert for database failures
+            if (typeof window !== 'undefined') {
+                window.alert(`Database Error: Failed to save to ${collectionName}. Please check console for details.`);
+            }
+            
+            throw error;
+        }
+    }, [stateSetterMap, backgroundFirebaseSync]);
+
+    /**
+     * NEW: Optimistic update for queue items - FIRE AND FORGET version
+     */
+    const updateQueueItemOptimistic = useCallback(async (itemId: string, updates: Partial<QueueItem>): Promise<QueueItem> => {
+        console.log(`[updateQueueItemOptimistic] Starting optimistic update for item: ${itemId}`, updates);
         
+        // 1. Find the current item in state
+        const currentItem = queue.find(item => item.id === itemId);
+        if (!currentItem) {
+            throw new Error(`Queue item ${itemId} not found`);
+        }
+
+        // 2. Create the updated item with timestamps
+        const updatedItem: QueueItem = {
+            ...currentItem,
+            ...updates,
+            updatedAt: new Date().toISOString(),
+            lastUpdated: Date.now(),
+            needsSync: true
+        };
+
+        // 3. OPTIMISTIC UPDATE: Update React state IMMEDIATELY (SYNCHRONOUS)
+        console.log(`[updateQueueItemOptimistic] Updating React state optimistically`);
+        setQueue(prevQueue => {
+            const index = prevQueue.findIndex(item => item.id === itemId);
+            if (index !== -1) {
+                const newQueue = [...prevQueue];
+                newQueue[index] = updatedItem;
+                return newQueue;
+            }
+            return prevQueue;
+        });
+
+        // 4. Save to IndexedDB in background (fire and forget)
+        setTimeout(async () => {
+            try {
+                await saveToLocal('queue', updatedItem);
+                console.log(`[updateQueueItemOptimistic] Saved to IndexedDB: ${itemId}`);
+                // 5. Trigger Firebase sync in background (NON-BLOCKING)
+                backgroundFirebaseSync('queue', updatedItem);
+            } catch (error) {
+                console.error(`[updateQueueItemOptimistic] Failed to save to IndexedDB:`, error);
+            }
+        }, 0);
+
+        // 6. Return the updated item immediately (CRITICAL FOR TOAST DISMISSAL)
+        console.log(`[updateQueueItemOptimistic] Returning updated item immediately`);
+        return updatedItem;
+    }, [queue, backgroundFirebaseSync]);
+
+    /**
+     * Delete local data (State + IndexedDB) - FIRE AND FORGET version
+     */
+    const deleteLocal = useCallback(async (collectionName: string, id: string): Promise<boolean> => {
+        try {
+            // 1. Update React State immediately
+            const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
+            if (setter) {
+                setter((prev: any[]) => prev.filter((item: any) => (item.id || item.role) !== id));
+            }
+
+            // 2. Delete from IndexedDB in background (fire and forget)
+            setTimeout(async () => {
+                try {
+                    await deleteFromLocal(collectionName, id);
+                    console.log(`[deleteLocal] Deleted from IndexedDB: ${id}`);
+                    
+                    // 3. Background sync for deletion
+                    backgroundFirebaseSync(collectionName, { id, _deleted: true });
+                } catch (error) {
+                    console.error(`[deleteLocal] Failed to delete from IndexedDB:`, error);
+                }
+            }, 0);
+
+            return true;
+
+        } catch (error) {
+            console.error(`Error deleting from ${collectionName}:`, error);
+            if (typeof window !== 'undefined') {
+                window.alert(`Database Error: Failed to delete from ${collectionName}. Please check console.`);
+            }
+            throw error;
+        }
+    }, [stateSetterMap, backgroundFirebaseSync]);
+
+    /**
+     * Add item - FIRE AND FORGET version (main fix for sticky toast)
+     */
+    const addItem = useCallback(async (collectionName: string, item: any): Promise<any> => {
+        try {
+            console.log(`[addItem] Starting for ${collectionName}:`, item.id || 'new-item');
+            
+            // Ensure item has ID
+            const itemWithId = {
+                ...item,
+                id: item.id || `${collectionName.slice(0, 3).toUpperCase()}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`
+            };
+
+            // Call updateLocal (which is now fire and forget)
+            const result = await updateLocal(collectionName, itemWithId);
+            
+            console.log(`[addItem] Completed successfully for ${collectionName}:`, result.id);
+            return result;
+            
+        } catch (error) {
+            console.error(`[addItem] CRITICAL ERROR for ${collectionName}:`, error);
+            console.error(`[addItem] Error details:`, {
+                collectionName,
+                item,
+                errorMessage: error.message,
+                errorStack: error.stack
+            });
+            
+            // Show browser alert for database failures
+            if (typeof window !== 'undefined') {
+                window.alert(`Database Error: Failed to add item to ${collectionName}. Please check console.`);
+            }
+            
+            throw error;
+        }
+    }, [updateLocal]);
+
+    const refreshCollection = useCallback(async (collectionName: string) => {
+        try {
+            const data = await getFromLocal(collectionName);
+            const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
+            if (setter) {
+                if (collectionName === 'clinicSettings') {
+                    setter(Array.isArray(data) ? data[0] : data);
+                } else {
+                    setter(Array.isArray(data) ? data : []);
+                }
+            }
+        } catch (error) {
+            console.error(`Error refreshing ${collectionName}:`, error);
+        }
+    }, [stateSetterMap]);
+
+    const exportToCSV = useCallback((data: any[], filename: string) => {
+        if (!data || data.length === 0) {
+            toast.error('No data to export');
+            return;
+        }
+
+        try {
+            const headers = Object.keys(data[0]).join(",");
+            const rows = data.map(obj => Object.values(obj).map(v =>
+                typeof v === 'string' && v.includes(',') ? `"${v}"` : v
+            ).join(","));
+
+            const csvContent = [headers, ...rows].join("\n");
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+        } catch (error) {
+            console.error("Export to CSV failed:", error);
+            toast.error("Failed to export CSV");
+        }
+    }, []);
+
+    const importFromCSV = useCallback(async (file: File, collectionName: string) => {
+        return new Promise<void>((resolve, reject) => {
+            const reader = new FileReader();
+
+            reader.onload = async (e) => {
+                try {
+                    const text = e.target?.result as string;
+                    if (!text) return;
+
+                    const lines = text.split('\n').filter(line => line.trim() !== '');
+                    if (lines.length < 2) return;
+
+                    const headers = lines[0].split(',').map(h => h.trim());
+
+                    const promises = [];
+                    for (let i = 1; i < lines.length; i++) {
+                        const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+
+                        if (values.length === headers.length) {
+                            const obj: any = {};
+                            headers.forEach((header, index) => {
+                                let val: any = values[index];
+                                if (!isNaN(Number(val)) && val !== '') {
+                                    val = Number(val);
+                                }
+                                obj[header] = val;
+                            });
+
+                            if (!obj.id) {
+                                obj.id = `${collectionName.slice(0, 3).toUpperCase()}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+                            }
+
+                            promises.push(addItem(collectionName, obj));
+                        }
+                    }
+
+                    await Promise.all(promises);
+                    resolve();
+                } catch (error) {
+                    console.error("Import from CSV failed:", error);
+                    reject(error);
+                }
+            };
+
+            reader.onerror = () => reject(new Error("Failed to read file"));
+            reader.readAsText(file);
+        });
+    }, [addItem]);
+
+    const handleFirebaseUpdate = useCallback(async (collectionName: string, remoteData: any[]) => {
+        if (isSyncingRef.current) return;
+
         try {
             if (remoteData.length === 0) return;
 
-            // Get current local data for comparison
             const localData = (await getFromLocal(collectionName) || []) as any[];
 
-            // For clinicSettings (single object)
             if (collectionName === 'clinicSettings') {
                 const remoteSettings = remoteData[0];
                 const localSettings = Array.isArray(localData) ? localData[0] : localData;
@@ -232,18 +517,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 const localTimestamp = localSettings?.lastUpdated || localSettings?.updatedAt || 0;
 
                 if (!localSettings || remoteTimestamp > localTimestamp) {
-                    // Set syncing flag
                     isSyncingRef.current = true;
                     await saveToLocal(collectionName, remoteSettings);
-                    // Update state safely
-                    updateStateIfChanged(setClinicSettings, remoteSettings);
-                    // Clear syncing flag after delay
+                    setClinicSettings(remoteSettings);
                     setTimeout(() => { isSyncingRef.current = false; }, 100);
                 }
                 return;
             }
 
-            // For array collections (including treatments)
             const localMap = new Map(localData.map(item => [item.id, item]));
             let hasChanged = false;
             const updatesToSave: any[] = [];
@@ -270,141 +551,51 @@ export function DataProvider({ children }: { children: ReactNode }) {
             }
 
             if (updatesToSave.length > 0) {
-                // Set syncing flag
                 isSyncingRef.current = true;
                 await saveMultipleToLocal(collectionName, updatesToSave);
             }
 
-            // Only update state if data actually changed
             if (hasChanged) {
                 const freshLocalData = await getFromLocal(collectionName);
-                const setter = stateSettersRef.current[collectionName];
+                const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
                 if (setter) {
-                    updateStateIfChanged(setter, Array.isArray(freshLocalData) ? freshLocalData : []);
+                    setter(Array.isArray(freshLocalData) ? freshLocalData : []);
                     dataChangedRef.current[collectionName] = true;
                 }
-                // Clear syncing flag
                 setTimeout(() => { isSyncingRef.current = false; }, 100);
             } else if (updatesToSave.length > 0) {
-                // If we saved but didn't update state, still clear the flag
                 setTimeout(() => { isSyncingRef.current = false; }, 100);
             }
         } catch (error) {
             console.error(`Error handling Firebase update for ${collectionName}:`, error);
-            // Ensure syncing flag is cleared on error
             isSyncingRef.current = false;
         }
-    }, [updateStateIfChanged]); // Only depends on updateStateIfChanged which is stable
+    }, [stateSetterMap]);
 
-    /**
-     * Update local data (State + IndexedDB)
-     */
-    const updateLocal = useCallback(async (collectionName: string, data: any) => {
-        // FIX: Check if already syncing to prevent loops
-        if (isSyncingRef.current) return;
-
-        // 1. Save to IndexedDB immediately
-        isSyncingRef.current = true;
-        await saveToLocal(collectionName, data);
-
-        // 2. Update React State for immediate feedback
-        const setter = stateSettersRef.current[collectionName];
-        if (setter) {
-            if (collectionName === 'clinicSettings') {
-                setter(data);
-            } else {
-                setter((prev: any[]) => {
-                    const index = prev.findIndex((item: any) => item.id === data.id);
-                    if (index !== -1) {
-                        const next = [...prev];
-                        next[index] = data;
-                        return next;
-                    } else {
-                        return [data, ...prev];
-                    }
-                });
-            }
-        }
-
-        // 3. Clear syncing flag
-        setTimeout(() => { isSyncingRef.current = false; }, 100);
-
-        // 4. Trigger Background Sync (Non-blocking)
-        smartSync(collectionName, data).catch(err => {
-            console.error(`Background sync failed for ${collectionName}:`, err);
-        });
-    }, []); // No dependencies - uses ref
-
-    /**
-     * Delete local data (State + IndexedDB)
-     */
-    const deleteLocal = useCallback(async (collectionName: string, id: string) => {
-        // FIX: Check if already syncing to prevent loops
-        if (isSyncingRef.current) return;
-
-        // 1. Delete from IndexedDB immediately
-        isSyncingRef.current = true;
-        await deleteFromLocal(collectionName, id);
-
-        // 2. Update React State for immediate feedback
-        const setter = stateSettersRef.current[collectionName];
-        if (setter) {
-            setter((prev: any[]) => prev.filter((item: any) => (item.id || item.role) !== id));
-        }
-
-        // 3. Clear syncing flag
-        setTimeout(() => { isSyncingRef.current = false; }, 100);
-    }, []); // No dependencies - uses ref
-
-    /**
-     * Refresh a collection from IndexedDB
-     */
-    const refreshCollection = useCallback(async (collectionName: string) => {
-        // FIX: Check if already syncing to prevent loops
-        if (isSyncingRef.current) return;
-
-        isSyncingRef.current = true;
-        const data = await getFromLocal(collectionName);
-        const setter = stateSettersRef.current[collectionName];
-        if (setter) {
-            if (collectionName === 'clinicSettings') {
-                setter(Array.isArray(data) ? data[0] : data);
-            } else {
-                setter(Array.isArray(data) ? data : []);
-            }
-        }
-        setTimeout(() => { isSyncingRef.current = false; }, 100);
-    }, []); // No dependencies - uses ref
-
-    // FIXED: Create a stable reference to handleFirebaseUpdate for listeners
     const handleFirebaseUpdateRef = useRef(handleFirebaseUpdate);
     handleFirebaseUpdateRef.current = handleFirebaseUpdate;
 
-    // Load local data once on mount
     useEffect(() => {
         initializeData();
-    }, []); // Empty dependency array - run once on mount
+    }, []);
 
-    // Process sync queue when online
     useEffect(() => {
         if (isOnline && initialLoadComplete) {
             processSyncQueue().catch(err => console.error('Sync queue error:', err));
         }
     }, [isOnline, initialLoadComplete]);
 
-    // FIXED: SINGLE Firebase listener setup - NO DUPLICATES
     useEffect(() => {
-        // Only setup listeners if online and initial load complete
-        if (!isOnline || !initialLoadComplete || listenersInitialized) {
+        if (!isOnline || !initialLoadComplete) {
+            if (listenersRef.current.length > 0) {
+                listenersRef.current.forEach(unsub => unsub && unsub());
+                listenersRef.current = [];
+            }
             return;
         }
 
-        console.log('Setting up Firebase listeners...');
-        
-        // Clear any existing listeners first
         if (listenersRef.current.length > 0) {
-            listenersRef.current.forEach(unsub => unsub && unsub());
-            listenersRef.current = [];
+            return;
         }
 
         const unsubscribeFunctions: (() => void)[] = [];
@@ -420,8 +611,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             id: doc.id,
                             ...doc.data()
                         }));
-                        
-                        // Use the ref instead of the function directly
+
                         handleFirebaseUpdateRef.current(collectionName, remoteData);
                     },
                     (error) => console.warn(`Firebase listener error for ${collectionName}:`, error)
@@ -432,30 +622,28 @@ export function DataProvider({ children }: { children: ReactNode }) {
             }
         });
 
-        // Store unsubscribe functions in ref
         listenersRef.current = unsubscribeFunctions;
-        setListenersInitialized(true);
 
-        // Cleanup function
         return () => {
-            // Only cleanup if we're the ones who set it up
             if (listenersRef.current.length > 0) {
-                console.log('Cleaning up Firebase listeners...');
                 listenersRef.current.forEach(unsub => unsub && unsub());
                 listenersRef.current = [];
             }
-            setListenersInitialized(false);
         };
-    }, [isOnline, initialLoadComplete]); // FIXED: Removed listenersInitialized from dependencies!
+    }, [isOnline, initialLoadComplete]);
 
     return (
         <DataContext.Provider value={{
             patients, queue, appointments, staff, salaryPayments, attendance,
             inventory, sales, expenses, bills, treatments, clinicSettings,
-            loading, isOnline, updateLocal, deleteLocal, refreshCollection,
+            loading, isOnline,
             licenseStatus, licenseDaysLeft,
+            updateLocal, deleteLocal, addItem, refreshCollection,
+            exportToCSV, importFromCSV,
             setPatients, setQueue, setAppointments, setStaff, setInventory,
-            setSales, setExpenses, setBills, setTreatments
+            setSales, setExpenses, setBills, setTreatments,
+            // NEW: Expose optimistic update function
+            updateQueueItemOptimistic
         }}>
             {children}
         </DataContext.Provider>

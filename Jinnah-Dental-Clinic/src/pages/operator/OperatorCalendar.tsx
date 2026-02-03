@@ -24,19 +24,8 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import ExpenseFormModal from '@/components/modals/ExpenseFormModal';
 
-// Firebase imports
-import { db } from '@/lib/firebase';
-import { 
-  collection, 
-  query, 
-  orderBy, 
-  getDocs, 
-  setDoc, 
-  doc 
-} from 'firebase/firestore';
-
-// IndexedDB imports
-import { saveToLocal, clearStore } from '@/services/indexedDbUtils';
+// Data Context
+import { useData } from '@/context/DataContext';
 
 // Types
 export type ExpenseCategory = 'rent' | 'salary' | 'supplies' | 'utilities' | 'equipment' | 'medication' | 'maintenance' | 'other';
@@ -57,21 +46,6 @@ export interface Expense {
   updatedAt: string;
   paidBy?: string;
   attachment?: string;
-}
-
-// Data Context
-import { useData } from '@/context/DataContext';
-
-// Salary Payment Interface (for mapping)
-interface SalaryPayment {
-  id: string;
-  staffName: string;
-  amount: number;
-  paymentMethod: string;
-  date: string;
-  period: string;
-  notes?: string;
-  status: 'paid' | 'pending' | 'cancelled';
 }
 
 // Category Labels
@@ -102,31 +76,6 @@ const statusLabels: Record<Expense['status'], { label: string; color: string }> 
   cancelled: { label: 'Cancelled', color: 'bg-red-100 text-red-800 border-red-200' }
 };
 
-// Firebase sync helpers
-const syncToFirebase = async (collectionName: string, item: any) => {
-  try {
-    await setDoc(doc(db, collectionName, item.id), item);
-    console.log(`Synced ${item.id} to Firebase ${collectionName}`);
-  } catch (error) {
-    console.error('Firebase sync error:', error);
-    throw error;
-  }
-};
-
-const loadFromFirebase = async (collectionName: string): Promise<any[]> => {
-  try {
-    const q = query(
-      collection(db, collectionName),
-      orderBy('createdAt', 'desc')
-    );
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  } catch (err) {
-    console.error("Firebase load failed:", err);
-    return [];
-  }
-};
-
 // Format currency function
 const formatCurrency = (amount: number): string => {
   return new Intl.NumberFormat('en-PK', {
@@ -146,8 +95,16 @@ const formatDate = (dateString: string): string => {
 };
 
 export default function OperatorExpenses() {
-  const { expenses, updateLocal, deleteLocal, loading } = useData();
-  const [isSyncing, setIsSyncing] = useState(false);
+  // Use DataContext for expenses and related functions
+  const { 
+    expenses, 
+    updateLocal, 
+    deleteLocal, 
+    loading, 
+    isOnline,
+    refreshCollection 
+  } = useData();
+  
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
   const [showExpenseForm, setShowExpenseForm] = useState(false);
@@ -155,107 +112,8 @@ export default function OperatorExpenses() {
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedCategory, setSelectedCategory] = useState<ExpenseCategory | 'all'>('all');
   const [selectedStatus, setSelectedStatus] = useState<Expense['status'] | 'all'>('all');
-  const [dateRange, setDateRange] = useState({ from: new Date(), to: new Date() });
   const itemsPerPage = 8;
   const isLoading = loading;
-
-  // Manual Sync with Firebase
-  const handleSync = async () => {
-    setIsSyncing(true);
-    try {
-      console.log('Starting sync with Firebase...');
-
-      // Sync expenses from Firebase
-      const remoteExpenses = await loadFromFirebase('expenses') as Expense[];
-      console.log(`Syncing ${remoteExpenses.length} expenses from Firebase`);
-
-      // Clear and repopulate IndexedDB with Firebase data
-      try {
-        await clearStore('expenses');
-      } catch (clearError) {
-        console.warn('Could not clear expenses store:', clearError);
-      }
-
-      const savePromises = remoteExpenses.map(item =>
-        saveToLocal('expenses', item).catch(err => {
-          console.warn(`Failed to save expense ${item.id} to IndexedDB:`, err);
-          return Promise.resolve();
-        })
-      );
-      await Promise.all(savePromises);
-
-      // Update state through context (if available) - note: this might not be needed
-      // as the DataContext should handle updates automatically
-
-      // Also sync salary payments
-      try {
-        console.log('Syncing salary payments from Firebase...');
-        const salaryPaymentsRef = collection(db, 'salaryPayments');
-        const salarySnapshot = await getDocs(
-          query(salaryPaymentsRef, orderBy('date', 'desc'))
-        );
-
-        const remoteSalaries = salarySnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        } as SalaryPayment));
-
-        console.log(`Syncing ${remoteSalaries.length} salary payments from Firebase`);
-
-        // Clear and repopulate salaryPayments in IndexedDB
-        try {
-          await clearStore('salaryPayments');
-        } catch (clearError) {
-          console.warn('Could not clear salaryPayments store:', clearError);
-        }
-
-        const salarySavePromises = remoteSalaries.map(salary =>
-          saveToLocal('salaryPayments', salary).catch(err => {
-            console.warn(`Failed to save salary ${salary.id} to IndexedDB:`, err);
-            return Promise.resolve();
-          })
-        );
-        await Promise.all(salarySavePromises);
-
-        // Map salaries to expenses format
-        const mappedSalaries = remoteSalaries.map(salary => ({
-          id: `salary-${salary.id}`,
-          title: `Salary for ${salary.staffName} - ${salary.period}`,
-          amount: salary.amount,
-          category: 'salary' as ExpenseCategory,
-          paymentMethod: salary.paymentMethod as PaymentMethod,
-          date: salary.date,
-          description: salary.notes || 'Salary payment',
-          vendor: salary.staffName,
-          receiptNumber: salary.id,
-          status: salary.status,
-          createdAt: salary.date,
-          updatedAt: salary.date,
-          paidBy: 'Admin'
-        }));
-
-        // Save mapped salaries to expenses store
-        const mergedSavePromises = mappedSalaries.map(salaryExpense =>
-          saveToLocal('expenses', salaryExpense).catch(err => {
-            console.warn(`Failed to save merged salary expense ${salaryExpense.id}:`, err);
-            return Promise.resolve();
-          })
-        );
-        await Promise.all(mergedSavePromises);
-
-      } catch (salaryError) {
-        console.error('Error syncing salaries:', salaryError);
-        toast.error('Failed to sync salary payments');
-      }
-
-      toast.success('Expenses synced with Firebase successfully!');
-    } catch (err) {
-      console.error('Sync error:', err);
-      toast.error('Failed to sync with Firebase. Please check your connection.');
-    } finally {
-      setIsSyncing(false);
-    }
-  };
 
   // Filter expenses
   const filteredExpenses = expenses.filter(expense => {
@@ -320,7 +178,7 @@ export default function OperatorExpenses() {
     }
   };
 
-  // Handle save expense
+  // Handle save expense - uses DataContext's updateLocal
   const handleSaveExpense = async (expenseData: any) => {
     try {
       let updatedExpense: Expense;
@@ -370,6 +228,17 @@ export default function OperatorExpenses() {
     } catch (error) {
       console.error('Error updating status:', error);
       toast.error('Failed to update status');
+    }
+  };
+
+  // Manual refresh function (replaces manual sync)
+  const handleRefresh = async () => {
+    try {
+      await refreshCollection('expenses');
+      toast.success('Expenses refreshed from local database');
+    } catch (error) {
+      console.error('Error refreshing expenses:', error);
+      toast.error('Failed to refresh expenses');
     }
   };
 
@@ -444,6 +313,7 @@ export default function OperatorExpenses() {
         <div>
           <h1 className="text-2xl md:text-3xl font-bold">Expenses Management</h1>
           <p className="text-muted-foreground">Track and manage clinic expenses</p>
+          
         </div>
         <div className="flex gap-2">
           <Button
@@ -452,16 +322,7 @@ export default function OperatorExpenses() {
             className="gap-2"
           >
             <Download className="w-4 h-4" />
-            Export CSV
-          </Button>
-          <Button
-            onClick={handleSync}
-            variant="outline"
-            disabled={isSyncing}
-            className="gap-2"
-          >
-            <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-            {isSyncing ? 'Syncing...' : 'Sync with Firebase'}
+            Download Report
           </Button>
           <Button
             onClick={handleAddExpense}
@@ -737,3 +598,4 @@ export default function OperatorExpenses() {
     </div>
   );
 }
+// Refresh

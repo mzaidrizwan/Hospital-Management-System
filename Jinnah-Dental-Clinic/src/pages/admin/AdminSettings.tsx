@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Settings, Shield, Database, Plus, Edit, Trash2 } from 'lucide-react';
+import { Settings, Shield, Database, Plus, Edit, Trash2, Download, Upload } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -15,7 +15,7 @@ import { Treatment } from '@/types';
 
 export default function AdminSettings() {
   const { user } = useAuth();
-  const { treatments, updateLocal, deleteLocal } = useData();
+  const { treatments, expenses, staff, updateLocal, deleteLocal, exportToCSV, importFromCSV } = useData();
   const [isTreatmentModalOpen, setIsTreatmentModalOpen] = useState(false);
   const [editingTreatment, setEditingTreatment] = useState<Treatment | null>(null);
 
@@ -110,6 +110,96 @@ export default function AdminSettings() {
                 <p className="text-sm text-muted-foreground">Just now</p>
               </div>
               <Button variant="outline">Sync Now</Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Export/Import Data */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Database className="w-5 h-5" />
+              Export/Import Data
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Export Expenses */}
+              <div className="flex items-center justify-between p-3 border rounded-lg">
+                <span className="font-medium">Expenses</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => exportToCSV(expenses, 'expenses_backup.csv')}
+                  className="gap-2"
+                >
+                  <Download className="w-4 h-4" /> Export CSV
+                </Button>
+              </div>
+
+              {/* Export Staff */}
+              <div className="flex items-center justify-between p-3 border rounded-lg">
+                <span className="font-medium">Staff</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => exportToCSV(staff, 'staff_backup.csv')}
+                  className="gap-2"
+                >
+                  <Download className="w-4 h-4" /> Export CSV
+                </Button>
+              </div>
+            </div>
+
+            {/* Import Section */}
+            <div className="mt-4 p-4 border rounded-lg">
+              <h4 className="font-medium mb-3">Import Data</h4>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium mb-2">Select Collection</label>
+                  <select
+                    className="w-full px-3 py-2 border rounded-lg mb-3"
+                    id="adminImportCollectionSelector"
+                  >
+                    <option value="expenses">Expenses</option>
+                    <option value="staff">Staff</option>
+                    <option value="patients">Patients</option>
+                    <option value="treatments">Treatments</option>
+                  </select>
+                </div>
+
+                <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
+                  <Upload className="w-10 h-10 mx-auto text-gray-400 mb-3" />
+                  <p className="text-sm text-gray-600 mb-3">Upload CSV file</p>
+                  <label className="cursor-pointer">
+                    <input
+                      type="file"
+                      accept=".csv"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+
+                        const selector = document.getElementById('adminImportCollectionSelector') as HTMLSelectElement;
+                        const collectionName = selector.value;
+
+                        const toastId = toast.loading("Importing data...");
+                        importFromCSV(file, collectionName)
+                          .then(() => toast.success("Import successful", { id: toastId }))
+                          .catch((err) => {
+                            console.error(err);
+                            toast.error("Import failed", { id: toastId });
+                          });
+
+                        e.target.value = '';
+                      }}
+                      className="hidden"
+                    />
+                    <span className="bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 transition-colors">
+                      Choose File
+                    </span>
+                  </label>
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>

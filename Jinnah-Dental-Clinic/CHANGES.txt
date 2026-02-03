@@ -9,8 +9,10 @@
 9. Changed data stages and data pickup points.
 10. Logic behind Staff-tab completely changed.
 11. Logic behind Patient-Details-tab completely changed.
+12. rewrote Expense tab in operator side.
 
 
 remaining:
 admin-Staff-(1)when attendence is marked then the ui is not updating immedietely,needs to refresh.(2)on which day a new staff member has joined,on that day his Pay button is disabled.
 change currency from $ to Rs.
+Adding to queue... toast is sticked.

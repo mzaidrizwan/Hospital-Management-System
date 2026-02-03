@@ -34,9 +34,6 @@ import Papa from 'papaparse';
 import { useAuth } from '@/context/AuthContext';
 import OperatorChangePassword from '@/components/settings/OperatorChangePassword';
 import { useData } from '@/context/DataContext';
-// IndexedDB Utilities (Removed direct usage in favor of DataContext)
-// import { saveToLocal, getFromLocal, deleteFromLocal, openDB } from '@/services/indexedDbUtils';
-// import { smartSync, smartDelete } from '@/services/syncService';
 
 // Format currency function
 const formatCurrency = (amount: number) => {
@@ -49,10 +46,13 @@ const formatCurrency = (amount: number) => {
 export default function OperatorSettings() {
   const { changePassword } = useAuth();
   const {
+    patients,
     treatments: contextTreatments,
     clinicSettings: contextClinicSettings,
     updateLocal,
-    deleteLocal
+    deleteLocal,
+    exportToCSV,
+    importFromCSV
   } = useData();
 
   const [activeTab, setActiveTab] = useState('security');
@@ -252,45 +252,7 @@ export default function OperatorSettings() {
     toast.success(`${type.charAt(0).toUpperCase() + type.slice(1)} data exported`);
   };
 
-  // Handle restore backup
-  const handleRestoreBackup = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        if (file.name.endsWith('.json')) {
-          const data = JSON.parse(e.target?.result as string);
-          if (data.treatments) {
-            setTreatments(data.treatments);
-            for (const t of data.treatments) {
-              await saveToLocal('treatments', t);
-              syncToFirebase('treatments', t);
-            }
-          }
-          toast.success('Backup restored successfully');
-        } else if (file.name.endsWith('.csv')) {
-          Papa.parse(e.target?.result as string, {
-            header: true,
-            complete: (results: any) => {
-              setTreatments(results.data);
-              results.data.forEach(async (t: any) => {
-                await saveToLocal('treatments', t);
-                syncToFirebase('treatments', t);
-              });
-              toast.success('CSV restored successfully');
-            }
-          });
-        } else {
-          toast.error('Unsupported file format');
-        }
-      } catch (error) {
-        toast.error('Invalid file format');
-      }
-    };
-    reader.readAsText(file);
-  };
+  // Note: CSV import is now handled inline in the Backup tab with importFromCSV from DataContext
 
   // Handle treatment CRUD
   const handleAddTreatment = () => {
@@ -359,15 +321,6 @@ export default function OperatorSettings() {
           <p className="text-muted-foreground">Manage clinic settings and configurations</p>
         </div>
         <div className="flex gap-2">
-          <Button
-            onClick={handleSync}
-            variant="outline"
-            disabled={isSyncing}
-            className="gap-2"
-          >
-            <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-            Sync Settings
-          </Button>
           <Button
             variant="outline"
             className="gap-2"
@@ -561,58 +514,86 @@ export default function OperatorSettings() {
               <div className="bg-white rounded-lg border p-6">
                 <h3 className="text-lg font-medium mb-4">Backup Settings</h3>
                 <div className="space-y-4">
+                  {/* Individual Export Buttons */}
                   <div className="flex items-center justify-between p-3 border rounded-lg">
-                    <label className="flex items-center gap-3">
-                      <input
-                        type="checkbox"
-                        checked={Object.values(backupSelection).every(v => v)}
-                        onChange={(e) => toggleAllBackup(e.target.checked)}
-                        className="w-4 h-4"
-                      />
-                      <span className="font-medium">Select All</span>
-                    </label>
+                    <div className="flex items-center gap-3">
+                      <span className="font-medium">Patients</span>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => exportToCSV(patients, 'patients_backup.csv')}
+                      className="gap-2"
+                    >
+                      <Download className="w-4 h-4" /> Export CSV
+                    </Button>
                   </div>
 
-                  {Object.entries(backupSelection).map(([key, value]) => (
-                    <div key={key} className="flex items-center justify-between p-3 border rounded-lg">
-                      <label className="flex items-center gap-3">
-                        <input
-                          type="checkbox"
-                          checked={value}
-                          onChange={(e) => setBackupSelection({ ...backupSelection, [key]: e.target.checked })}
-                          className="w-4 h-4"
-                        />
-                        <span>{key.charAt(0).toUpperCase() + key.slice(1)}</span>
-                      </label>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleDownloadData(key)}
-                      >
-                        <Download className="w-4 h-4" />
-                      </Button>
+                  <div className="flex items-center justify-between p-3 border rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <span className="font-medium">Treatments</span>
                     </div>
-                  ))}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => exportToCSV(treatments, 'treatments_backup.csv')}
+                      className="gap-2"
+                    >
+                      <Download className="w-4 h-4" /> Export CSV
+                    </Button>
+                  </div>
                 </div>
               </div>
 
               {/* Restore Backup */}
               <div className="bg-white rounded-lg border p-6">
-                <h3 className="text-lg font-medium mb-4">Restore Backup</h3>
+                <h3 className="text-lg font-medium mb-4">Restore Backup (CSV/JSON)</h3>
                 <div className="space-y-4">
+
+                  {/* Collection Selector for Import */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Select Target Collection for CSV Import</label>
+                    <select
+                      className="w-full px-3 py-2 border rounded-lg mb-4"
+                      id="importCollectionSelector"
+                    >
+                      <option value="patients">Patients</option>
+                      <option value="treatments">Treatments</option>
+                      <option value="appointments">Appointments</option>
+                      <option value="inventory">Inventory</option>
+                    </select>
+                  </div>
+
                   <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
                     <Upload className="w-12 h-12 mx-auto text-gray-400 mb-4" />
-                    <p className="text-gray-600 mb-4">Upload backup file (.json or .csv format)</p>
+                    <p className="text-gray-600 mb-4">Upload backup file (.csv)</p>
                     <label className="cursor-pointer">
                       <input
                         type="file"
-                        accept=".json,.csv"
-                        onChange={handleRestoreBackup}
+                        accept=".csv"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+
+                          const selector = document.getElementById('importCollectionSelector') as HTMLSelectElement;
+                          const collectionName = selector.value;
+
+                          const toastId = toast.loading("Importing data...");
+                          importFromCSV(file, collectionName)
+                            .then(() => toast.success("Import successful", { id: toastId }))
+                            .catch((err) => {
+                              console.error(err);
+                              toast.error("Import failed", { id: toastId });
+                            });
+
+                          // Reset input
+                          e.target.value = '';
+                        }}
                         className="hidden"
                       />
-                      <Button variant="outline" asChild>
-                        <span>Choose File</span>
-                      </Button>
+                      <span className="bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 transition-colors">
+                        Choose File
+                      </span>
                     </label>
                   </div>
                 </div>
