@@ -34,12 +34,14 @@ export default function StaffFormModal({
   const [formData, setFormData] = useState<Partial<Staff>>({
     name: '',
     role: '',
-    experience: '',
     phone: '',
     status: 'Active',
     salary: 0,
     salaryDuration: 'monthly',
+    salaryType: 'monthly',
     joinDate: new Date().toISOString().split('T')[0],
+    lastPaidDate: new Date().toISOString().split('T')[0],
+    totalEarned: 0,
     workingDaysPerWeek: 6
   });
 
@@ -69,12 +71,14 @@ export default function StaffFormModal({
       setFormData({
         name: '',
         role: '',
-        experience: '',
         phone: '',
         status: 'Active',
         salary: 0,
         salaryDuration: 'monthly',
+        salaryType: 'monthly',
         joinDate: new Date().toISOString().split('T')[0],
+        lastPaidDate: new Date().toISOString().split('T')[0],
+        totalEarned: 0,
         workingDaysPerWeek: 6
       });
       setCalculatedSalary({
@@ -237,19 +241,6 @@ export default function StaffFormModal({
                   </select>
                 </div>
 
-                {/* Experience */}
-                <div className="space-y-1.5">
-                  <Label htmlFor="experience" className="text-xs font-bold uppercase tracking-wider text-gray-500">Experience</Label>
-                  <Input
-                    id="experience"
-                    name="experience"
-                    value={formData.experience}
-                    onChange={handleChange}
-                    placeholder="e.g., 5 years"
-                    disabled={isSubmitting}
-                    className="h-10 shadow-sm"
-                  />
-                </div>
               </div>
 
               {/* Right Column */}
@@ -292,7 +283,7 @@ export default function StaffFormModal({
                 <div className="space-y-4 p-4 bg-gray-50/50 rounded-xl border border-gray-100">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
-                      <Label htmlFor="salaryDuration" className="text-[10px] font-black uppercase tracking-widest text-gray-400">Duration</Label>
+                      <Label htmlFor="salaryDuration" className="text-[10px] font-black uppercase tracking-widest text-gray-400">Salary Duration</Label>
                       <select
                         id="salaryDuration"
                         name="salaryDuration"

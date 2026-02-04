@@ -30,6 +30,8 @@ import {
   Stethoscope,
   UserCog,
   DollarSign,
+  Info,
+  ShoppingCart,
   FileText,
   Home,
 } from 'lucide-react';
@@ -40,8 +42,8 @@ const operatorItems = [
   { title: 'Bill', url: '/operator/queue', icon: ClipboardList },
   { title: 'Patients details', url: '/operator/patients', icon: Users },
   { title: 'Staff', url: '/admin/staff', icon: UserCog },
-  { title: 'Purchasing', url: '/admin/inventory', icon: Package },
-  { title: 'Expences', url: '/operator/calendar', icon: DollarSign },
+  { title: 'Inventory', url: '/operator/inventory', icon: Package },
+  { title: 'Expenses', url: '/operator/expenses', icon: DollarSign },
   { title: 'Settings', url: '/operator/settings', icon: Settings },
 ];
 
@@ -52,6 +54,7 @@ const adminItems = [
   { title: 'Patients details', url: '/operator/patients', icon: Users },
   { title: 'Staff', url: '/admin/staff', icon: UserCog },
   { title: 'Inventory', url: '/admin/inventory', icon: Package },
+  { title: 'Expenses', url: '/admin/expenses', icon: Receipt },
   { title: 'Finances', url: '/admin/finances', icon: DollarSign },
   { title: 'Reports', url: '/admin/reports', icon: FileText },
   { title: 'Settings', url: '/admin/settings', icon: Settings },
@@ -127,7 +130,7 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      {!collapsed && (
+      {/* {!collapsed && (
         <div className="px-4 py-2">
           <button
             onClick={() => setShowLicenseModal(true)}
@@ -157,7 +160,7 @@ export function AppSidebar() {
             </div>
           </button>
         </div>
-      )}
+      )} */}
 
       <LicenseModal open={showLicenseModal} onOpenChange={setShowLicenseModal} />
 

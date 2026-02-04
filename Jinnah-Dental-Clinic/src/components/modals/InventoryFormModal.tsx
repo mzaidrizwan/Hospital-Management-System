@@ -21,19 +21,26 @@ interface InventoryFormModalProps {
 const categories = ['Materials', 'Supplies', 'Anesthetics', 'Instruments', 'Equipment', 'Medications'];
 
 export function InventoryFormModal({ open, onOpenChange, editingItem }: InventoryFormModalProps) {
-    const { setInventory, isOnline } = useData();
+    const { setInventory, isOnline, addItem } = useData();
     const [item, setItem] = useState({
         name: '',
         sku: '',
         quantity: 0,
         min: 0,
         category: 'Supplies',
+        buyingPrice: 0,
+        sellingPrice: 0,
         price: 0
     });
 
     useEffect(() => {
         if (editingItem) {
-            setItem({ ...editingItem });
+            setItem({
+                ...editingItem,
+                buyingPrice: editingItem.buyingPrice || 0,
+                sellingPrice: editingItem.sellingPrice || editingItem.price || 0,
+                price: editingItem.price || editingItem.sellingPrice || 0
+            });
         } else {
             setItem({
                 name: '',
@@ -41,6 +48,8 @@ export function InventoryFormModal({ open, onOpenChange, editingItem }: Inventor
                 quantity: 0,
                 min: 0,
                 category: 'Supplies',
+                buyingPrice: 0,
+                sellingPrice: 0,
                 price: 0
             });
         }
@@ -54,39 +63,22 @@ export function InventoryFormModal({ open, onOpenChange, editingItem }: Inventor
             return;
         }
 
-        const itemWithId = {
+        const itemToSave = {
             ...item,
-            id: item.id || `inv-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-            quantity: parseInt(item.quantity.toString()) || 0,
-            min: parseInt(item.min.toString()) || 0,
-            price: parseFloat(item.price.toString()) || 0,
-            updatedAt: new Date().toISOString(),
-            createdAt: item.createdAt || new Date().toISOString()
+            id: item.id || Date.now().toString(),
+            quantity: Number(item.quantity) || 0,
+            min: Number(item.min) || 0,
+            buyingPrice: Number(item.buyingPrice) || 0,
+            sellingPrice: Number(item.sellingPrice) || 0,
+            price: Number(item.sellingPrice) || 0,
+            updatedAt: new Date().toISOString()
         };
 
+        console.log("Saving Item:", itemToSave);
+
         try {
-            // 1. Local-first persistence
-            await saveToLocal('inventory', itemWithId);
-
-            // 2. Immediate UI close
+            await addItem('inventory', itemToSave);
             onOpenChange(false);
-
-            // 3. Update React State via Context
-            setInventory(prev => {
-                const index = prev.findIndex(i => i.id === itemWithId.id);
-                if (index !== -1) {
-                    const next = [...prev];
-                    next[index] = itemWithId;
-                    return next;
-                }
-                return [itemWithId, ...prev];
-            });
-
-            // 4. Background synchronization (Non-blocking: no await)
-            smartSync('inventory', itemWithId).catch(err => {
-                console.error('Background sync failed:', err);
-            });
-
             toast.success(editingItem ? "Item updated successfully" : "Item added successfully");
         } catch (error) {
             console.error('Submit failed:', error);
@@ -141,15 +133,28 @@ export function InventoryFormModal({ open, onOpenChange, editingItem }: Inventor
                         />
                     </div>
 
-                    <div className="space-y-1.5">
-                        <Label htmlFor="price" className="text-xs font-bold uppercase text-muted-foreground">Price (PKR)</Label>
-                        <Input
-                            id="price"
-                            type="number"
-                            value={item.price}
-                            onChange={(e) => setItem(prev => ({ ...prev, price: parseFloat(e.target.value) || 0 }))}
-                            className="h-10"
-                        />
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                            <Label htmlFor="buyingPrice" className="text-xs font-bold uppercase text-muted-foreground">Buying Price (Per Unit)</Label>
+                            <Input
+                                id="buyingPrice"
+                                type="number"
+                                value={item.buyingPrice}
+                                onChange={(e) => setItem(prev => ({ ...prev, buyingPrice: parseFloat(e.target.value) || 0 }))}
+                                className="h-10"
+                            />
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <Label htmlFor="sellingPrice" className="text-xs font-bold uppercase text-muted-foreground">Selling Price (Per Unit)</Label>
+                            <Input
+                                id="sellingPrice"
+                                type="number"
+                                value={item.sellingPrice}
+                                onChange={(e) => setItem(prev => ({ ...prev, sellingPrice: parseFloat(e.target.value) || 0 }))}
+                                className="h-10"
+                            />
+                        </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">

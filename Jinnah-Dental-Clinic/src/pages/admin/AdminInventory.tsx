@@ -18,8 +18,14 @@ import {
   Wifi,
   WifiOff,
   LayoutGrid,
-  History
+  History,
+  Loader2,
+  Download,
+  Info,
+  ShoppingCart
 } from 'lucide-react';
+import { cn } from "@/lib/utils";
+import { format } from "date-fns";
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -32,6 +38,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { toast } from "sonner";
 import { Skeleton } from '@/components/ui/skeleton';
 import { useData } from '@/context/DataContext';
+import { useAuth } from '@/context/AuthContext';
 
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { InventoryFormModal } from '@/components/modals/InventoryFormModal';
@@ -53,7 +60,19 @@ const formatCurrency = (amount: number) => {
 };
 
 export default function AdminInventory() {
-  const { inventory: contextInventory, sales: contextSales, loading: dataLoading, isOnline, setInventory } = useData();
+  const {
+    inventory: contextInventory,
+    sales: contextSales,
+    expenses,
+    loading: dataLoading,
+    isOnline,
+    setInventory,
+    setSales,
+    updateLocal,
+    exportSalesHistoryToCSV
+  } = useData();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [editingItem, setEditingItem] = useState<any>(null);
@@ -61,7 +80,7 @@ export default function AdminInventory() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isSellDialogOpen, setIsSellDialogOpen] = useState(false);
   const [selectedItemForSale, setSelectedItemForSale] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState('inventory');
+  const [activeView, setActiveView] = useState('stock'); // 'stock' | 'sales' | 'purchases'
   const [saleQuantity, setSaleQuantity] = useState(1);
   const [saleNotes, setSaleNotes] = useState('');
   const [isProcessingSale, setIsProcessingSale] = useState(false);
@@ -99,6 +118,13 @@ export default function AdminInventory() {
     return (contextInventory || []).filter(item => item && Number(item.quantity || 0) < Number(item.min || 0));
   }, [contextInventory]);
 
+  // Inventory Purchases logic
+  const inventoryPurchases = useMemo(() => {
+    return (expenses || [])
+      .filter(exp => exp.category === 'inventory')
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [expenses]);
+
   // CRUD Operations for Inventory - Local-first writes
   const handleEditItem = (item: any) => {
     setEditingItem(item);
@@ -135,51 +161,84 @@ export default function AdminInventory() {
     setIsSellDialogOpen(true);
   };
 
-  const handleConfirmSale = async () => {
+  const handleConfirmSale = () => {
     if (!selectedItemForSale) return;
 
     const quantityToSell = parseInt(saleQuantity.toString()) || 1;
+    const currentItem = { ...selectedItemForSale };
 
-    if (quantityToSell <= 0 || quantityToSell > selectedItemForSale.quantity) {
-      toast.error(quantityToSell <= 0 ? "Please enter a valid quantity." : `Only ${selectedItemForSale.quantity} units available.`);
+    if (quantityToSell <= 0 || quantityToSell > currentItem.quantity) {
+      toast.error(quantityToSell <= 0 ? "Please enter a valid quantity." : `Only ${currentItem.quantity} units available.`);
       return;
     }
 
-    setIsProcessingSale(true);
+    // 1. Capture details for sync
+    const itemName = currentItem.name;
+    const saleRecord = {
+      id: `sale-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      itemId: currentItem.id,
+      itemName: itemName,
+      sku: currentItem.sku,
+      quantity: quantityToSell,
+      buyingPrice: currentItem.buyingPrice || 0,
+      sellingPrice: currentItem.sellingPrice || currentItem.price || 0,
+      price: currentItem.sellingPrice || currentItem.price || 0,
+      total: (currentItem.sellingPrice || currentItem.price || 0) * quantityToSell,
+      date: new Date().toISOString(),
+      notes: saleNotes,
+      soldBy: isAdmin ? "Admin" : "Operator"
+    };
 
-    try {
-      const saleRecord = {
-        id: `sale-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-        itemId: selectedItemForSale.id,
-        itemName: selectedItemForSale.name,
-        sku: selectedItemForSale.sku,
-        quantity: quantityToSell,
-        price: selectedItemForSale.price,
-        total: selectedItemForSale.price * quantityToSell,
-        date: new Date().toISOString(),
-        notes: saleNotes,
-        soldBy: "Admin"
-      };
+    const updatedItem = {
+      ...currentItem,
+      quantity: currentItem.quantity - quantityToSell
+    };
 
-      const updatedItem = {
-        ...selectedItemForSale,
-        quantity: selectedItemForSale.quantity - quantityToSell
-      };
+    // 2. OPTIMISTIC UPDATE: Immediate UI cleanup
+    setIsSellDialogOpen(false);
+    setSelectedItemForSale(null);
+    setSaleQuantity(1);
 
-      await Promise.all([
-        smartSync('sales', saleRecord),
-        smartSync('inventory', updatedItem)
-      ]);
+    // 3. Update local React states directly for instant feedback
+    setInventory(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
+    setSales(prev => [saleRecord, ...(prev || [])]);
 
-      toast.success(`${quantityToSell} unit(s) of ${selectedItemForSale.name} sold!`);
-      setIsSellDialogOpen(false);
-      setSelectedItemForSale(null);
-    } catch (error) {
-      console.error('Sale failed:', error);
-      toast.error("Failed to process sale.");
-    } finally {
-      setIsProcessingSale(false);
+    // 4. Show success toast immediately
+    toast.success(`${quantityToSell} unit(s) of ${itemName} sold!`);
+
+    // 5. Background Synchronization (Non-blocking)
+    const performSync = async () => {
+      try {
+        await Promise.all([
+          smartSync('sales', saleRecord),
+          smartSync('inventory', updatedItem)
+        ]);
+        // Also update IndexedDB via updateLocal for persistence
+        await updateLocal('inventory', updatedItem);
+        await updateLocal('sales', saleRecord);
+      } catch (error) {
+        console.error('Background sale sync failed:', error);
+      }
+    };
+
+    performSync();
+  };
+
+  const handleExportSales = () => {
+    if (!contextSales || contextSales.length === 0) {
+      toast.error('No sales data to export');
+      return;
     }
+
+    const reportData = (contextSales || []).map(sale => ({
+      "Date": sale.date ? new Date(sale.date).toLocaleDateString() : 'N/A',
+      "Product": sale.itemName || 'N/A',
+      "Quantity": sale.quantity || 0,
+      "Total Price": sale.total || 0,
+    }));
+
+    exportToCSV(reportData, `Sales_Report_${new Date().toISOString().split('T')[0]}.csv`);
+    toast.success("Sales report exported successfully");
   };
 
   const handleRefresh = () => {
@@ -216,20 +275,24 @@ export default function AdminInventory() {
       </div>
 
       {/* Tabs */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+      <Tabs value={activeView} onValueChange={setActiveView} className="space-y-6">
         <TabsList className="bg-muted/50 p-1 rounded-xl">
-          <TabsTrigger value="inventory" className="gap-2 rounded-lg px-6">
+          <TabsTrigger value="stock" className="gap-2 rounded-lg px-6">
             <LayoutGrid className="w-4 h-4" />
-            Inventory List
+            Stock Inventory
           </TabsTrigger>
           <TabsTrigger value="sales" className="gap-2 rounded-lg px-6">
             <History className="w-4 h-4" />
             Sales History
           </TabsTrigger>
+          <TabsTrigger value="purchases" className="gap-2 rounded-lg px-6">
+            <ShoppingCart className="w-4 h-4" />
+            Purchasing History
+          </TabsTrigger>
         </TabsList>
 
-        {/* Inventory Tab */}
-        <TabsContent value="inventory" className="space-y-6">
+        {/* Stock Inventory Tab */}
+        <TabsContent value="stock" className="space-y-6">
           <div className="flex flex-col sm:flex-row gap-4">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -271,10 +334,10 @@ export default function AdminInventory() {
                   <TableHeader className="bg-muted/30">
                     <TableRow>
                       <TableHead className="font-bold">Item Details</TableHead>
-                      <TableHead className="font-bold">Category</TableHead>
-                      <TableHead className="text-center font-bold">Stock</TableHead>
-                      <TableHead className="text-center font-bold">Price</TableHead>
-                      <TableHead className="text-center font-bold">Status</TableHead>
+                      <TableHead className="text-center font-bold">Category</TableHead>
+                      <TableHead className="text-center font-bold">Stock Status</TableHead>
+                      {isAdmin && <TableHead className="text-center font-bold text-amber-600">Buying Price</TableHead>}
+                      <TableHead className="text-center font-bold">Selling Price</TableHead>
                       <TableHead className="text-right font-bold">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -299,28 +362,32 @@ export default function AdminInventory() {
                                 <span className="text-xs text-muted-foreground font-mono">{item.sku}</span>
                               </div>
                             </TableCell>
-                            <TableCell>
+                            <TableCell className="text-center">
                               <Badge variant="secondary" className="font-medium bg-secondary/30 text-secondary-foreground">{item.category}</Badge>
                             </TableCell>
                             <TableCell className="text-center">
                               <div className="flex flex-col items-center">
-                                <span className={`text-sm font-bold ${isLow ? 'text-destructive' : 'text-gray-900'}`}>
-                                  {item.quantity}
-                                </span>
-                                <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Min: {item.min}</span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className={`text-sm font-bold ${isLow ? 'text-destructive' : 'text-gray-900'}`}>
+                                    {item.quantity} units
+                                  </span>
+                                </div>
+                                {isOutOfStock ? (
+                                  <span className="text-[10px] font-bold text-muted-foreground uppercase">Out of Stock</span>
+                                ) : isLow ? (
+                                  <span className="text-[10px] font-bold text-destructive uppercase">Low Stock (Min: {item.min})</span>
+                                ) : (
+                                  <span className="text-[10px] font-bold text-green-600 uppercase">In Stock</span>
+                                )}
                               </div>
                             </TableCell>
-                            <TableCell className="text-center font-medium">
-                              {formatCurrency(item.price)}
-                            </TableCell>
-                            <TableCell className="text-center">
-                              {isOutOfStock ? (
-                                <Badge variant="outline" className="text-muted-foreground bg-muted font-bold">Out of Stock</Badge>
-                              ) : isLow ? (
-                                <Badge className="bg-destructive/10 text-destructive border-destructive/20 font-bold">Low Stock</Badge>
-                              ) : (
-                                <Badge className="bg-green-50 text-green-700 border-green-100 font-bold">In Stock</Badge>
-                              )}
+                            {isAdmin && (
+                              <TableCell className="text-center font-medium text-amber-700 bg-amber-50/30">
+                                {formatCurrency(item.buyingPrice || 0)}
+                              </TableCell>
+                            )}
+                            <TableCell className="text-center font-bold text-primary">
+                              {formatCurrency(item.sellingPrice || item.price || 0)}
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
@@ -365,6 +432,28 @@ export default function AdminInventory() {
 
         {/* Sales Tab */}
         <TabsContent value="sales" className="space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-white p-4 rounded-xl border border-gray-100 shadow-sm gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-primary/10 rounded-lg">
+                <History className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Sales History</h2>
+                <p className="text-xs text-muted-foreground font-medium">Detailed log of all inventory transactions</p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              className="gap-2 font-bold border-primary/20 hover:border-primary/50 text-primary transition-all hover:bg-primary/5"
+              onClick={handleExportSales}
+            >
+              <Download className="w-4 h-4" />
+              Export Sales Report
+            </Button>
+          </div>
+
+
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <Card className="border-none shadow-sm bg-blue-50/50 border border-blue-100">
               <CardContent className="p-6 flex flex-col items-center text-center">
@@ -397,6 +486,7 @@ export default function AdminInventory() {
                       <TableHead className="text-center font-bold">Qty</TableHead>
                       <TableHead className="text-right font-bold">Unit Price</TableHead>
                       <TableHead className="text-right font-bold">Total</TableHead>
+                      {isAdmin && <TableHead className="text-right font-bold text-emerald-600">Profit</TableHead>}
                       <TableHead className="font-bold">Notes</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -422,11 +512,77 @@ export default function AdminInventory() {
                           </TableCell>
                           <TableCell className="text-center font-bold">{sale.quantity}</TableCell>
                           <TableCell className="text-right text-muted-foreground">{formatCurrency(sale.price)}</TableCell>
-                          <TableCell className="text-right font-black text-green-600">
+                          <TableCell className="text-right font-black text-gray-900">
                             {formatCurrency(sale.total)}
                           </TableCell>
+                          {isAdmin && (
+                            <TableCell className="text-right font-bold text-emerald-600">
+                              {formatCurrency((Number(sale.sellingPrice || sale.price || 0) - Number(sale.buyingPrice || 0)) * Number(sale.quantity || 0))}
+                            </TableCell>
+                          )}
                           <TableCell className="text-xs text-muted-foreground max-w-[150px] truncate">
                             {sale.notes || '--'}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Purchasing History Tab */}
+        <TabsContent value="purchases" className="space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-white p-4 rounded-xl border border-gray-100 shadow-sm gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-primary/10 rounded-lg">
+                <ShoppingCart className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Purchasing History</h2>
+                <p className="text-xs text-muted-foreground font-medium">Auto-generated log of stock acquisitions</p>
+              </div>
+            </div>
+          </div>
+
+          <Card className="border-none shadow-md overflow-hidden bg-white">
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader className="bg-muted/30">
+                    <TableRow>
+                      <TableHead className="font-bold">Date of Purchase</TableHead>
+                      <TableHead className="font-bold">Item Name</TableHead>
+                      <TableHead className="text-center font-bold">Quantity Added</TableHead>
+                      <TableHead className="text-right font-bold">Buying Price (Each)</TableHead>
+                      <TableHead className="text-right font-bold">Total Cost</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {inventoryPurchases.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-20">
+                          <ShoppingCart className="w-16 h-16 mx-auto mb-4 opacity-10" />
+                          <div className="text-lg font-medium text-muted-foreground">No purchase records found</div>
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      inventoryPurchases.map((p: any) => (
+                        <TableRow key={p.id} className="hover:bg-muted/10 transition-colors">
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            {format(new Date(p.date), 'MMM dd, yyyy • hh:mm a')}
+                          </TableCell>
+                          <TableCell>
+                            <span className="font-bold text-gray-900">{p.title.replace('Stock Purchase: ', '')}</span>
+                          </TableCell>
+                          <TableCell className="text-center font-bold">{p.units || '--'}</TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {formatCurrency(p.unitPrice || 0)}
+                          </TableCell>
+                          <TableCell className="text-right font-black text-primary">
+                            {formatCurrency(p.amount || 0)}
                           </TableCell>
                         </TableRow>
                       ))
@@ -518,6 +674,6 @@ export default function AdminInventory() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </div >
   );
 }

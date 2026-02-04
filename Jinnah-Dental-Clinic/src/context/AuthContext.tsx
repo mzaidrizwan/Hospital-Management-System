@@ -8,7 +8,7 @@ import { saveToLocal, getFromLocal } from '@/services/indexedDbUtils';
 import { toast } from 'sonner';
 
 interface AuthContextType extends AuthState {
-  login: (role: UserRole, password: string) => Promise<boolean>;
+  login: (loginId: string, password: string) => Promise<{ success: boolean; role?: UserRole }>;
   logout: () => void;
   changePassword: (role: string, currentPassword: string, newPassword: string) => Promise<boolean>;
 }
@@ -44,53 +44,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [authState]);
 
-  const login = useCallback(async (role: UserRole, password: string): Promise<boolean> => {
+  const login = useCallback(async (loginId: string, password: string): Promise<{ success: boolean; role?: UserRole }> => {
     try {
-      // Fetch latest user from IndexedDB
-      const storedUser = await getFromLocal('users', role);
+      console.log("Searching for user ID:", loginId);
 
-      if (!storedUser) {
-        console.warn(`No user found for role: ${role}`);
-        return false;
+      // Fetch all users to search by ID (since keyPath is role)
+      const usersRaw = await getFromLocal('users');
+      const users = (Array.isArray(usersRaw) ? usersRaw : []) as User[];
+
+      const foundUser = users.find(u => u.id === loginId && u.password === password);
+
+      if (foundUser && (foundUser.role === 'admin' || foundUser.role === 'operator')) {
+        console.log('Login successful for:', foundUser.name);
+
+        // Login success - Create user object matching your User type
+        const newAuthState: AuthState = {
+          isAuthenticated: true,
+          user: {
+            id: foundUser.id,
+            role: foundUser.role as UserRole,
+            name: foundUser.name,
+            email: foundUser.email || '',
+            createdAt: foundUser.createdAt || new Date().toISOString(),
+            lastUpdated: foundUser.lastUpdated
+          },
+        };
+
+        setAuthState(newAuthState);
+
+        // Backup to localStorage as requested
+        localStorage.setItem('currentUser', JSON.stringify(foundUser));
+
+        toast.success(`Welcome ${foundUser.name}!`);
+        return { success: true, role: foundUser.role as UserRole };
+      } else {
+        console.warn(`User found not found or password mismatch for ID: ${loginId}`);
+        toast.error('Invalid credentials');
+        return { success: false };
       }
-
-      if (storedUser.password !== password) {
-        console.log('Password mismatch:', { entered: password, stored: storedUser.password });
-        return false;
-      }
-
-      // Also save to localStorage for backward compatibility
-      localStorage.setItem('currentUser', JSON.stringify({
-        role: storedUser.role,
-        name: storedUser.name,
-        password: storedUser.password
-      }));
-
-      // Login success
-      const newAuthState: AuthState = {
-        isAuthenticated: true,
-        user: {
-          id: storedUser.id || `${role}-001`,
-          role: storedUser.role,
-          name: storedUser.name || `${role.charAt(0).toUpperCase() + role.slice(1)} User`,
-        },
-      };
-
-      setAuthState(newAuthState);
-      return true;
     } catch (err) {
       console.error('Login error:', err);
-      return false;
+      toast.error('Login failed. Please try again.');
+      return { success: false };
     }
   }, []);
 
   const logout = useCallback(() => {
+    console.log('Logging out');
     setAuthState({
       isAuthenticated: false,
       user: null,
     });
     sessionStorage.removeItem('clinic_auth_state');
     localStorage.removeItem('currentUser'); // Optional cleanup
+    toast.success('Logged out successfully');
   }, []);
 
   // Refactored changePassword to use authService

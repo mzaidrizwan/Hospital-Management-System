@@ -3,8 +3,13 @@
 import React, { useState, useEffect } from 'react';
 import {
   Users, Calendar, Clock, CheckCircle2, Activity,
-  Loader2, AlertTriangle, RefreshCw
+  Loader2, AlertTriangle, RefreshCw,
+  ShieldAlert,
+  ShieldCheck
 } from 'lucide-react';
+import { useLicenseStatus } from '@/hooks/useLicenseStatus';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { cn } from '@/lib/utils';
 import { StatCard } from '@/components/dashboard/StatCard';
 import QueueSection from '@/components/dashboard/QueueSection';
 import { CalendarWidget } from '@/components/dashboard/CalendarWidget';
@@ -26,6 +31,7 @@ export default function OperatorDashboard() {
     inventory,
     loading: dataLoading
   } = useData();
+  const { status, daysLeft } = useLicenseStatus();
 
   const waitingPatients = queueData.filter(p => p.status === 'waiting');
   const inTreatmentPatients = queueData.filter(p => p.status === 'in_treatment');
@@ -41,6 +47,29 @@ export default function OperatorDashboard() {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {status !== 'active' && (
+        <Alert variant={status === 'expired' ? 'destructive' : 'default'} className={cn(
+          "border-l-4 shadow-sm animate-in fade-in slide-in-from-top-4 duration-500",
+          status === 'warning' && "border-l-amber-500 bg-amber-50"
+        )}>
+          {status === 'expired' ? <ShieldAlert className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4 text-amber-600" />}
+          <AlertTitle className={cn(
+            "font-bold",
+            status === 'expired' ? "text-red-800" : "text-amber-800"
+          )}>
+            {status === 'expired' ? 'License Expired' : 'License Expiring Soon'}
+          </AlertTitle>
+          <AlertDescription className={cn(
+            "text-sm font-medium",
+            status === 'expired' ? "text-red-700" : "text-amber-700"
+          )}>
+            {status === 'expired'
+              ? "Your license has expired. Some features may be limited. Please contact support to renew."
+              : `Your license will expire in ${daysLeft} days. Please renew soon.`}
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>

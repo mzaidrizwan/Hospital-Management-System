@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { DollarSign, TrendingUp, TrendingDown, Download, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
+import { DollarSign, TrendingUp, TrendingDown, Download, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,25 +11,18 @@ import { startOfMonth, endOfMonth, format } from 'date-fns';
 import { useData } from '@/context/DataContext';
 
 export default function AdminFinances() {
-  const { bills, expenses, patients, loading: dataLoading } = useData();
-  const [stats, setStats] = useState({
-    totalRevenue: 0,
-    totalExpenses: 0,
-    netProfit: 0,
-    outstanding: 0,
-  });
-  const [recentTransactions, setRecentTransactions] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const currentMonthStart = startOfMonth(new Date());
-  const currentMonthEnd = endOfMonth(new Date());
-
-  useEffect(() => {
-    if (dataLoading) return;
+  const { bills, expenses, patients, sales, loading: dataLoading, exportToCSV } = useData();
+  const { stats, recentTransactions, loading, error } = React.useMemo(() => {
+    if (dataLoading) return {
+      stats: { totalRevenue: 0, totalExpenses: 0, netProfit: 0, outstanding: 0 },
+      recentTransactions: [],
+      loading: true,
+      error: null
+    };
 
     try {
-      setLoading(true);
+      const currentMonthStart = startOfMonth(new Date());
+      const currentMonthEnd = endOfMonth(new Date());
 
       // 1. Filter bills for current month
       const currentMonthBills = bills.filter(bill => {
@@ -65,26 +58,61 @@ export default function AdminFinances() {
 
       const totalExpenses = currentMonthExpenses.reduce((sum, exp) => sum + Number(exp.amount || 0), 0);
 
-      // 3. Outstanding from patients
+      // 3. Filter sales for current month
+      const currentMonthSales = (sales || []).filter(sale => {
+        if (!sale.date) return false;
+        const saleDate = new Date(sale.date);
+        return saleDate >= currentMonthStart && saleDate <= currentMonthEnd;
+      });
+
+      const salesRevenue = currentMonthSales.reduce((sum, s) => sum + Number(s.total || 0), 0);
+      const salesProfit = currentMonthSales.reduce((sum, s) => {
+        const buyingPrice = Number(s.buyingPrice || 0);
+        const sellingPrice = Number(s.sellingPrice || s.price || 0);
+        const qty = Number(s.quantity || 0);
+        return sum + (sellingPrice - buyingPrice) * qty;
+      }, 0);
+
+      // Add sales to transactions list
+      currentMonthSales.forEach(sale => {
+        transactions.push({
+          id: sale.id,
+          type: 'Sale',
+          amount: Number(sale.total || 0),
+          date: sale.date || new Date().toISOString(),
+          patient: sale.itemName || 'Inventory Item',
+          status: 'paid',
+        });
+      });
+
+      // 4. Outstanding from patients
       const outstanding = patients.reduce((sum, p) => sum + Number(p.pendingBalance || 0), 0);
 
-      // 4. Net Profit
-      const netProfit = revenue - totalExpenses;
+      // 5. Net Profit: (Treatment Revenue + Inventory Profit) - Overhead Expenses
+      const totalRevenue = revenue + salesRevenue;
+      const netProfit = revenue + salesProfit - totalExpenses;
 
       // 5. Sort transactions
       const sortedTransactions = transactions
         .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
         .slice(0, 5);
 
-      setStats({ totalRevenue: revenue, totalExpenses, netProfit, outstanding });
-      setRecentTransactions(sortedTransactions);
-      setLoading(false);
+      return {
+        stats: { totalRevenue, totalExpenses, netProfit, outstanding },
+        recentTransactions: sortedTransactions,
+        loading: false,
+        error: null
+      };
     } catch (err) {
       console.error('Error calculating financial stats:', err);
-      setError('Error processing data');
-      setLoading(false);
+      return {
+        stats: { totalRevenue: 0, totalExpenses: 0, netProfit: 0, outstanding: 0 },
+        recentTransactions: [],
+        loading: false,
+        error: 'Error processing data'
+      };
     }
-  }, [bills, expenses, patients, dataLoading]);
+  }, [bills, expenses, patients, sales, dataLoading]);
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-US', {
@@ -109,6 +137,58 @@ export default function AdminFinances() {
   const prevExpenses = stats.totalExpenses * 0.92;
   const prevProfit = prevRevenue - prevExpenses;
 
+  const handleExportReport = () => {
+    if (loading) return;
+
+    const reportData = [
+      // Summary Rows
+      {
+        Date: format(new Date(), 'MMMM yyyy'),
+        'Transaction ID': 'SUMMARY',
+        'Patient/Detail': 'Total Monthly Revenue',
+        Amount: stats.totalRevenue,
+        Status: 'N/A'
+      },
+      {
+        Date: format(new Date(), 'MMMM yyyy'),
+        'Transaction ID': 'SUMMARY',
+        'Patient/Detail': 'Total Monthly Expenses',
+        Amount: stats.totalExpenses,
+        Status: 'N/A'
+      },
+      {
+        Date: format(new Date(), 'MMMM yyyy'),
+        'Transaction ID': 'SUMMARY',
+        'Patient/Detail': 'Net Monthly Profit',
+        Amount: stats.netProfit,
+        Status: 'N/A'
+      },
+      // Empty line for spacing in CSV
+      {
+        Date: '',
+        'Transaction ID': '',
+        'Patient/Detail': '',
+        Amount: '',
+        Status: ''
+      },
+      // Detail Rows
+      ...recentTransactions.map(tx => ({
+        Date: format(new Date(tx.date), 'yyyy-MM-dd HH:mm'),
+        'Transaction ID': tx.id,
+        'Patient/Detail': `${tx.type} - ${tx.patient}`,
+        Amount: tx.amount,
+        Status: tx.status.toUpperCase()
+      }))
+    ];
+
+    const fileName = `Financial_Report_${format(new Date(), 'MMMM_yyyy')}.csv`;
+    exportToCSV(reportData, fileName);
+    toast({
+      title: "Report Exported",
+      description: `Your financial report for ${format(new Date(), 'MMMM yyyy')} has been downloaded.`,
+    });
+  };
+
   return (
     <div className="space-y-6 animate-fade-in p-4 md:p-6">
       {/* Header */}
@@ -118,16 +198,7 @@ export default function AdminFinances() {
           <p className="text-muted-foreground">Current month performance</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3">
-          <Button
-            variant="outline"
-            onClick={() => window.location.reload()}
-            disabled={loading}
-            className="gap-2"
-          >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-            Refresh
-          </Button>
-          <Button variant="outline" className="gap-2">
+          <Button variant="outline" className="gap-2" onClick={handleExportReport}>
             <Download className="w-4 h-4" />
             Export Report
           </Button>

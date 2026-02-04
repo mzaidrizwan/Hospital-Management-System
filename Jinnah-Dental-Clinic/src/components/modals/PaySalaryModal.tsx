@@ -21,7 +21,12 @@ export default function PaySalaryModal({
   staff,
   onSubmit
 }: PaySalaryModalProps) {
-  const [paymentData, setPaymentData] = useState({
+  const [paymentData, setPaymentData] = useState<{
+    amount: number | string;
+    paymentMethod: string;
+    month: string;
+    notes: string;
+  }>({
     amount: 0,
     paymentMethod: 'bank',
     month: new Date().toLocaleString('default', { month: 'long', year: 'numeric' }),
@@ -32,7 +37,7 @@ export default function PaySalaryModal({
     if (!open || !staff) return;
 
     setPaymentData(prev => {
-      if (prev.amount === staff.pendingSalary) return prev; // Prevent loop
+      if (prev.amount == staff.pendingSalary) return prev; // Prevent loop
       return {
         amount: staff.pendingSalary,
         paymentMethod: 'bank',
@@ -46,23 +51,32 @@ export default function PaySalaryModal({
     const { name, value } = e.target;
     setPaymentData(prev => ({
       ...prev,
-      [name]: name === 'amount' ? parseFloat(value) || 0 : value
+      [name]: value
     }));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!staff || paymentData.amount <= 0 || paymentData.amount > staff.pendingSalary) {
-      alert('Invalid amount');
+    const numericAmount = Number(paymentData.amount);
+
+    if (!staff || !numericAmount || numericAmount <= 0) {
+      alert("Invalid amount");
       return;
     }
-    onSubmit(staff, paymentData);
+
+    // Create a new object with the numeric amount to pass to onSubmit
+    const submissionData = {
+      ...paymentData,
+      amount: numericAmount
+    };
+
+    onSubmit(staff, submissionData);
   };
 
   if (!open || !staff) return null;
 
   return (
-    <div 
+    <div
       className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
@@ -75,7 +89,14 @@ export default function PaySalaryModal({
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="amount">Amount ($)</Label>
-            <Input id="amount" name="amount" type="number" value={paymentData.amount} onChange={handleChange} />
+            <Input
+              id="amount"
+              name="amount"
+              type="number"
+              step="0.01"
+              value={paymentData.amount}
+              onChange={handleChange}
+            />
           </div>
           <div className="space-y-2">
             <Label htmlFor="paymentMethod">Method</Label>

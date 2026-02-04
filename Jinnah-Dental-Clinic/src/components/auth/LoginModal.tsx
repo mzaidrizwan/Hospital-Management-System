@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useNavigate } from 'react-router-dom';
 import { UserRole } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,9 +24,10 @@ import { doc, setDoc } from 'firebase/firestore';
 // IndexedDB Utilities
 import { saveToLocal, getFromLocal } from '@/services/indexedDbUtils';
 
-export function LoginModal() {
+export function LoginModal({ onOpenChange }: { onOpenChange?: (open: boolean) => void }) {
   const { login } = useAuth();
-  const [role, setRole] = useState<UserRole>('operator');
+  const navigate = useNavigate();
+  const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -36,8 +38,8 @@ export function LoginModal() {
       try {
         // Check & create default admin
         let admin = await getFromLocal('users', 'admin');
-        if (!admin) {
-          admin = { role: 'admin', password: '123', name: 'Admin User' };
+        if (!admin || !admin.id) {
+          admin = { ...admin, id: 'admin', role: 'admin', password: '123', name: 'Admin User' };
           await saveToLocal('users', admin);
           // Optional: Firebase sync
           setDoc(doc(db, 'users', 'admin'), admin).catch(console.error);
@@ -45,8 +47,8 @@ export function LoginModal() {
 
         // Check & create default operator
         let operator = await getFromLocal('users', 'operator');
-        if (!operator) {
-          operator = { role: 'operator', password: '123', name: 'Operator User' };
+        if (!operator || !operator.id) {
+          operator = { ...operator, id: 'operator', role: 'operator', password: '123', name: 'Operator User' };
           await saveToLocal('users', operator);
           // Optional: Firebase sync
           setDoc(doc(db, 'users', 'operator'), operator).catch(console.error);
@@ -67,28 +69,16 @@ export function LoginModal() {
     setIsLoading(true);
 
     try {
-      const storedUser = await getFromLocal('users', role);
-
-      if (!storedUser) {
-        setError('User not found for this role');
-        return;
-      }
-
-      if (storedUser.password !== password) {
-        setError('Invalid password. Please try again.');
-        return;
-      }
-
-      // Save/update current user in localStorage
-      localStorage.setItem('currentUser', JSON.stringify({
-        role: storedUser.role,
-        name: storedUser.name,
-        password: storedUser.password  // Latest password
-      }));
-
-      const success = await login(role, password);
-      if (!success) {
-        setError('Login failed. Please try again.');
+      const result = await login(userId, password);
+      if (result.success) {
+        if (onOpenChange) onOpenChange(false);
+        if (result.role === 'admin') {
+          navigate('/admin/dashboard');
+        } else {
+          navigate('/operator/dashboard');
+        }
+      } else {
+        setError('Login failed. Please check your ID and password.');
       }
     } catch (err) {
       console.error('Login error:', err);
@@ -114,14 +104,14 @@ export function LoginModal() {
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="space-y-2">
-              <Label htmlFor="role-select" className="text-sm font-medium">
-                User Type
+              <Label htmlFor="userId" className="text-sm font-medium">
+                User ID
               </Label>
-              <Select value={role} onValueChange={(v) => setRole(v as UserRole)}>
+              <Select value={userId} onValueChange={setUserId}>
                 <SelectTrigger className="w-full h-11">
                   <div className="flex items-center gap-2">
                     <User className="w-4 h-4 text-muted-foreground" />
-                    <SelectValue placeholder="Select user type" />
+                    <SelectValue placeholder="Select user" />
                   </div>
                 </SelectTrigger>
                 <SelectContent>

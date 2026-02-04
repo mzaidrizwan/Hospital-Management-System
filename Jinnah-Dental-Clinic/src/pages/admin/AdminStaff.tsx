@@ -22,7 +22,9 @@ import {
   AlertCircle,
   Users,
   Mail,
-  Loader2
+  Loader2,
+  Download,
+  History
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -35,8 +37,11 @@ import StaffFormModal from '@/components/modals/StaffFormModal';
 import StaffDetailsModal from '@/components/modals/StaffDetailsModal';
 import PaySalaryModal from '@/components/modals/PaySalaryModal';
 import AttendanceModal from '@/components/modals/AttendanceModal';
-import { Staff, SalaryPayment, Attendance } from '@/types';
+import StaffActivityModal from '@/components/staff/StaffActivityModal';
+import { Staff, SalaryPayment, Attendance, Transaction, Expense } from '@/types';
 import { smartSync, smartDelete } from '@/services/syncService';
+import { cn } from '@/lib/utils';
+import { useSalaryLogic } from '@/hooks/useSalaryLogic';
 
 const formatCurrency = (amount: number) => {
   if (isNaN(amount)) return 'PKR 0';
@@ -48,35 +53,7 @@ const formatCurrency = (amount: number) => {
   }).format(amount);
 };
 
-const calculatePendingSalary = (staffMember: Staff): number => {
-  if (!staffMember?.joinDate) return 0;
-  try {
-    const joinDate = new Date(staffMember.joinDate);
-    const today = new Date();
-    const lastDate = staffMember.lastSalaryDate ? new Date(staffMember.lastSalaryDate) : joinDate;
 
-    if (isNaN(lastDate.getTime()) || lastDate >= today) return 0;
-
-    let pendingPeriods = 0;
-    switch (staffMember.salaryDuration) {
-      case 'daily':
-        pendingPeriods = Math.floor((today.getTime() - lastDate.getTime()) / (1000 * 3600 * 24));
-        break;
-      case 'weekly':
-        pendingPeriods = Math.floor((today.getTime() - lastDate.getTime()) / (1000 * 3600 * 24 * 7));
-        break;
-      case 'monthly':
-        let monthsDiff = (today.getFullYear() - lastDate.getFullYear()) * 12;
-        monthsDiff += today.getMonth() - lastDate.getMonth();
-        if (today.getDate() < lastDate.getDate()) monthsDiff--;
-        pendingPeriods = Math.max(0, monthsDiff);
-        break;
-    }
-    return pendingPeriods * (staffMember.salary || 0);
-  } catch (e) {
-    return 0;
-  }
-};
 
 const calculateNextSalaryDate = (staffMember: Staff): string => {
   const lastDate = staffMember?.lastSalaryDate || staffMember?.joinDate;
@@ -99,12 +76,23 @@ const calculateNextSalaryDate = (staffMember: Staff): string => {
 export default function AdminStaff() {
   const {
     staff: contextStaff,
+    setStaff,
     salaryPayments: contextPayments,
+    setSalaryPayments,
     attendance: contextAttendance,
+    setAttendance,
+    transactions,
+    setTransactions,
+    expenses,
+    setExpenses,
     loading: dataLoading,
     updateLocal,
-    deleteLocal
+    deleteLocal,
+    generateStaffReport,
+    exportToCSV
   } = useData();
+
+  const { getSalaryStatus } = useSalaryLogic();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedRole, setSelectedRole] = useState('all');
@@ -115,19 +103,65 @@ export default function AdminStaff() {
   const [showStaffDetails, setShowStaffDetails] = useState<Staff | null>(null);
   const [showPaySalary, setShowPaySalary] = useState<Staff | null>(null);
   const [showAttendanceModal, setShowAttendanceModal] = useState<Staff | null>(null);
+  const [showActivityModal, setShowActivityModal] = useState<Staff | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [selectedStaffForHistory, setSelectedStaffForHistory] = useState<Staff | null>(null);
+
+  const isPaymentDue = (staff: Staff): boolean => {
+    if (!staff.lastPaidDate) return true;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const lastPaid = new Date(staff.lastPaidDate);
+    lastPaid.setHours(0, 0, 0, 0);
+
+    // Calculate difference in days
+    const diffTime = Math.abs(today.getTime() - lastPaid.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    if (staff.salaryDuration === 'daily') {
+      // Due if LAST PAID DATE IS NOT TODAY
+      // If last paid date IS today, then payment IS NOT due.
+      return lastPaid.getTime() !== today.getTime();
+    } else if (staff.salaryDuration === 'weekly') {
+      // Due if last payment was > 7 days ago
+      return diffDays >= 7;
+    } else {
+      // Monthly: rely on the standard amountDue logic or a similar check
+      // For now, let's say monthly is due if it's been > 30 days or pendingSalary > 0
+      return diffDays >= 30;
+    }
+  };
 
   const processedStaff = useMemo(() => {
+    const todayStr = new Date().toISOString().split('T')[0];
     return (contextStaff || []).map(s => {
       if (!s) return null;
+
+      // Calculate today's attendance status
+      const todayAttendance = (contextAttendance || []).find(a => a.staffId === s.id && a.date === todayStr);
+      let attendanceStatus = s.attendanceStatus; // Keep manual update if present
+
+      if (todayAttendance) {
+        attendanceStatus = todayAttendance.status === 'present' ? 'Present' :
+          todayAttendance.status === 'absent' ? 'Absent' : 'Leave';
+      }
+
+      const { status: salStatus, amountDue } = getSalaryStatus(s);
+      const paymentDue = isPaymentDue(s);
+
       return {
         ...s,
-        pendingSalary: calculatePendingSalary(s),
-        nextSalaryDate: calculateNextSalaryDate(s)
+        pendingSalary: amountDue,
+        salaryStatus: salStatus,
+        isPaymentDue: paymentDue, // Add this new field
+        nextSalaryDate: calculateNextSalaryDate(s),
+        attendanceStatus
       };
-    }).filter(Boolean) as Staff[];
-  }, [contextStaff]);
+    }).filter(Boolean) as (Staff & { isPaymentDue: boolean })[];
+  }, [contextStaff, contextAttendance, getSalaryStatus]);
 
   const filteredStaff = useMemo(() => {
     return processedStaff.filter(member => {
@@ -154,6 +188,13 @@ export default function AdminStaff() {
   const durations = useMemo(() => Array.from(new Set(processedStaff.map(s => s.salaryDuration).filter(Boolean))), [processedStaff]);
 
   const handleStaffSubmit = async (staffData: Partial<Staff>) => {
+    // Validation: Prevent creating staff with empty names
+    if (!staffData.name || staffData.name.trim() === '') {
+      console.error('Blocked attempt to create staff member with empty name');
+      toast.error('Staff name is required');
+      return;
+    }
+
     const salaryAmount = Number(staffData.salary) || 0;
     const joinDate = staffData.joinDate || new Date().toISOString().split('T')[0];
 
@@ -175,16 +216,18 @@ export default function AdminStaff() {
           id: `staff-${Date.now()}`,
           name: staffData.name || '',
           role: staffData.role || '',
-          experience: staffData.experience || '',
           phone: staffData.phone || '',
           joinDate: joinDate,
           status: 'Active',
           salary: salaryAmount,
           salaryDuration: staffData.salaryDuration || 'monthly',
+          salaryType: staffData.salaryDuration || 'monthly',
           workingDaysPerWeek: Number(staffData.workingDaysPerWeek) || 6,
           totalPaid: 0,
-          pendingSalary: 0, // Mandatory field
+          totalEarned: 0,
+          pendingSalary: 0,
           lastSalaryDate: joinDate,
+          lastPaidDate: joinDate,
           createdAt: new Date().toISOString(),
           lastUpdated: Date.now(),
           updatedAt: new Date().toISOString()
@@ -233,54 +276,151 @@ export default function AdminStaff() {
   };
 
   const handlePaySalary = async (staffMember: Staff, paymentData: any) => {
-    const paymentDate = new Date().toISOString().split('T')[0];
+    const timestamp = new Date().toISOString();
     try {
-      const newPayment: SalaryPayment = {
-        id: `pay-${Date.now()}`,
+      const expenseId = `exp-sal-${Date.now()}`;
+
+      const newTransaction: Transaction = {
+        id: `txn-${Date.now()}`,
         staffId: staffMember.id,
         staffName: staffMember.name,
         amount: paymentData.amount,
-        date: paymentDate,
-        period: 'Current Period',
-        periodType: staffMember.salaryDuration,
-        status: 'paid',
-        paymentMethod: paymentData.paymentMethod,
+        date: timestamp,
+        type: 'Salary',
+        method: paymentData.paymentMethod,
         notes: paymentData.notes,
-        startDate: paymentDate,
-        endDate: paymentDate
+        expenseId: expenseId
       };
 
-      const updatedStaff = {
+      const newExpense: Expense = {
+        id: expenseId,
+        title: `Staff Salary: ${staffMember.name}`,
+        amount: paymentData.amount,
+        category: 'salary',
+        paymentMethod: (paymentData.paymentMethod === 'bank' ? 'bank_transfer' : 'cash') as any,
+        date: timestamp,
+        description: `Monthly salary payment for ${staffMember.name}. ${paymentData.notes || ''}`,
+        status: 'paid',
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+
+      const newSalaryPayment: any = {
+        id: `sp-${Date.now()}`,
+        staffId: staffMember.id,
+        staffName: staffMember.name,
+        amount: paymentData.amount,
+        date: timestamp,
+        method: paymentData.paymentMethod,
+        notes: paymentData.notes,
+        month: paymentData.month || new Date().toLocaleString('default', { month: 'long', year: 'numeric' })
+      };
+
+      const updatedStaff: Staff = {
         ...staffMember,
         totalPaid: (staffMember.totalPaid || 0) + paymentData.amount,
-        lastSalaryDate: paymentDate,
+        totalEarned: (staffMember.totalEarned || 0) + paymentData.amount,
+        lastSalaryDate: timestamp.split('T')[0],
+        lastPaidDate: timestamp,
+        updatedAt: timestamp,
+        salaryStatus: 'Paid'
       };
 
-      await Promise.all([
-        smartSync('staff', updatedStaff),
-        smartSync('salaryPayments', newPayment)
-      ]);
-
+      // 1. OPTIMISTIC UPDATE: Immediate UI cleanup
       setShowPaySalary(null);
-      toast.success(`Salary of ${formatCurrency(paymentData.amount)} paid to ${staffMember.name}`);
+
+      // Update local React states directly
+      setTransactions(prev => [newTransaction, ...(prev || [])]);
+      setStaff(prev => prev.map(s => s.id === updatedStaff.id ? updatedStaff : s));
+      setExpenses(prev => [newExpense, ...(prev || [])]);
+
+      // 2. Show success toast immediately
+      toast.success(`Salary Payment recorded for ${staffMember.name}`);
+
+      // 3. Background Synchronization
+      const performSync = async () => {
+        try {
+          await Promise.all([
+            smartSync('transactions', newTransaction),
+            updateLocal('transactions', newTransaction),
+            smartSync('expenses', newExpense),
+            updateLocal('expenses', newExpense),
+            updateLocal('staff', updatedStaff),
+            smartSync('salaryPayments', newSalaryPayment),
+            updateLocal('salaryPayments', newSalaryPayment)
+          ]);
+        } catch (error) {
+          console.error('Background payment sync failed:', error);
+        }
+      };
+
+      performSync();
     } catch (error) {
+      console.error('Payment processing failed:', error);
       toast.error('Failed to process payment');
     }
   };
 
-  const handleMarkAttendance = async (staffMember: Staff, attData: any) => {
+  const handleDownloadReport = () => {
+    const reportData = generateStaffReport();
+    exportToCSV(reportData, `Staff_Detailed_Report_${new Date().toISOString().split('T')[0]}.csv`);
+    toast.success("Staff report generated and downloaded");
+  };
+
+  const handleMarkAttendance = (staffMember: Staff, attData: any) => {
     try {
       const newAtt: Attendance = {
-        id: `att-${Date.now()}`,
+        id: attData.id || `att-${Date.now()}`,
         staffId: staffMember.id,
         date: attData.date,
         status: attData.status as 'present' | 'absent' | 'leave',
         notes: attData.notes
       };
-      await smartSync('attendance', newAtt);
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      const isToday = attData.date === todayStr;
+
+      // 1. OPTIMISTIC UPDATE: Immediate UI cleanup
       setShowAttendanceModal(null);
-      toast.success(`Attendance recorded for ${staffMember.name}`);
+
+      // Update local React states directly for instant feedback
+      setAttendance(prev => {
+        const index = prev.findIndex(a => a.id === newAtt.id || (a.staffId === newAtt.staffId && a.date === newAtt.date));
+        if (index !== -1) {
+          const updated = [...prev];
+          updated[index] = newAtt;
+          return updated;
+        }
+        return [...prev, newAtt];
+      });
+
+      setStaff(prev => prev.map(s =>
+        s.id === staffMember.id
+          ? {
+            ...s,
+            attendance: [...(s.attendance || []), newAtt],
+            attendanceStatus: isToday ? (newAtt.status === 'present' ? 'Present' : newAtt.status === 'absent' ? 'Absent' : 'Leave') : s.attendanceStatus
+          }
+          : s
+      ));
+
+      // 2. Show success toast immediately
+      toast.success(isToday ? `Marked ${staffMember.name} as ${newAtt.status} for today` : `Attendance updated for ${attData.date}`);
+
+      // 3. Background Synchronization (Non-blocking)
+      const performSync = async () => {
+        try {
+          await smartSync('attendance', newAtt);
+          await updateLocal('attendance', newAtt);
+        } catch (error) {
+          console.error('Background attendance sync failed:', error);
+        }
+      };
+
+      performSync();
+
     } catch (error) {
+      console.error('Attendance recording failed:', error);
       toast.error('Failed to record attendance');
     }
   };
@@ -307,13 +447,23 @@ export default function AdminStaff() {
           </div>
           <p className="text-muted-foreground font-medium">Manage clinic personnel, payroll, and attendance</p>
         </div>
-        <Button
-          onClick={() => { setSelectedStaff(null); setIsEditing(false); setShowStaffForm(true); }}
-          className="gap-2 bg-primary hover:bg-primary/90 shadow-md h-11 px-6 font-bold"
-        >
-          <Plus className="w-5 h-5" />
-          Add Staff
-        </Button>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            variant="outline"
+            onClick={handleDownloadReport}
+            className="gap-2 border-gray-200 hover:bg-gray-50 h-11 px-6 font-bold rounded-xl"
+          >
+            <Download className="w-5 h-5" />
+            Export Report
+          </Button>
+          <Button
+            onClick={() => { setSelectedStaff(null); setIsEditing(false); setShowStaffForm(true); }}
+            className="gap-2 bg-primary hover:bg-primary/90 shadow-md h-11 px-6 font-bold rounded-xl"
+          >
+            <Plus className="w-5 h-5" />
+            Add Staff
+          </Button>
+        </div>
       </div>
 
       {/* Stats Dashboard */}
@@ -408,17 +558,32 @@ export default function AdminStaff() {
               <CardContent className="p-6">
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center">
+                    <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors pointer-cursor" onClick={() => setShowActivityModal(staffMember)}>
                       <UserCog className="w-6 h-6 text-primary" />
                     </div>
                     <div>
-                      <h3 className="font-black text-gray-900 tracking-tight">{staffMember.name}</h3>
+                      <h3 className="font-black text-gray-900 tracking-tight cursor-pointer hover:text-primary transition-colors" onClick={() => setShowActivityModal(staffMember)}>
+                        {staffMember.name}
+                      </h3>
                       <p className="text-xs font-bold text-primary uppercase tracking-wider">{staffMember.role}</p>
                     </div>
                   </div>
-                  <Badge variant={staffMember.status === 'Active' ? 'default' : 'destructive'} className="font-bold">
-                    {staffMember.status}
-                  </Badge>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <Badge variant={staffMember.status === 'Active' ? 'default' : 'destructive'} className="font-bold">
+                      {staffMember.status}
+                    </Badge>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "font-black text-[10px] uppercase tracking-widest",
+                        staffMember.salaryStatus === 'Paid'
+                          ? "border-green-200 bg-green-50 text-green-700"
+                          : "border-amber-200 bg-amber-50 text-amber-700"
+                      )}
+                    >
+                      Salary: {staffMember.salaryStatus}
+                    </Badge>
+                  </div>
                 </div>
 
                 <div className="space-y-3 mb-6">
@@ -426,12 +591,12 @@ export default function AdminStaff() {
                     <Phone className="w-4 h-4 text-muted-foreground" /> {staffMember.phone}
                   </div>
                   <div className="flex items-center gap-3 text-sm font-medium text-gray-600">
-                    <Calendar className="w-4 h-4 text-muted-foreground" /> Joined: {new Date(staffMember.joinDate).toLocaleDateString()}
+                    <Calendar className="w-4 h-4 text-muted-foreground" /> Joined: {staffMember.joinDate ? new Date(staffMember.joinDate).toLocaleDateString() : 'No Date Provided'}
                   </div>
                   <div className="pt-3 border-t grid grid-cols-2 gap-4">
                     <div>
                       <p className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Base Salary</p>
-                      <p className="text-sm font-bold text-gray-900">{formatCurrency(staffMember.salary)} <span className="text-[10px] font-normal text-muted-foreground">/{staffMember.salaryDuration}</span></p>
+                      <p className="text-sm font-bold text-gray-900">{staffMember.salary && staffMember.salary > 0 ? formatCurrency(staffMember.salary) : 'Not Set'} {staffMember.salary && staffMember.salary > 0 && <span className="text-[10px] font-normal text-muted-foreground">/{staffMember.salaryDuration}</span>}</p>
                     </div>
                     <div className="text-right">
                       <p className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Pending</p>
@@ -440,42 +605,77 @@ export default function AdminStaff() {
                       </p>
                     </div>
                   </div>
-                </div>
 
-                <div className="grid grid-cols-2 gap-2 mt-4">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="font-bold h-9 border-green-200 text-green-700 hover:bg-green-50"
-                    onClick={() => setShowPaySalary(staffMember)}
-                    disabled={staffMember.pendingSalary <= 0}
-                  >
-                    <Wallet className="w-3.5 h-3.5 mr-1.5" /> Pay
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="font-bold h-9 border-blue-200 text-blue-700 hover:bg-blue-50"
-                    onClick={() => setShowAttendanceModal(staffMember)}
-                  >
-                    <CalendarDays className="w-3.5 h-3.5 mr-1.5" /> Attendance
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="font-bold h-9 hover:bg-muted/50 mt-1"
-                    onClick={() => { setSelectedStaff(staffMember); setIsEditing(true); setShowStaffForm(true); }}
-                  >
-                    <Edit className="w-3.5 h-3.5 mr-1.5" /> Edit
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="font-bold h-9 text-destructive hover:bg-destructive/5 mt-1"
-                    onClick={() => handleDeleteStaff(staffMember)}
-                  >
-                    <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Delete
-                  </Button>
+                  <div className="flex flex-col gap-3 pt-4 border-t mt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      {!staffMember.isPaymentDue ? (
+                        <div className="flex items-center gap-2 text-green-600 bg-green-50 px-4 py-2 rounded-xl border border-green-100 flex-1 justify-center shadow-sm">
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span className="text-xs font-black uppercase tracking-widest">Paid</span>
+                        </div>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-10 gap-2 font-bold border-primary/20 text-primary hover:bg-primary hover:text-white shadow-sm active:scale-95 transition-all flex-1 rounded-xl"
+                          onClick={() => setShowPaySalary(staffMember)}
+                        >
+                          <Wallet className="w-4 h-4" /> Pay Salary
+                        </Button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={cn(
+                          "font-bold h-9 rounded-xl border border-blue-100 transition-all px-0",
+                          staffMember.attendanceStatus === 'Present'
+                            ? "bg-green-50 text-green-700 border-green-200"
+                            : staffMember.attendanceStatus === 'Absent'
+                              ? "bg-red-50 text-red-700 border-red-200"
+                              : staffMember.attendanceStatus === 'Leave'
+                                ? "bg-yellow-50 text-yellow-700 border-yellow-200"
+                                : "text-blue-700 hover:bg-blue-50 bg-blue-50/30"
+                        )}
+                        title="Mark Attendance"
+                        onClick={() => setShowAttendanceModal(staffMember)}
+                      >
+                        <CalendarDays className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="font-bold h-9 rounded-xl hover:bg-blue-50 text-blue-600 border border-transparent hover:border-blue-100 px-0"
+                        title="Activity History"
+                        onClick={() => {
+                          setSelectedStaffForHistory(staffMember);
+                          setIsHistoryOpen(true);
+                        }}
+                      >
+                        <History className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="font-bold h-9 rounded-xl hover:bg-gray-100 text-gray-500 px-0"
+                        title="Edit Staff"
+                        onClick={() => { setSelectedStaff(staffMember); setIsEditing(true); setShowStaffForm(true); }}
+                      >
+                        <Edit className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="font-bold h-9 rounded-xl text-destructive/70 hover:text-destructive hover:bg-destructive/5 px-0"
+                        title="Delete Staff"
+                        onClick={() => handleDeleteStaff(staffMember)}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -527,6 +727,15 @@ export default function AdminStaff() {
           setShowPaySalary(showStaffDetails);
           setShowStaffDetails(null);
         }}
+      />
+
+      <StaffActivityModal
+        open={isHistoryOpen}
+        onClose={() => {
+          setIsHistoryOpen(false);
+          setSelectedStaffForHistory(null);
+        }}
+        staff={selectedStaffForHistory}
       />
     </div>
   );

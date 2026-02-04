@@ -8,8 +8,12 @@ import {
   Users,
   AlertTriangle,
   Calendar as CalendarIcon,
-  RefreshCw
+  RefreshCw,
+  ShieldAlert,
+  ShieldCheck
 } from 'lucide-react';
+import { useLicenseStatus } from '@/hooks/useLicenseStatus';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { StatCard } from '@/components/dashboard/StatCard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -52,9 +56,13 @@ interface Sale {
   id: string;
   amount: number;
   totalPrice: number;
+  buyingPrice?: number;
+  sellingPrice?: number;
+  total?: number;
   date: string;
   createdAt: any;
   productName?: string;
+  itemName?: string;
   category?: string;
   quantity?: number;
   customerName?: string;
@@ -196,7 +204,8 @@ const getDateRangeData = (
     })),
     ...filteredSales.map(sale => ({
       ...sale,
-      amount: sale.amount || sale.totalPrice || 0,
+      amount: sale.total || sale.amount || sale.totalPrice || 0,
+      itemProfit: (Number(sale.sellingPrice || sale.price || sale.amount || 0) - Number(sale.buyingPrice || 0)) * Number(sale.quantity || 1),
       type: 'sale'
     }))
   ];
@@ -253,11 +262,25 @@ const getDailyRevenueExpenseData = (
 
     const dayExpenses = dayExpensesRegular + dayExpensesSalaries;
 
+    // Calculate daily profit accurately (Treatment Revenue + Inventory Profit - Overhead Expenses)
+    const dayProfit = combinedRevenue
+      .filter(item => {
+        const itemDate = parseDate(item.date || item.createdDate || item.createdAt);
+        if (!itemDate) return false;
+        return itemDate.toISOString().split('T')[0] === dateStr;
+      })
+      .reduce((sum, item) => {
+        if (item.type === 'sale') {
+          return sum + (item.itemProfit || 0);
+        }
+        return sum + (item.amount || 0);
+      }, 0) - dayExpenses;
+
     result.push({
       date: format(current, 'MMM dd'),
       revenue: dayRevenue,
       expenses: dayExpenses,
-      profit: dayRevenue - dayExpenses
+      profit: dayProfit
     });
 
     current.setDate(current.getDate() + 1);
@@ -329,6 +352,7 @@ export default function AdminDashboard() {
     salaryPayments,
     loading: dataLoading
   } = useData();
+  const { status, daysLeft } = useLicenseStatus();
 
   // Date range state - default to current month
   const [dateRange, setDateRange] = useState<DateRange>({
@@ -382,11 +406,20 @@ export default function AdminDashboard() {
     );
 
     // Calculate totals
-    const totalRevenue = combinedRevenue.reduce((sum, item) => sum + (item.amount || 0), 0);
+    const treatmentRevenue = filteredBills.reduce((sum, item) => sum + (item.amountPaid || 0), 0);
+    const salesRevenue = filteredSales.reduce((sum, item) => sum + (item.total || item.amount || item.totalPrice || 0), 0);
+    const salesProfit = filteredSales.reduce((sum, sale) => {
+      const bPrice = Number(sale.buyingPrice || 0);
+      const sPrice = Number(sale.sellingPrice || sale.price || 0);
+      const qty = Number(sale.quantity || 0);
+      return sum + (sPrice - bPrice) * qty;
+    }, 0);
+
+    const totalRevenue = treatmentRevenue + salesRevenue;
     const totalExpenses = filteredExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
     const totalSalaries = filteredSalaries.reduce((sum, sal) => sum + (sal.amount || 0), 0);
     const totalExpensesAll = totalExpenses + totalSalaries;
-    const netProfit = totalRevenue - totalExpensesAll;
+    const netProfit = treatmentRevenue + salesProfit - totalExpensesAll;
 
     // Other calculations
     const totalPatients = patients.filter(p => p.isActive).length;
@@ -480,6 +513,29 @@ export default function AdminDashboard() {
 
   return (
     <div className="space-y-6 p-4 md:p-6">
+      {status !== 'active' && (
+        <Alert variant={status === 'expired' ? 'destructive' : 'default'} className={cn(
+          "border-l-4 shadow-sm animate-in fade-in slide-in-from-top-4 duration-500",
+          status === 'warning' && "border-l-amber-500 bg-amber-50"
+        )}>
+          {status === 'expired' ? <ShieldAlert className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4 text-amber-600" />}
+          <AlertTitle className={cn(
+            "font-bold",
+            status === 'expired' ? "text-red-800" : "text-amber-800"
+          )}>
+            {status === 'expired' ? 'License Expired' : 'License Expiring Soon'}
+          </AlertTitle>
+          <AlertDescription className={cn(
+            "text-sm font-medium",
+            status === 'expired' ? "text-red-700" : "text-amber-700"
+          )}>
+            {status === 'expired'
+              ? "Your license has expired. Some features may be limited. Please contact support to renew."
+              : `Your license will expire in ${daysLeft} days. Please consider renewing it soon to avoid service interruption.`}
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Page Header with Date Range Picker */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>

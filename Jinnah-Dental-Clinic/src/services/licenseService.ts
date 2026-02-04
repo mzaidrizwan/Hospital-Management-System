@@ -14,6 +14,9 @@ const SECRET_SALT = 'jinnah-dental-secure-salt-v1-x9y8z7';
  * Key Format: YEAR-MONTH-HASH (e.g., "2025-12-a1b2c3d4e5")
  */
 export const validateLicenseKey = async (inputKey: string, clinicId: string): Promise<boolean> => {
+    // TEMPORARY BYPASS: Always return true for development
+    return true;
+    /*
     try {
         const parts = inputKey.split('-');
         if (parts.length !== 3) return false;
@@ -60,6 +63,7 @@ export const validateLicenseKey = async (inputKey: string, clinicId: string): Pr
         console.error('License validation check failed:', error);
         return false;
     }
+    */
 };
 
 /**

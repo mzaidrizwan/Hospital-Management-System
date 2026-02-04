@@ -587,7 +587,7 @@ export default function OperatorPatients() {
             disabled={contextLoading}
           >
             <Download className="w-4 h-4" />
-            Export
+            Generate Report
           </Button>
           <Button
             onClick={handleAddPatient}

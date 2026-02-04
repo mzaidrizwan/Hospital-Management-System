@@ -13,7 +13,8 @@ import {
   RefreshCw,
   TrendingUp,
   BarChart,
-  ClipboardList
+  ClipboardList,
+  FileDown
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -48,6 +49,8 @@ export default function AdminReports() {
     patients,
     inventory,
     staff,
+    generateStaffReport,
+    exportToCSV,
     loading: dataLoading
   } = useData();
 
@@ -206,6 +209,19 @@ export default function AdminReports() {
     }
   };
 
+  const handleExportStaff = () => {
+    try {
+      setGenerating('Staff Performance');
+      const data = generateStaffReport();
+      exportToCSV(data, `Staff_Detailed_Report_${new Date().toISOString().split('T')[0]}.csv`);
+      toast.success("Staff performance report downloaded");
+    } catch (e) {
+      toast.error("Failed to export staff report");
+    } finally {
+      setGenerating(null);
+    }
+  };
+
   const reportTypes = [
     {
       name: 'Daily Summary',
@@ -263,14 +279,24 @@ export default function AdminReports() {
           </div>
           <p className="text-muted-foreground">Generate and download clinic performance reports</p>
         </div>
-        <Button
-          variant="outline"
-          onClick={handleRefresh}
-          className="gap-2"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Refresh Data
-        </Button>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            onClick={handleExportStaff}
+            className="gap-2 bg-primary hover:bg-primary/90 text-white shadow-md rounded-xl h-11 px-6 font-bold"
+            disabled={generating === 'Staff Performance'}
+          >
+            {generating === 'Staff Performance' ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileDown className="w-5 h-5" />}
+            Export Staff Performance & Payroll
+          </Button>
+          <Button
+            variant="outline"
+            onClick={handleRefresh}
+            className="gap-2 rounded-xl h-11 px-5 font-semibold text-gray-600 border-gray-200"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Refresh Data
+          </Button>
+        </div>
       </div>
 
       {!hasAnyData ? (
@@ -308,8 +334,8 @@ export default function AdminReports() {
                   </div>
                   <Button
                     variant="default"
-                    className="w-full gap-2 shadow-sm"
-                    onClick={() => generateReport(report.name)}
+                    className="w-full gap-2 shadow-sm rounded-xl font-bold"
+                    onClick={() => report.name === 'Staff Performance' ? handleExportStaff() : generateReport(report.name)}
                     disabled={generating === report.name || !report.available}
                   >
                     {generating === report.name ? (

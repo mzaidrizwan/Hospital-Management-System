@@ -21,8 +21,16 @@ import {
   EyeOff,
   CheckCircle,
   AlertCircle,
-  RefreshCw
+  RefreshCw,
+  CloudDownload,
+  ShieldCheck,
+  ShieldAlert,
+  Key,
+  Info
 } from 'lucide-react';
+import { LicenseModal } from '@/components/modals/LicenseModal';
+import { cn } from "@/lib/utils";
+import { format, parseISO } from 'date-fns';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -52,7 +60,13 @@ export default function OperatorSettings() {
     updateLocal,
     deleteLocal,
     exportToCSV,
-    importFromCSV
+    importFromCSV,
+    restoreLocalFromCloud,
+    manualCloudRestore,
+    licenseStatus,
+    licenseDaysLeft,
+    licenseKey,
+    licenseExpiryDate
   } = useData();
 
   const [activeTab, setActiveTab] = useState('security');
@@ -68,6 +82,7 @@ export default function OperatorSettings() {
 
   const [isSyncing, setIsSyncing] = useState(false);
   const [userInfo, setUserInfo] = useState<{ role: string; name: string } | null>(null);
+  const [showLicenseModal, setShowLicenseModal] = useState(false);
 
   // Initialize clinicData from context
   const [clinicData, setClinicData] = useState({
@@ -334,7 +349,7 @@ export default function OperatorSettings() {
 
       {/* Tabs - Only 4 tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-        <TabsList className="grid grid-cols-2 sm:grid-cols-4">
+        <TabsList className="grid grid-cols-2 sm:grid-cols-5">
           <TabsTrigger value="security">
             <Lock className="w-4 h-4 mr-2" />
             Security
@@ -350,6 +365,10 @@ export default function OperatorSettings() {
           <TabsTrigger value="backup">
             <Database className="w-4 h-4 mr-2" />
             Backup
+          </TabsTrigger>
+          <TabsTrigger value="license">
+            <Key className="w-4 h-4 mr-2" />
+            License
           </TabsTrigger>
         </TabsList>
 
@@ -542,6 +561,20 @@ export default function OperatorSettings() {
                       <Download className="w-4 h-4" /> Export CSV
                     </Button>
                   </div>
+
+                  <div className="flex items-center justify-between p-3 border rounded-lg bg-primary/5 border-primary/20">
+                    <div className="flex items-center gap-3">
+                      <span className="font-medium text-primary">Cloud Sync</span>
+                    </div>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={() => manualCloudRestore()}
+                      className="gap-2"
+                    >
+                      <CloudDownload className="w-4 h-4" /> Restore from Cloud
+                    </Button>
+                  </div>
                 </div>
               </div>
 
@@ -662,7 +695,98 @@ export default function OperatorSettings() {
             </div>
           </div>
         </TabsContent>
+
+        {/* License Tab */}
+        <TabsContent value="license" className="space-y-6">
+          <div className="bg-white rounded-lg border p-6">
+            <h3 className="text-lg font-medium mb-6 flex items-center gap-2">
+              <Key className="w-5 h-5 text-primary" />
+              License Information
+            </h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+              <div className="p-4 bg-gray-50 rounded-xl border flex items-center gap-4">
+                <div className={cn(
+                  "p-3 rounded-full",
+                  licenseStatus === 'valid' ? "bg-emerald-100 text-emerald-600" : "bg-amber-100 text-amber-600"
+                )}>
+                  {licenseStatus === 'valid' ? <ShieldCheck className="w-6 h-6" /> : <ShieldAlert className="w-6 h-6" />}
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Status</p>
+                  <p className="text-lg font-bold capitalize">{licenseStatus === 'valid' ? 'Active' : licenseStatus}</p>
+                </div>
+              </div>
+
+              <div className="p-4 bg-gray-50 rounded-xl border flex items-center gap-4">
+                <div className="p-3 rounded-full bg-blue-100 text-blue-600">
+                  <Info className="w-6 h-6" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">App Version</p>
+                  <p className="text-lg font-bold">v1.3.0 Standard</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              <div className="flex flex-col md:flex-row items-start md:items-center justify-between p-4 bg-primary/5 rounded-lg border border-primary/10 gap-4">
+                <div className="flex flex-col">
+                  <p className="font-bold text-primary">Expiration Details</p>
+                  <p className="text-sm text-muted-foreground">
+                    {licenseExpiryDate
+                      ? new Date(licenseExpiryDate).toLocaleDateString()
+                      : userInfo?.createdAt
+                        ? new Date(new Date(userInfo.createdAt).getTime() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString()
+                        : "No expiration date found"}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-2xl font-black text-primary">
+                    {licenseExpiryDate
+                      ? Math.ceil((new Date(licenseExpiryDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
+                      : userInfo?.createdAt
+                        ? Math.ceil((new Date(new Date(userInfo.createdAt).getTime() + 30 * 24 * 60 * 60 * 1000).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
+                        : "30" // Fallback default
+                    }
+                  </p>
+                  <p className="text-[10px] font-bold uppercase tracking-tight text-muted-foreground">Days Remaining</p>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2 uppercase tracking-wide text-xs text-muted-foreground">License Key</label>
+              <div className="relative">
+                <Input
+                  value={licenseKey || 'No license key found'}
+                  readOnly
+                  className="bg-gray-50 font-mono text-sm pr-10 border-dashed"
+                />
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+                  <Lock className="w-4 h-4" />
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-4 flex justify-end">
+              <Button
+                onClick={() => setShowLicenseModal(true)}
+                variant="outline"
+                className="gap-2 font-bold"
+                disabled={userInfo?.role !== 'admin'}
+                title={userInfo?.role !== 'admin' ? "Only administrators can renew the license" : ""}
+              >
+                <RefreshCw className="w-4 h-4" />
+                Renew License
+              </Button>
+            </div>
+          </div>
+        </TabsContent>
       </Tabs>
+
+      {/* License Modal */}
+      <LicenseModal open={showLicenseModal} onOpenChange={setShowLicenseModal} />
 
       {/* Treatment Form Modal */}
       {showTreatmentForm && (

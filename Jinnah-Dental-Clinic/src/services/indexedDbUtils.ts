@@ -1,5 +1,5 @@
 const DB_NAME = 'ClinicDB';
-const DB_VERSION = 6; // Bumped to 6 to ensure settings store exists for clinic_license
+const DB_VERSION = 11; // Bumped to 11 for purchases store
 const ALL_STORES = [
     // Existing stores
     'bills',
@@ -20,7 +20,9 @@ const ALL_STORES = [
     'staff',
     'attendance',
     'billing',
-    'settings'
+    'settings',
+    'transactions',
+    'purchases'
 ];
 
 // Map of store names to their keyPath configurations
@@ -42,6 +44,8 @@ const STORE_CONFIGS: Record<string, { keyPath: string }> = {
     'attendance': { keyPath: 'id' },
     'billing': { keyPath: 'id' },
     'settings': { keyPath: 'id' },
+    'transactions': { keyPath: 'id' },
+    'purchases': { keyPath: 'id' },
 
     // Special cases
     'users': { keyPath: 'role' } // Based on previous code, users uses 'role' as keyPath
@@ -60,6 +64,7 @@ export const openDB = (): Promise<IDBDatabase> => {
             console.log(`Upgrading database from version ${event.oldVersion} to ${DB_VERSION}`);
             isUpgrading = true;
             const db = (event.target as IDBOpenDBRequest).result;
+            const transaction = (event.target as IDBOpenDBRequest).transaction!;
 
             // For each required store, check if it exists and create if not
             ALL_STORES.forEach(storeName => {
@@ -76,44 +81,28 @@ export const openDB = (): Promise<IDBDatabase> => {
 
             // Optional: Handle migration from old versions
             if (event.oldVersion > 0 && event.oldVersion < DB_VERSION) {
-                handleDatabaseMigration(db, event.oldVersion);
+                handleDatabaseMigration(db, event.oldVersion, transaction);
+            } else if (event.oldVersion === 0) {
+                // New database, ensure indices are created
+                handleDatabaseMigration(db, 0, transaction);
             }
         };
 
         request.onsuccess = (event) => {
-            const db = (event.target as IDBOpenDBRequest).result;
-
-            // Double-check all stores exist (for safety)
-            if (isUpgrading) {
-                const missingStores = ALL_STORES.filter(storeName =>
-                    !db.objectStoreNames.contains(storeName)
-                );
-
-                if (missingStores.length > 0) {
-                    console.warn('Some stores are missing after upgrade:', missingStores);
-                    // Try to create missing stores in a new transaction
-                    const tx = db.transaction([], 'versionchange');
-                    missingStores.forEach(storeName => {
-                        const config = STORE_CONFIGS[storeName] || { keyPath: 'id' };
-                        console.log(`Creating missing store: ${storeName}`);
-                        db.createObjectStore(storeName, { keyPath: config.keyPath });
-                    });
-                    tx.commit?.();
-                }
-            }
-
+            console.log('Database opened successfully');
             isUpgrading = false;
-            resolve(db);
+            resolve((event.target as IDBOpenDBRequest).result);
         };
 
         request.onerror = (event) => {
-            console.error('Error opening IndexedDB:', (event.target as IDBOpenDBRequest).error);
+            console.error('Database error:', (event.target as IDBOpenDBRequest).error);
+            dbPromise = null; // Reset promise on error so we can try again
             reject((event.target as IDBOpenDBRequest).error);
         };
 
-        request.onblocked = () => {
-            console.warn('IndexedDB blocked - waiting for other connections to close');
-            // You could show a message to the user here
+        request.onblocked = (event) => {
+            console.warn('Database blocked: another tab has the database open');
+            // We can't really do much here except wait or alert the user
         };
     });
 
@@ -121,7 +110,7 @@ export const openDB = (): Promise<IDBDatabase> => {
 };
 
 // Helper function to handle database migrations
-function handleDatabaseMigration(db: IDBDatabase, oldVersion: number) {
+function handleDatabaseMigration(db: IDBDatabase, oldVersion: number, transaction: IDBTransaction) {
     console.log(`Migrating from version ${oldVersion} to ${DB_VERSION}`);
 
     // Migration from version 1 to 2, etc.
@@ -162,6 +151,43 @@ function handleDatabaseMigration(db: IDBDatabase, oldVersion: number) {
                 db.createObjectStore(storeName, { keyPath: 'id' });
             }
         });
+    }
+
+    if (oldVersion < 7) {
+        // Add index for transactions if it doesn't exist
+        const storeName = 'transactions';
+        if (db.objectStoreNames.contains(storeName)) {
+            const store = transaction.objectStore(storeName);
+            if (!store.indexNames.contains('staffId')) {
+                console.log(`Creating index 'staffId' for store ${storeName}`);
+                store.createIndex('staffId', 'staffId', { unique: false });
+            }
+        }
+    }
+
+    if (oldVersion < 10) {
+        // Add indexes for inventory prices
+        const storeName = 'inventory';
+        if (db.objectStoreNames.contains(storeName)) {
+            const store = transaction.objectStore(storeName);
+            if (!store.indexNames.contains('buyingPrice')) {
+                console.log(`Creating index 'buyingPrice' for store ${storeName}`);
+                store.createIndex('buyingPrice', 'buyingPrice', { unique: false });
+            }
+            if (!store.indexNames.contains('sellingPrice')) {
+                console.log(`Creating index 'sellingPrice' for store ${storeName}`);
+                store.createIndex('sellingPrice', 'sellingPrice', { unique: false });
+            }
+        }
+    }
+
+    if (oldVersion < 11) {
+        // Create purchases store
+        const storeName = 'purchases';
+        if (!db.objectStoreNames.contains(storeName)) {
+            console.log(`Creating object store: ${storeName}`);
+            db.createObjectStore(storeName, { keyPath: 'id' });
+        }
     }
 }
 
@@ -388,3 +414,37 @@ export async function initializeDatabase(): Promise<void> {
 
 // Export constants for use in other modules
 export { DB_NAME, DB_VERSION, ALL_STORES as STORES };
+
+export async function cleanupCorruptEntries(): Promise<void> {
+    const db = await openDB();
+    const storesToClean = ['expenses', 'purchases', 'sales'];
+
+    for (const storeName of storesToClean) {
+        if (!db.objectStoreNames.contains(storeName)) continue;
+
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+
+        // Use a cursor to find and delete
+        const request = store.openCursor();
+        request.onsuccess = (event: any) => {
+            const cursor = event.target.result;
+            if (cursor) {
+                const item = cursor.value;
+                const isCorruptExpense = storeName === 'expenses' && (!item.title || isNaN(Number(item.amount)));
+                const isCorruptPurchase = storeName === 'purchases' && (!item.name && !item.title || isNaN(Number(item.totalCost || item.amount)));
+
+                if (isCorruptExpense || isCorruptPurchase) {
+                    console.warn(`[DB Cleanup] Deleting corrupt entry in ${storeName}:`, item.id);
+                    cursor.delete();
+                }
+                cursor.continue();
+            }
+        };
+    }
+}
+
+// Automatically trigger cleanup on DB open
+openDB().then(() => {
+    cleanupCorruptEntries().catch(err => console.error("Auto-cleanup failed:", err));
+});

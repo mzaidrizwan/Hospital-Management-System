@@ -9,7 +9,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 
 // Types
-type ExpenseCategory = 'rent' | 'salary' | 'supplies' | 'utilities' | 'equipment' | 'medication' | 'maintenance' | 'other';
+type ExpenseCategory =
+  | 'rent' | 'salary' | 'supplies' | 'utilities' | 'equipment'
+  | 'medication' | 'maintenance' | 'inventory' | 'marketing'
+  | 'insurance' | 'professional_fees' | 'travel' | 'office_supplies'
+  | 'software' | 'other';
 type PaymentMethod = 'cash' | 'card' | 'bank_transfer' | 'cheque' | 'online';
 
 interface Expense {
@@ -41,6 +45,7 @@ const categoryOptions: { value: ExpenseCategory; label: string }[] = [
   { value: 'equipment', label: 'Equipment' },
   { value: 'medication', label: 'Medication' },
   { value: 'maintenance', label: 'Maintenance' },
+  { value: 'inventory', label: 'Inventory' },
   { value: 'other', label: 'Other' }
 ];
 

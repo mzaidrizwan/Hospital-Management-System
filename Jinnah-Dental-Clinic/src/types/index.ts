@@ -2,16 +2,20 @@
 // AUTHENTICATION & USER MANAGEMENT TYPES
 // =============================================
 
-export type UserRole = 'operator' | 'admin' | 'doctor';
-
+// In @/types/index.ts
 export interface User {
   id: string;
-  email: string;
-  name: string;
   role: UserRole;
-  phone?: string;
-  createdAt: string;
+  name: string;
+  // Remove email if not needed, or make it optional
+  email?: string;
+  createdAt?: Date | string;
+  // Add fields that actually exist in your data
+  password?: string;
+  lastUpdated?: number;
 }
+
+export type UserRole = 'admin' | 'doctor' | 'nurse' | 'receptionist' | 'patient' | 'operator';
 
 export interface AuthState {
   isAuthenticated: boolean;
@@ -135,28 +139,28 @@ export interface Bill {
   patientPhone?: string; // Add optional
   queueItemId?: string;
   treatment?: string;
-  
+
   // Financial fields
   fee?: number;
   amountPaid?: number;
   discount?: number;
   tax?: number;
   totalAmount?: number;
-  
+
   // Payment info
   paymentStatus?: 'pending' | 'partial' | 'paid';
   paymentMethod?: string;
-  
+
   // Dates
   createdDate?: string;
   date?: string; // Add if needed
   updatedAt?: string;
-  
+
   // Additional optional fields
   items?: BillItem[];
   subTotal?: number; // Add if needed
   taxRate?: number; // Add if needed
-  
+
   // For filtering/sorting
   doctor?: string;
   status?: string;
@@ -307,6 +311,8 @@ export interface QueueItem {
   cancelledAt?: string;
   createdAt: string;
   updatedAt?: string;
+  lastUpdated?: number;
+  needsSync?: boolean;
 }
 
 export interface FirebaseQueueItem extends Omit<QueueItem, 'id'> {
@@ -388,14 +394,15 @@ export interface ClinicSettings {
 // EXPENSE MANAGEMENT TYPES
 // =============================================
 
-export type ExpenseCategory = 
-  | 'rent' 
-  | 'salary' 
-  | 'supplies' 
-  | 'utilities' 
-  | 'equipment' 
-  | 'medication' 
-  | 'maintenance' 
+export type ExpenseCategory =
+  | 'rent'
+  | 'salary'
+  | 'supplies'
+  | 'utilities'
+  | 'equipment'
+  | 'medication'
+  | 'maintenance'
+  | 'inventory'
   | 'marketing'
   | 'insurance'
   | 'professional_fees'
@@ -449,17 +456,22 @@ export interface Staff {
   id: string;
   name: string;
   role: string;
-  experience: string;
   phone: string;
   joinDate: string;
   status: string;
   salary: number;
   salaryDuration: 'daily' | 'weekly' | 'monthly';
+  salaryType: 'daily' | 'weekly' | 'monthly';
   workingDaysPerWeek: number;
   pendingSalary: number;
   totalPaid: number;
+  totalEarned: number;
   lastSalaryDate?: string;
+  lastPaidDate: string;
   nextSalaryDate?: string;
+  attendance?: Attendance[];
+  attendanceStatus?: string;
+  salaryStatus?: 'Paid' | 'Pending';
 }
 
 export interface SalaryPayment {
@@ -477,6 +489,19 @@ export interface SalaryPayment {
   endDate: string;
 }
 
+export interface Transaction {
+  id: string;
+  staffId: string;
+  staffName: string;
+  amount: number;
+  date: string;
+  type: string;
+  method?: string;
+  notes?: string;
+  expenseId?: string;
+  updatedAt?: string;
+}
+
 export interface Attendance {
   id: string;
   staffId: string;
@@ -489,14 +514,14 @@ export interface Attendance {
 // INVENTORY & SUPPLY MANAGEMENT TYPES
 // =============================================
 
-export type InventoryCategory = 
-  | 'medicine' 
-  | 'disposable' 
-  | 'equipment' 
-  | 'dental_material' 
-  | 'lab_supply' 
-  | 'office_supply' 
-  | 'cleaning' 
+export type InventoryCategory =
+  | 'medicine'
+  | 'disposable'
+  | 'equipment'
+  | 'dental_material'
+  | 'lab_supply'
+  | 'office_supply'
+  | 'cleaning'
   | 'other';
 
 export type UnitType = 'pieces' | 'boxes' | 'packs' | 'bottles' | 'tubes' | 'ml' | 'gm' | 'kg' | 'liters';
@@ -612,8 +637,8 @@ export interface DashboardStats {
   collectionRate: number; // percentage
   patientGrowth: number; // percentage
   revenueGrowth: number; // percentage
-  popularTreatments: Array<{name: string; count: number; revenue: number}>;
-  doctorPerformance: Array<{doctorName: string; patients: number; revenue: number}>;
+  popularTreatments: Array<{ name: string; count: number; revenue: number }>;
+  doctorPerformance: Array<{ doctorName: string; patients: number; revenue: number }>;
   updatedAt: string;
 }
 
@@ -626,12 +651,12 @@ export interface FinancialReport {
     byTreatment: Record<string, number>;
     byDoctor: Record<string, number>;
     byPaymentMethod: Record<PaymentMethod, number>;
-    daily: Array<{date: string; amount: number}>;
+    daily: Array<{ date: string; amount: number }>;
   };
   expenses: {
     total: number;
     byCategory: Record<ExpenseCategory, number>;
-    daily: Array<{date: string; amount: number}>;
+    daily: Array<{ date: string; amount: number }>;
   };
   profit: number;
   profitMargin: number; // percentage
@@ -644,9 +669,9 @@ export interface PatientReport {
   totalPatients: number;
   newPatients: number;
   returningPatients: number;
-  byGender: {male: number; female: number; other: number};
+  byGender: { male: number; female: number; other: number };
   byAgeGroup: Record<string, number>;
-  topTreatments: Array<{treatment: string; count: number}>;
+  topTreatments: Array<{ treatment: string; count: number }>;
   patientRetentionRate: number; // percentage
   averageRevenuePerPatient: number;
 }
@@ -655,12 +680,12 @@ export interface PatientReport {
 // NOTIFICATION & AUDIT TYPES
 // =============================================
 
-export type NotificationType = 
-  | 'appointment_reminder' 
-  | 'payment_received' 
-  | 'inventory_low' 
-  | 'backup_completed' 
-  | 'salary_paid' 
+export type NotificationType =
+  | 'appointment_reminder'
+  | 'payment_received'
+  | 'inventory_low'
+  | 'backup_completed'
+  | 'salary_paid'
   | 'expense_added'
   | 'system_alert';
 
@@ -746,7 +771,7 @@ export interface FormField {
   type: 'text' | 'email' | 'password' | 'number' | 'date' | 'time' | 'select' | 'textarea' | 'checkbox' | 'radio';
   required: boolean;
   placeholder?: string;
-  options?: Array<{value: string; label: string}>;
+  options?: Array<{ value: string; label: string }>;
   validation?: {
     min?: number;
     max?: number;
