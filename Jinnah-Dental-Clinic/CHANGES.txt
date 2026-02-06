@@ -1,3 +1,19 @@
+Open your Firebase Console -> Firestore Database.
+
+Go to the clinicSettings collection.
+
+Find your settings document.
+
+Add a field:
+
+Field name: shutdown
+
+Type: boolean
+
+Value: true
+
+Instantly: Every open app (Admin and Operator) will turn into a dark lock screen. To unlock, simply flip the value to false
+
 remaining:
 change currency from $ to Rs.
 Patient details tab history should be rendered reverse.

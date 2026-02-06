@@ -47,6 +47,7 @@ interface DataContextType {
     licenseDaysLeft: number;
     licenseKey: string | null;
     licenseExpiryDate: string | null;
+    isShutdown: boolean;
     updateLocal: (collectionName: string, data: any) => Promise<any>;
     deleteLocal: (collectionName: string, id: string) => Promise<boolean>;
     addItem: (collectionName: string, item: any) => Promise<any>;
@@ -127,6 +128,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const [licenseDaysLeft, setLicenseDaysLeft] = useState(0);
     const [licenseKey, setLicenseKey] = useState<string | null>(null);
     const [licenseExpiryDate, setLicenseExpiryDate] = useState<string | null>(null);
+    const [isShutdown, setIsShutdown] = useState(false);
 
     const [loading, setLoading] = useState(true);
     const [initialLoadComplete, setInitialLoadComplete] = useState(false);
@@ -159,6 +161,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
         stateSettersRef.current = stateSetterMap;
     }, [stateSetterMap]);
 
+    const checkSubscription = useCallback((settings: any) => {
+        if (!settings?.licenseExpiry) return 0;
+        const expiry = new Date(settings.licenseExpiry);
+        const today = new Date();
+        const diffTime = expiry.getTime() - today.getTime();
+        return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    }, []);
+
     const initializeData = async () => {
         if (initialLoadDone.current) return;
 
@@ -182,10 +192,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 if (!setter) return;
 
                 if (collectionName === 'clinicSettings') {
-                    if (Array.isArray(data) && data.length > 0) {
-                        setter(data[0]);
-                    } else if (!Array.isArray(data) && data) {
-                        setter(data);
+                    const settings = Array.isArray(data) ? data[0] : data;
+                    if (settings) {
+                        setter(settings);
+                        if (settings.shutdown !== undefined) setIsShutdown(!!settings.shutdown);
                     }
                 } else if (collectionName === 'staff') {
                     // Filter out invalid staff members with empty or missing names
@@ -231,12 +241,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     setLicenseKey(licenseData.key || null);
                     setLicenseExpiryDate(licenseData.expiryDate);
 
-                    // Update daysRemaining calculation using requested formula
-                    const days = Math.ceil((new Date(licenseData.expiryDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+                    const days = checkSubscription({ licenseExpiry: licenseData.expiryDate });
                     setLicenseDaysLeft(Math.max(0, days));
                     setLicenseStatus(days > 0 ? 'valid' : 'expired');
                 } else {
-                    // Manually create a default object as requested
                     const defaultExpiryDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
                     const defaultObject = {
                         status: 'active',
@@ -248,7 +256,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     setLicenseKey(defaultObject.licenseKey);
                     setLicenseExpiryDate(defaultObject.expiryDate);
 
-                    const days = Math.ceil((new Date(defaultObject.expiryDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+                    const days = checkSubscription({ licenseExpiry: defaultObject.expiryDate });
                     setLicenseDaysLeft(days);
                     setLicenseStatus('valid');
                 }
@@ -1204,20 +1212,27 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
                 if (JSON.stringify(remoteSettings) === JSON.stringify(localSettings)) return;
 
+                // Always update shutdown state if clinicSettings changed
+                setIsShutdown(!!remoteSettings.shutdown);
+
                 const remoteTimestamp = remoteSettings.lastUpdated || remoteSettings.updatedAt || 0;
                 const localTimestamp = localSettings?.lastUpdated || localSettings?.updatedAt || 0;
 
                 if (!localSettings || remoteTimestamp > localTimestamp) {
                     isSyncingRef.current = true;
                     await saveToLocal(collectionName, remoteSettings);
-                    // This section seems to be an incomplete snippet from the user's instruction.
-                    // Assuming it's part of a switch or if-else for setting state based on collectionName.
-                    // The instruction implies adding 'transactions' to stateSetterMap.
-                    // The original code likely has a stateSetterMap definition elsewhere.
-                    // I will add the 'transactions' case to the stateSetterMap definition.
-                    // The provided snippet is syntactically incorrect as is.
-                    // I will assume the user meant to add this to the stateSetterMap function/object.
-                    // For now, I'll keep the original logic for clinicSettings and assume stateSetterMap handles the rest.
+
+                    // Update React State
+                    setClinicSettings(remoteSettings);
+
+                    // Recalculate Subscription (Point 4)
+                    const days = checkSubscription(remoteSettings);
+                    setLicenseDaysLeft(days);
+                    setLicenseStatus(days > 0 ? 'active' : 'expired');
+
+                    if (remoteSettings.licenseKey) setLicenseKey(remoteSettings.licenseKey);
+                    if (remoteSettings.licenseExpiry) setLicenseExpiryDate(remoteSettings.licenseExpiry);
+
                     setTimeout(() => { isSyncingRef.current = false; }, 100);
                 }
                 return;
@@ -1343,7 +1358,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             inventory, sales, expenses, bills, treatments, clinicSettings,
             transactions, purchases, roles, loading, isOnline,
             licenseStatus, licenseDaysLeft,
-            licenseKey, licenseExpiryDate,
+            licenseKey, licenseExpiryDate, isShutdown,
             updateLocal, deleteLocal, addItem, refreshCollection,
             exportToCSV, exportSalesHistoryToCSV, generateStaffReport, importFromCSV,
             setPatients, setQueue, setAppointments, setStaff, setInventory,

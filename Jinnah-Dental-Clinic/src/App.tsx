@@ -4,7 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
-import { DataProvider } from "@/context/DataContext";
+import { DataProvider, useData } from "@/context/DataContext";
 import { LoginModal } from "@/components/auth/LoginModal";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 
@@ -31,6 +31,24 @@ const queryClient = new QueryClient();
 
 function AuthenticatedApp() {
   const { isAuthenticated, user } = useAuth();
+  const { isShutdown } = useData();
+
+  if (isShutdown) {
+    return (
+      <div className="fixed inset-0 z-[9999] bg-slate-900 flex flex-col items-center justify-center p-6 text-center">
+        <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-md">
+          <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-12 h-12">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+            </svg>
+          </div>
+          <h1 className="text-2xl font-bold text-slate-900 mb-2">System Temporarily Offline</h1>
+          <p className="text-slate-600 mb-6">The application has been locked by the administrator. Please contact support or check back later.</p>
+          <div className="text-xs text-slate-400 font-mono">ERR_SYSTEM_SHUTDOWN_ACTIVE</div>
+        </div>
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return <LoginModal />;
