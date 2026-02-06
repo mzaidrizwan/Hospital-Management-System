@@ -15,6 +15,6 @@ Value: true
 Instantly: Every open app (Admin and Operator) will turn into a dark lock screen. To unlock, simply flip the value to false
 
 remaining:
-change currency from $ to Rs.
 Patient details tab history should be rendered reverse.
+assigned doctor's name should be appeared rather than his id.
 once the license system is verified working correctly then Add feature of temporing-preventation.
