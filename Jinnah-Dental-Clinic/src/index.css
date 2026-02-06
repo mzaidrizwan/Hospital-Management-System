@@ -1,10 +1,10 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /* DentalFlow Design System - Clinical, Professional Healthcare UI */
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
 @layer base {
   :root {
@@ -69,7 +69,7 @@
     /* Status Colors */
     --status-available: 152 69% 40%;
     --status-booked: 38 92% 50%;
-    --status-in-treatment: 187 72% 38%;
+    --status-in_treatment: 187 72% 38%;
     --status-completed: 210 15% 60%;
     --status-waiting: 38 92% 50%;
 
@@ -131,12 +131,18 @@
     font-family: 'Inter', system-ui, sans-serif;
   }
 
-  h1, h2, h3, h4, h5, h6 {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
     @apply font-semibold tracking-tight;
   }
 }
 
 @layer components {
+
   /* Status Badges */
   .status-available {
     @apply bg-success/10 text-success border-success/20;
@@ -146,7 +152,7 @@
     @apply bg-warning/10 text-warning border-warning/20;
   }
 
-  .status-in-treatment {
+  .status-in_treatment {
     @apply bg-primary/10 text-primary border-primary/20;
   }
 
@@ -180,7 +186,7 @@
     @apply bg-warning/5 border-warning/30 text-warning hover:bg-warning/10;
   }
 
-  .calendar-slot-in-treatment {
+  .calendar-slot-in_treatment {
     @apply bg-primary/5 border-primary/30 text-primary hover:bg-primary/10;
   }
 

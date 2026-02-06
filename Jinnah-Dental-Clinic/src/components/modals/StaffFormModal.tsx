@@ -16,7 +16,7 @@ interface StaffFormModalProps {
   isEditing: boolean;
 }
 
-const roles = ['Dentist', 'Orthodontist', 'Endodontist', 'Dental Hygienist', 'Assistant', 'Receptionist', 'Nurse'];
+
 const statuses = ['Active', 'On Leave', 'Inactive'];
 const salaryDurations = [
   { value: 'daily', label: 'Daily' },
@@ -31,6 +31,7 @@ export default function StaffFormModal({
   staff,
   isEditing
 }: StaffFormModalProps) {
+  const { roles } = useData();
   const [formData, setFormData] = useState<Partial<Staff>>({
     name: '',
     role: '',
@@ -218,9 +219,15 @@ export default function StaffFormModal({
                     disabled={isSubmitting}
                   >
                     <option value="">Select Role</option>
-                    {roles.map(role => (
-                      <option key={role} value={role}>{role}</option>
-                    ))}
+                    {roles && roles.length > 0 ? (
+                      roles.map((role: any) => (
+                        <option key={role.id} value={role.title}>
+                          {role.title}
+                        </option>
+                      ))
+                    ) : (
+                      <option disabled>Please add roles in Settings &gt; Clinic Features</option>
+                    )}
                   </select>
                 </div>
 

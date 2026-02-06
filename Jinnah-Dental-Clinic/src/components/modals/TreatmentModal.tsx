@@ -1,25 +1,28 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Save, Plus, Trash, DollarSign, CreditCard, History, User } from 'lucide-react';
+import { X, Save, Plus, Trash, DollarSign, CreditCard, History, User, AlertTriangle, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { QueueItem, Bill, Patient } from '@/types'; // Added Patient type
+import { Staff, QueueItem, Bill, Patient } from '@/types'; // Added Staff type
+import { useData } from '@/context/DataContext';
 import { toast } from 'sonner';
 import { updateQueueItem } from '@/services/queueService';
 
 // IndexedDB Utilities
 import { saveToLocal, openDB } from '@/services/indexedDbUtils';
+import { useAvailableDoctors } from '@/hooks/useAvailableDoctors';
 
 interface TreatmentModalProps {
   open: boolean;
   onClose: () => void;
-  onSubmit: (data: { treatment: string; fee: number; doctor: string }) => void;
+  onSubmit: (data: { treatment: string; fee: number; doctor: string; doctorId?: string }) => void;
   queueItem: QueueItem | null;
-  doctors: string[];
+  doctors: Staff[];
   patientData?: Patient | null; // ADDED: Direct patient data
   patientHistory?: {
     queueHistory: QueueItem[];
@@ -46,16 +49,12 @@ export default function TreatmentModal({
   patientHistory = { queueHistory: [], paymentHistory: [], bills: [] },
   patientInfo = { pendingBalance: 0 }
 }: TreatmentModalProps) {
-  const defaultTreatments = [
-    'Teeth Cleaning',
-    'Root Canal',
-    'Filling',
-    'Extraction',
-    'Braces Adjustment',
-    'Whitening',
-    'Crown Placement',
-    'Scaling & Polishing',
-  ];
+  const { treatments, staff, licenseDaysLeft } = useData();
+  const { presentDoctors } = useAvailableDoctors();
+  const [showAllDoctors, setShowAllDoctors] = useState(false);
+  const effectiveDoctors = showAllDoctors
+    ? staff.filter(s => ['doctor', 'dentist'].includes(s.role?.toLowerCase()))
+    : presentDoctors;
 
   const [selectedTreatments, setSelectedTreatments] = useState<SelectedTreatment[]>([]);
   const [newTreatmentName, setNewTreatmentName] = useState('');
@@ -220,7 +219,71 @@ export default function TreatmentModal({
     setSelectedTreatments(selectedTreatments.filter(t => t.name !== name));
   };
 
+  const handlePrint = () => {
+    // Create a printable invoice with current form data
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      toast.error('Please allow popups to print');
+      return;
+    }
+
+    const doctorName = effectiveDoctors.find(d => d.id === selectedDoctor)?.name || 'Not assigned';
+    const currentDate = new Date().toLocaleDateString('en-PK', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    const printContent = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Treatment Invoice - ${queueItem.patientName}</title>
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
+            .header { text-align: center; border-bottom: 3px solid #2563eb; padding-bottom: 20px; margin-bottom: 30px; }
+            .header h1 { color: #1e40af; font-size: 28px; margin-bottom: 5px; }
+            .section-title { background: #f1f5f9; padding: 10px 15px; font-weight: bold; color: #1e293b; border-left: 4px solid #2563eb; margin-bottom: 15px; }
+            table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+            th { background: #1e40af; color: white; padding: 12px; text-align: left; }
+            td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; }
+            .totals { background: #f8fafc; padding: 20px; border-radius: 8px; margin-top: 20px; }
+            .total-row { display: flex; justify-content: space-between; padding: 8px 0; }
+            .total-row.grand { border-top: 2px solid #2563eb; margin-top: 10px; padding-top: 15px; font-size: 18px; font-weight: bold; color: #1e40af; }
+            @media print { .no-print { display: none; } }
+          </style>
+        </head>
+        <body>
+          <div class="header"><h1>Treatment Invoice</h1><p>Date: ${currentDate}</p></div>
+          <div class="section-title">Patient: ${queueItem.patientName} | Token: #${queueItem.tokenNumber} | Doctor: ${doctorName}</div>
+          <table><thead><tr><th>Treatment</th><th style="text-align: right;">Fee (PKR)</th></tr></thead>
+          <tbody>${selectedTreatments.map(t => `<tr><td>${t.name}</td><td style="text-align: right;">${t.fee.toLocaleString()}</td></tr>`).join('')}</tbody></table>
+          <div class="totals">
+            <div class="total-row"><span>Previous Pending:</span><span>PKR ${paymentBreakdown.currentPending.toLocaleString()}</span></div>
+            <div class="total-row"><span>Current Treatment:</span><span>PKR ${actualTotal.toLocaleString()}</span></div>
+            ${discount > 0 ? `<div class="total-row" style="color: #16a34a;"><span>Discount:</span><span>- PKR ${discount.toLocaleString()}</span></div>` : ''}
+            <div class="total-row grand"><span>Total Due:</span><span>PKR ${(parseFloat(manualTotal) || 0).toLocaleString()}</span></div>
+          </div>
+          <div class="no-print" style="text-align: center; margin-top: 30px;">
+            <button onclick="window.print()" style="background: #2563eb; color: white; border: none; padding: 12px 30px; border-radius: 6px; cursor: pointer; margin-right: 10px;">Print</button>
+            <button onclick="window.close()" style="background: #64748b; color: white; border: none; padding: 12px 30px; border-radius: 6px; cursor: pointer;">Close</button>
+          </div>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.write(printContent);
+    printWindow.document.close();
+    toast.success('Print preview opened');
+  };
+
   const handleSubmit = async () => {
+    if (licenseDaysLeft <= 0) {
+      toast.error("License Expired. Please renew to process treatments.");
+      return;
+    }
+
     if (selectedTreatments.length === 0) {
       toast.error('At least one treatment is required');
       return;
@@ -247,10 +310,12 @@ export default function TreatmentModal({
       const manual = parseFloat(manualTotal);
       const effectiveFee = manual - paymentBreakdown.currentPending;
 
+      const assignedDoctor = effectiveDoctors.find(d => d.id === selectedDoctor);
       const data = {
         treatment: treatmentString,
         fee: effectiveFee,
-        doctor: selectedDoctor
+        doctor: assignedDoctor?.name || selectedDoctor,
+        doctorId: selectedDoctor
       };
 
       // Save to IndexedDB first
@@ -282,9 +347,10 @@ export default function TreatmentModal({
   };
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat('en-PK', {
       style: 'currency',
-      currency: 'USD'
+      currency: 'PKR',
+      minimumFractionDigits: 0
     }).format(amount);
   };
 
@@ -375,13 +441,21 @@ export default function TreatmentModal({
             </Label>
             <div className="flex flex-col sm:flex-row gap-3">
               <div className="flex-1">
-                <Select onValueChange={setNewTreatmentName} value={newTreatmentName}>
+                <Select onValueChange={(val) => {
+                  const selected = treatments.find(t => t.id === val);
+                  if (selected) {
+                    setNewTreatmentName(selected.name);
+                    setNewTreatmentFee(selected.fee.toString());
+                  }
+                }}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Select or type..." />
+                    <SelectValue placeholder="Select treatment..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {defaultTreatments.map(t => (
-                      <SelectItem key={t} value={t}>{t}</SelectItem>
+                    {treatments.map(t => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name} - Rs {t.fee}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -516,17 +590,37 @@ export default function TreatmentModal({
 
           {/* Doctor Selection */}
           <div>
-            <Label className="flex items-center gap-2 mb-2">
-              <User className="w-4 h-4" />
-              Assign Doctor
-            </Label>
+            <div className="flex items-center justify-between mb-2">
+              <Label className="flex items-center gap-2">
+                <User className="w-4 h-4" />
+                Assign Doctor
+              </Label>
+              <div className="flex items-center space-x-2">
+                <Label htmlFor="show-all" className="text-xs text-muted-foreground cursor-pointer">Show All</Label>
+                <Switch id="show-all" checked={showAllDoctors} onCheckedChange={setShowAllDoctors} />
+              </div>
+            </div>
+
+            {presentDoctors.length === 0 && !showAllDoctors && (
+              <div className="flex items-center gap-2 p-3 mb-3 bg-yellow-50 text-yellow-800 rounded-md border border-yellow-200 text-sm">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>No doctors marked as &apos;Present&apos; today. Please check Staff/Attendance or enable &quot;Show All&quot;.</span>
+              </div>
+            )}
+
             <Select onValueChange={setSelectedDoctor} value={selectedDoctor} disabled={isSubmitting}>
               <SelectTrigger>
-                <SelectValue placeholder="Select doctor" />
+                <SelectValue>
+                  {selectedDoctor && staff.length > 0
+                    ? (staff.find(s => String(s.id) === String(selectedDoctor))?.name || "Select doctor...")
+                    : "Select doctor..."}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {doctors.map(d => (
-                  <SelectItem key={d} value={d}>{d}</SelectItem>
+                {effectiveDoctors.map(d => (
+                  <SelectItem key={d.id} value={d.id}>
+                    {d.name} {d.role ? `(${d.role})` : ''}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -535,9 +629,10 @@ export default function TreatmentModal({
           {/* Buttons */}
           <div className="flex justify-end gap-3 pt-4 border-t">
             <Button variant="outline" onClick={onClose} disabled={isSubmitting}>Cancel</Button>
+
             <Button
               onClick={handleSubmit}
-              disabled={selectedTreatments.length === 0 || !manualTotal || !selectedDoctor || isSubmitting}
+              disabled={selectedTreatments.length === 0 || !manualTotal || !selectedDoctor || isSubmitting || licenseDaysLeft <= 0}
               className="gap-2 bg-green-600 hover:bg-green-700"
             >
               {isSubmitting ? (

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clinic License Generator</title>
+    <style>
+        body { font-family: sans-serif; display: flex; justify-content: center; padding: 50px; background: #f4f7f6; }
+        .card { background: white; padding: 30px; border-radius: 12px; shadow: 0 4px 6px rgba(0,0,0,0.1); width: 400px; }
+        input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 6px; }
+        button { width: 100%; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; }
+        #result { margin-top: 20px; padding: 15px; background: #e0f2fe; border-radius: 6px; font-weight: bold; text-align: center; display: none; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>License Generator</h2>
+        <label>Clinic Name:</label>
+        <input type="text" id="clinicName" placeholder="Enter exact clinic name">
+        <button onclick="generateKey()">Generate 30-Day Key</button>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        async function generateKey() {
+            const clinic = document.getElementById('clinicName').value.toLowerCase().trim();
+            const salt = "import{useData}from'@/context/DataContext';";
+            const date = new Date();
+            const dataString = `${clinic}-${date.getFullYear()}-${date.getMonth() + 1}-${salt}`;
+
+            const msgBuffer = new TextEncoder().encode(dataString);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const fullHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            
+            const key = fullHash.substring(0, 8).toUpperCase();
+            const display = document.getElementById('result');
+            display.style.display = 'block';
+            display.innerText = "LICENSE KEY: " + key;
+        }
+    </script>
+</body>
+</html>

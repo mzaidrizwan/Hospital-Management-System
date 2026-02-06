@@ -13,6 +13,30 @@ import { saveToLocal, getFromLocal, deleteFromLocal } from '@/services/indexedDb
 import { toast } from 'sonner';
 
 /**
+ * sanitizeData
+ * Removes any 'undefined' values from an object, as Firestore does not support them.
+ * Recursively cleans nested objects and arrays.
+ */
+const sanitizeData = (data: any): any => {
+  if (data === null || typeof data !== 'object') {
+    return data;
+  }
+
+  if (Array.isArray(data)) {
+    return data.map(item => sanitizeData(item));
+  }
+
+  const sanitized: any = {};
+  Object.keys(data).forEach(key => {
+    const value = data[key];
+    if (value !== undefined) {
+      sanitized[key] = sanitizeData(value);
+    }
+  });
+  return sanitized;
+};
+
+/**
  * smartSync
  * Saves data locally immediately, then attempts to sync to Firebase.
  * If offline, adds to a sync queue for future reconciliation.
@@ -40,7 +64,7 @@ export const smartSync = async (collectionName: string, data: any) => {
   // 3. Attempt Firebase Sync
   try {
     const docRef = doc(db, collectionName, docId);
-    await setDoc(docRef, enrichedData);
+    await setDoc(docRef, sanitizeData(enrichedData));
     await deleteFromLocal('syncQueue', `${collectionName}_${docId}`).catch(() => { });
   } catch (err: any) {
     // 4. Handle Offline/Connectivity failure
@@ -143,7 +167,8 @@ export const processSyncQueue = async () => {
 
           if (localData) {
             const docRef = doc(db, collectionName, docId);
-            await setDoc(docRef, { ...localData, needsSync: false });
+            const sanitizedData = sanitizeData({ ...localData, needsSync: false });
+            await setDoc(docRef, sanitizedData);
             await saveToLocal(collectionName, { ...localData, needsSync: false });
             await deleteFromLocal('syncQueue', task.id);
           } else {

@@ -89,6 +89,11 @@ export default function OperatorInventory() {
     const handleConfirmSale = async () => {
         if (!selectedItemForSale) return;
 
+        if (isLicenseExpired) {
+            toast.error("License Expired. Please renew to process sales.");
+            return;
+        }
+
         const quantityToSell = parseInt(saleQuantity.toString()) || 1;
         const currentItem = { ...selectedItemForSale };
 
@@ -144,6 +149,9 @@ export default function OperatorInventory() {
         }
     };
 
+    const { licenseDaysLeft } = useData();
+    const isLicenseExpired = licenseDaysLeft <= 0;
+
     if (dataLoading) return <LoadingSpinner message="Loading inventory..." />;
 
     return (
@@ -156,7 +164,7 @@ export default function OperatorInventory() {
                     </div>
                     <p className="text-muted-foreground font-medium">Manage stock and track usage</p>
                 </div>
-                <Button onClick={() => setIsAddDialogOpen(true)} className="gap-2 font-bold shadow-lg shadow-primary/20 h-11 px-6">
+                <Button onClick={() => setIsAddDialogOpen(true)} disabled={isLicenseExpired} className="gap-2 font-bold shadow-lg shadow-primary/20 h-11 px-6">
                     <PackagePlus className="w-5 h-5" />
                     Add New Stock
                 </Button>
@@ -227,7 +235,7 @@ export default function OperatorInventory() {
                                                     size="sm"
                                                     className="text-primary hover:text-primary hover:bg-primary/10 font-bold gap-1.5"
                                                     onClick={() => handleSellItem(item)}
-                                                    disabled={item.quantity <= 0}
+                                                    disabled={item.quantity <= 0 || isLicenseExpired}
                                                 >
                                                     <Receipt className="w-4 h-4" />
                                                     Sell
@@ -380,7 +388,7 @@ export default function OperatorInventory() {
                                 <Button
                                     onClick={handleConfirmSale}
                                     className="font-bold px-8 shadow-md"
-                                    disabled={isProcessingSale || saleQuantity <= 0 || saleQuantity > selectedItemForSale.quantity}
+                                    disabled={isProcessingSale || saleQuantity <= 0 || saleQuantity > selectedItemForSale.quantity || isLicenseExpired}
                                 >
                                     {isProcessingSale ? (
                                         <>

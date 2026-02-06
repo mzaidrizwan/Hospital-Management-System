@@ -13,19 +13,26 @@ import PatientDetailsModal from '@/components/modals/PatientDetailsModal';
 import TreatmentModal from '@/components/modals/TreatmentModal';
 import { startOfDay, endOfDay, parseISO, format } from 'date-fns';
 import { useData } from '@/context/DataContext';
+import { useAvailableDoctors } from '@/hooks/useAvailableDoctors';
 
-const doctors = ['Dr. Smith', 'Dr. Johnson', 'Dr. Wilson', 'Dr. Brown', 'Dr. Taylor'];
+// const doctors = ['Dr. Smith', 'Dr. Johnson', 'Dr. Wilson', 'Dr. Brown', 'Dr. Taylor'];
 
 export default function OperatorQueue() {
-  const { 
-    queue: contextQueue, 
-    patients: contextPatients, 
-    bills: contextBills, 
-    updateLocal, 
-    deleteLocal, 
+  const {
+    queue: contextQueue,
+    patients: contextPatients,
+    bills: contextBills,
+    updateLocal,
+    deleteLocal,
     loading: contextLoading,
-    updateQueueItemOptimistic 
+    updateQueueItemOptimistic,
+    licenseDaysLeft
   } = useData();
+
+  const isLicenseExpired = licenseDaysLeft <= 0;
+
+  const { presentDoctors } = useAvailableDoctors();
+  const availableDoctors = presentDoctors;
 
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDoctor, setSelectedDoctor] = useState('all');
@@ -42,6 +49,7 @@ export default function OperatorQueue() {
   const [modalMode, setModalMode] = useState<'patient' | 'walk-in'>('walk-in');
   const [selectedPatientData, setSelectedPatientData] = useState<any>(null);
   const [selectedQueueItemForTreatment, setSelectedQueueItemForTreatment] = useState<any>(null);
+  const [selectedPatientForPrint, setSelectedPatientForPrint] = useState<QueueItem | null>(null);
 
   const queueData = React.useMemo(() => {
     if (!contextQueue) return [];
@@ -110,6 +118,19 @@ export default function OperatorQueue() {
     } catch (error) {
       console.error('Error opening payment modal:', error);
       toast.error('Failed to load payment details');
+    }
+  };
+
+  const handlePrintPatient = (queueItem: QueueItem) => {
+    try {
+      const patientData = getPatientDataForQueueItem(queueItem);
+      setSelectedPatientForPrint(queueItem);
+      setSelectedPatientData(patientData);
+      setShowTreatmentModal(true);
+      setSelectedQueueItemForTreatment(queueItem);
+    } catch (error) {
+      console.error('Error opening print modal:', error);
+      toast.error('Failed to load patient data for printing');
     }
   };
 
@@ -189,7 +210,7 @@ export default function OperatorQueue() {
       clearTimeout(timeoutId);
       toast.dismiss(toastId);
       toast.error('Failed to process payment');
-      
+
       // Show alert for database errors
       if (typeof window !== 'undefined' && error instanceof Error) {
         window.alert(`Database Error: ${error.message}`);
@@ -204,10 +225,15 @@ export default function OperatorQueue() {
       toast.dismiss(toastId);
       console.warn('TOAST GUARD: Forced walk-in toast dismissal after 4 seconds');
     }, 4000);
-    
+
     try {
       const patientId = patientData.id;
       const isEditing = patientData.isEditing;
+
+      if (isLicenseExpired && !isEditing) {
+        toast.error("License Expired. Please renew to add new patients to queue.");
+        return;
+      }
 
       if (isEditing) {
         clearTimeout(timeoutId);
@@ -258,7 +284,7 @@ export default function OperatorQueue() {
       clearTimeout(timeoutId);
       toast.dismiss(toastId);
       toast.error('Failed to add to queue');
-      
+
       // Show alert for database errors
       if (typeof window !== 'undefined' && error instanceof Error) {
         window.alert(`Database Error: ${error.message}`);
@@ -305,103 +331,76 @@ export default function OperatorQueue() {
   };
 
   const handleQueueAction = async (item: QueueItem, action: string) => {
-    const toastId = toast.loading('Updating queue...');
-    // GLOBAL TOAST GUARD: Force dismiss after 4 seconds
-    const timeoutId = setTimeout(() => {
-      toast.dismiss(toastId);
-      console.warn('TOAST GUARD: Forced queue action toast dismissal after 4 seconds');
-    }, 4000);
-    
     try {
-        const now = new Date().toISOString();
-        let updateData: Partial<QueueItem> = {};
+      const now = new Date().toISOString();
+      let updateData: Partial<QueueItem> = {};
 
-        if (action === 'start-treatment') {
-            updateData = {
-                status: 'in_treatment' as const,
-                treatmentStartTime: now
-            };
-            speakAnnouncement(item.tokenNumber);
-        } else if (action === 'complete') {
-            const patientData = getPatientDataForQueueItem(item);
-            if (patientData) {
-                clearTimeout(timeoutId);
-                toast.dismiss(toastId);
-                setSelectedPatientData(patientData);
-                setSelectedQueueItemForTreatment(item);
-                setShowTreatmentModal(true);
-                return;
-            }
-        } else if (action === 'back-to-waiting') {
-            updateData = {
-                status: 'waiting' as const,
-                treatmentStartTime: null,
-                treatment: '',
-                fee: 0,
-                doctor: ''
-            };
-        } else if (action === 'back-to-treatment') {
-            updateData = {
-                status: 'in_treatment' as const,
-                treatmentEndTime: null
-            };
-        } else if (action === 'cancel') {
-            const reason = prompt('Cancellation reason:') || 'Patient request';
-            updateData = {
-                status: 'cancelled' as const,
-                cancelledAt: now,
-                notes: `${item.notes || ''}\nCancelled: ${reason}`
-            };
-        } else if (action === 'edit') {
-            const patient = patients.find(pt => pt.patientNumber === item.patientNumber);
-            if (patient) {
-                clearTimeout(timeoutId);
-                toast.dismiss(toastId);
-                setSelectedPatient(patient);
-                setModalMode('walk-in');
-                setShowPatientModal(true);
-            } else {
-                clearTimeout(timeoutId);
-                toast.dismiss(toastId);
-                toast.error('Patient record not found');
-            }
-            return;
-        } else if (action === 'delete') {
-            if (confirm(`Remove ${item.patientName} from queue?`)) {
-                await deleteLocal('queue', item.id);
-                clearTimeout(timeoutId);
-                toast.dismiss(toastId);
-                toast.success(`Removed ${item.patientName} from queue`);
-            } else {
-                clearTimeout(timeoutId);
-                toast.dismiss(toastId);
-            }
-            return;
+      if (action === 'start-treatment') {
+        updateData = {
+          status: 'in_treatment' as const,
+          treatmentStartTime: now
+        };
+        speakAnnouncement(item.tokenNumber);
+      } else if (action === 'complete') {
+        const patientData = getPatientDataForQueueItem(item);
+        if (patientData) {
+          setSelectedPatientData(patientData);
+          setSelectedQueueItemForTreatment(item);
+          setShowTreatmentModal(true);
+          return;
         }
+      } else if (action === 'back-to-waiting') {
+        updateData = {
+          status: 'waiting' as const,
+          treatmentStartTime: null,
+          treatment: '',
+          fee: 0,
+          doctor: ''
+        };
+      } else if (action === 'back-to-treatment') {
+        updateData = {
+          status: 'in_treatment' as const,
+          treatmentEndTime: null
+        };
+      } else if (action === 'cancel') {
+        const reason = prompt('Cancellation reason:') || 'Patient request';
+        updateData = {
+          status: 'cancelled' as const,
+          cancelledAt: now,
+          notes: `${item.notes || ''}\nCancelled: ${reason}`
+        };
+      } else if (action === 'edit') {
+        const patient = patients.find(pt => pt.patientNumber === item.patientNumber);
+        if (patient) {
+          setSelectedPatient(patient);
+          setModalMode('walk-in');
+          setShowPatientModal(true);
+        } else {
+          toast.error('Patient record not found');
+        }
+        return;
+      } else if (action === 'delete') {
+        if (confirm(`Remove ${item.patientName} from queue?`)) {
+          await deleteLocal('queue', item.id);
+          toast.success(`Removed ${item.patientName} from queue`);
+        }
+        return;
+      }
 
-        if (Object.keys(updateData).length > 0) {
-            // FIX: Use optimistic update function for immediate UI feedback
-            // IMPORTANT: Don't await - let it run in background
-            updateQueueItemOptimistic(item.id, updateData);
-            
-            // CRITICAL: Dismiss toast IMMEDIATELY after state update
-            clearTimeout(timeoutId);
-            toast.dismiss(toastId);
-            
-            // Show success toast immediately
-            toast.success('Queue updated successfully!', { duration: 2000 });
-        }
+      if (Object.keys(updateData).length > 0) {
+        // FIX: Use optimistic update function for immediate UI feedback
+        // IMPORTANT: Don't await - let it run in background
+        updateQueueItemOptimistic(item.id, updateData);
+      }
 
     } catch (error) {
-        console.error('Queue action error:', error);
-        clearTimeout(timeoutId);
-        toast.dismiss(toastId);
-        toast.error('Failed to update queue');
-        
-        // Show alert for database errors
-        if (typeof window !== 'undefined' && error instanceof Error) {
-            window.alert(`Database Error: ${error.message}`);
-        }
+      console.error('Queue action error:', error);
+      toast.error('Failed to update queue');
+
+      // Show alert for database errors
+      if (typeof window !== 'undefined' && error instanceof Error) {
+        window.alert(`Database Error: ${error.message}`);
+      }
     }
   };
 
@@ -426,75 +425,68 @@ export default function OperatorQueue() {
     treatment: string;
     fee: number;
     doctor: string;
-}) => {
+    doctorId?: string;
+  }) => {
     if (!selectedQueueItemForTreatment || !selectedPatientData) return;
 
-    const toastId = toast.loading('Completing treatment...');
-    // GLOBAL TOAST GUARD
-    const timeoutId = setTimeout(() => {
-        toast.dismiss(toastId);
-        console.warn('TOAST GUARD: Forced treatment toast dismissal after 4 seconds');
-    }, 4000);
+    if (isLicenseExpired) {
+      toast.error("License Expired. Please renew to complete treatments.");
+      return;
+    }
 
     try {
-        const now = new Date().toISOString();
+      const now = new Date().toISOString();
 
-        const updateData = {
-            status: 'completed' as const,
-            treatmentEndTime: now,
-            treatment: data.treatment,
-            fee: data.fee,
-            doctor: data.doctor
-        };
+      const updateData = {
+        status: 'completed' as const,
+        treatmentEndTime: now,
+        treatment: data.treatment,
+        fee: data.fee,
+        doctor: data.doctor,
+        doctorId: data.doctorId
+      };
 
-        // FIX: Use optimistic update for immediate UI feedback
-        // Don't await - just trigger it
-        updateQueueItemOptimistic(selectedQueueItemForTreatment.id, updateData);
+      // FIX: Use optimistic update for immediate UI feedback
+      // Don't await - just trigger it
+      updateQueueItemOptimistic(selectedQueueItemForTreatment.id, updateData);
 
-        const newPendingBalance = (selectedPatientData.pendingBalance || 0) + data.fee;
-        const newTotalVisits = (selectedPatientData.totalVisits || 0) + 1;
+      const newPendingBalance = (selectedPatientData.pendingBalance || 0) + data.fee;
+      const newTotalVisits = (selectedPatientData.totalVisits || 0) + 1;
 
-        const updatedPatient = {
-            ...selectedPatientData,
-            pendingBalance: newPendingBalance,
-            totalVisits: newTotalVisits,
-            lastVisit: now
-        };
-        
-        // Update patient data - also don't await
-        updateLocal('patients', updatedPatient);
+      const updatedPatient = {
+        ...selectedPatientData,
+        pendingBalance: newPendingBalance,
+        totalVisits: newTotalVisits,
+        lastVisit: now
+      };
 
-        // Dismiss toast immediately
-        clearTimeout(timeoutId);
-        toast.dismiss(toastId);
-        toast.success(`Treatment completed for ${selectedQueueItemForTreatment.patientName}`);
+      // Update patient data - also don't await
+      updateLocal('patients', updatedPatient);
 
-        // Trigger payment modal for receipt generation
-        setTimeout(() => {
-            const patientBills = contextBills.filter(b => b.patientId === updatedPatient.id);
-            setShowPaymentModal({
-                queueItem: { ...selectedQueueItemForTreatment, ...updateData },
-                patientData: updatedPatient,
-                patientBills
-            });
-        }, 800);
+      // Trigger payment modal for receipt generation
+      setTimeout(() => {
+        const patientBills = contextBills.filter(b => b.patientId === updatedPatient.id);
+        setShowPaymentModal({
+          queueItem: { ...selectedQueueItemForTreatment, ...updateData },
+          patientData: updatedPatient,
+          patientBills
+        });
+      }, 800);
 
-        setShowTreatmentModal(false);
-        setSelectedQueueItemForTreatment(null);
-        setSelectedPatientData(null);
+      setShowTreatmentModal(false);
+      setSelectedQueueItemForTreatment(null);
+      setSelectedPatientData(null);
 
     } catch (error) {
-        console.error('Error completing treatment:', error);
-        clearTimeout(timeoutId);
-        toast.dismiss(toastId);
-        toast.error('Failed to complete treatment');
-        
-        // Show alert for database errors
-        if (typeof window !== 'undefined' && error instanceof Error) {
-            window.alert(`Database Error: ${error.message}`);
-        }
+      console.error('Error completing treatment:', error);
+      toast.error('Failed to complete treatment');
+
+      // Show alert for database errors
+      if (typeof window !== 'undefined' && error instanceof Error) {
+        window.alert(`Database Error: ${error.message}`);
+      }
     }
-};
+  };
 
   const handleOpenTreatmentModal = async (item: QueueItem) => {
     try {
@@ -544,7 +536,7 @@ export default function OperatorQueue() {
               setShowPatientModal(true);
             }}
             className="gap-2 bg-green-600 hover:bg-green-700"
-            disabled={loading.queue || loading.patients}
+            disabled={loading.queue || loading.patients || isLicenseExpired}
           >
             <Users className="w-4 h-4" />
             Walk-in Patient
@@ -652,8 +644,8 @@ export default function OperatorQueue() {
             className="px-3 py-2 border rounded-lg"
           >
             <option value="all">All Doctors</option>
-            {doctors.map(doctor => (
-              <option key={doctor} value={doctor}>{doctor}</option>
+            {availableDoctors.map(doctor => (
+              <option key={doctor.id} value={doctor.id}>{doctor.name}</option>
             ))}
           </select>
         </div>
@@ -672,6 +664,7 @@ export default function OperatorQueue() {
             status="waiting"
             onAction={handleQueueAction}
             onPayment={handleOpenPaymentModal}
+            onPrint={handlePrintPatient}
             onDoubleClick={handleOpenPatientDetails}
             showPatientId={true}
           />
@@ -681,6 +674,7 @@ export default function OperatorQueue() {
             status="in_treatment"
             onAction={handleQueueAction}
             onPayment={handleOpenPaymentModal}
+            onPrint={handlePrintPatient}
             onDoubleClick={handleOpenPatientDetails}
             showBackButton={true}
             showPatientId={true}
@@ -691,6 +685,7 @@ export default function OperatorQueue() {
             status="completed"
             onAction={handleQueueAction}
             onPayment={handleOpenPaymentModal}
+            onPrint={handlePrintPatient}
             onDoubleClick={handleOpenPatientDetails}
             showBackButton={true}
             showPatientId={true}
@@ -704,7 +699,7 @@ export default function OperatorQueue() {
         onSubmit={modalMode === 'walk-in' ? handleWalkInPatient : handleSavePatient}
         patient={selectedPatient}
         isEditing={!!selectedPatient}
-        doctors={doctors}
+        // doctors={availableDoctors} // Prop not supported in PatientFormModal
         mode={modalMode}
         existingPatients={patients}
         title={modalMode === 'walk-in'
@@ -733,7 +728,7 @@ export default function OperatorQueue() {
           }}
           onSubmit={handleTreatmentSubmit}
           queueItem={selectedQueueItemForTreatment}
-          doctors={doctors}
+          doctors={availableDoctors}
           patientData={selectedPatientData}
           patientHistory={{
             queueHistory: [],

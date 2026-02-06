@@ -49,6 +49,7 @@ const operatorItems = [
 
 const adminItems = [
   { title: 'Dashboard', url: '/admin', icon: Home },
+  { title: 'Bill', url: '/admin/bill', icon: ClipboardList },
   { title: 'Analytics', url: '/admin/analytics', icon: BarChart3 },
   // { title: 'Patients', url: '/admin/patients', icon: Users },
   { title: 'Patients details', url: '/operator/patients', icon: Users },
@@ -103,28 +104,33 @@ export function AppSidebar() {
           )}
           <SidebarGroupContent>
             <SidebarMenu>
-              {items.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={isActive(item.url)}
-                    tooltip={item.title}
-                  >
-                    <NavLink
-                      to={item.url}
-                      className={cn(
-                        "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors",
-                        isActive(item.url)
-                          ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                          : "text-sidebar-foreground hover:bg-sidebar-accent/50"
-                      )}
+              {items.map((item) => {
+                // Conditionally hide 'Bill' and 'Inventory' for admins
+                if ((item.title === 'Bill' || item.title === 'Inventory') && user?.role === 'admin') return null;
+
+                return (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={isActive(item.url)}
+                      tooltip={item.title}
                     >
-                      <item.icon className="w-5 h-5 shrink-0" />
-                      {!collapsed && <span>{item.title}</span>}
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+                      <NavLink
+                        to={item.url}
+                        className={cn(
+                          "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors",
+                          isActive(item.url)
+                            ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+                            : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                        )}
+                      >
+                        <item.icon className="w-5 h-5 shrink-0" />
+                        {!collapsed && <span>{item.title}</span>}
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

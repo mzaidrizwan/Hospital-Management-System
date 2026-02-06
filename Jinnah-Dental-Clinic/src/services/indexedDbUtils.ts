@@ -1,5 +1,5 @@
 const DB_NAME = 'ClinicDB';
-const DB_VERSION = 11; // Bumped to 11 for purchases store
+const DB_VERSION = 12; // Bumped to 12 for roles store
 const ALL_STORES = [
     // Existing stores
     'bills',
@@ -22,7 +22,8 @@ const ALL_STORES = [
     'billing',
     'settings',
     'transactions',
-    'purchases'
+    'purchases',
+    'roles'
 ];
 
 // Map of store names to their keyPath configurations
@@ -46,6 +47,7 @@ const STORE_CONFIGS: Record<string, { keyPath: string }> = {
     'settings': { keyPath: 'id' },
     'transactions': { keyPath: 'id' },
     'purchases': { keyPath: 'id' },
+    'roles': { keyPath: 'id' },
 
     // Special cases
     'users': { keyPath: 'role' } // Based on previous code, users uses 'role' as keyPath
@@ -184,6 +186,15 @@ function handleDatabaseMigration(db: IDBDatabase, oldVersion: number, transactio
     if (oldVersion < 11) {
         // Create purchases store
         const storeName = 'purchases';
+        if (!db.objectStoreNames.contains(storeName)) {
+            console.log(`Creating object store: ${storeName}`);
+            db.createObjectStore(storeName, { keyPath: 'id' });
+        }
+    }
+
+    if (oldVersion < 12) {
+        // Create roles store
+        const storeName = 'roles';
         if (!db.objectStoreNames.contains(storeName)) {
             console.log(`Creating object store: ${storeName}`);
             db.createObjectStore(storeName, { keyPath: 'id' });

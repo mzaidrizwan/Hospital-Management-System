@@ -21,7 +21,7 @@ interface InventoryFormModalProps {
 const categories = ['Materials', 'Supplies', 'Anesthetics', 'Instruments', 'Equipment', 'Medications'];
 
 export function InventoryFormModal({ open, onOpenChange, editingItem }: InventoryFormModalProps) {
-    const { setInventory, isOnline, addItem } = useData();
+    const { setInventory, isOnline, addItem, licenseDaysLeft } = useData();
     const [item, setItem] = useState({
         name: '',
         sku: '',
@@ -60,6 +60,11 @@ export function InventoryFormModal({ open, onOpenChange, editingItem }: Inventor
 
         if (!item.name || !item.sku) {
             toast.error("Name and SKU are required.");
+            return;
+        }
+
+        if (licenseDaysLeft <= 0) {
+            toast.error("License Expired. Please renew to add/edit items.");
             return;
         }
 
@@ -183,7 +188,7 @@ export function InventoryFormModal({ open, onOpenChange, editingItem }: Inventor
 
                     <DialogFooter className="pt-4">
                         <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} className="font-bold">Cancel</Button>
-                        <Button type="submit" className="font-bold px-8 shadow-md">
+                        <Button type="submit" disabled={licenseDaysLeft <= 0} className="font-bold px-8 shadow-md">
                             {editingItem ? 'Save Changes' : 'Add Item'}
                         </Button>
                     </DialogFooter>

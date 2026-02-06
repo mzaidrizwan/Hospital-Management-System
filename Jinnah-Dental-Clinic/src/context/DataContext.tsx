@@ -8,7 +8,7 @@ import { processSyncQueue, smartSync } from '@/services/syncService';
 import { useConnectionStatus } from '@/hooks/useConnectionStatus';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { InventoryFormModal } from '@/components/modals/InventoryFormModal';
-import { validateLicenseKey } from '@/services/licenseService';
+import { validateLicenseKey, validateLicense } from '@/services/licenseService';
 import { calculateRemainingDays } from '@/hooks/useLicenseStatus';
 import {
     Patient,
@@ -40,6 +40,7 @@ interface DataContextType {
     clinicSettings: any;
     transactions: any[];
     purchases: any[];
+    roles: any[];
     loading: boolean;
     isOnline: boolean;
     licenseStatus: 'valid' | 'expired' | 'missing' | 'checking';
@@ -67,12 +68,20 @@ interface DataContextType {
     setAttendance: React.Dispatch<React.SetStateAction<Attendance[]>>;
     setSalaryPayments: React.Dispatch<React.SetStateAction<SalaryPayment[]>>;
     setPurchases: React.Dispatch<React.SetStateAction<any[]>>;
+    setRoles: React.Dispatch<React.SetStateAction<any[]>>;
+    updateAttendance: (record: Attendance) => Promise<Attendance>;
+    updatePatientStatus: (patientId: string, status: string, additionalData?: Partial<Patient>) => Promise<Patient>;
+    handleMovePatient: (patientId: string, action: 'start' | 'complete' | 'back', currentStatus: string) => Promise<Patient>;
     // NEW: Optimistic update function for queue
     updateQueueItemOptimistic: (itemId: string, updates: Partial<QueueItem>) => Promise<QueueItem>;
     fetchFullCloudBackup: () => Promise<any>;
     restoreLocalFromCloud: () => Promise<void>;
     fetchDataFromFirebase: () => Promise<any>;
     manualCloudRestore: () => Promise<void>;
+    clearDataStore: (collectionName: string) => Promise<void>;
+    exportToJSON: (collectionName: string) => void;
+    importFromJSON: (file: File, collectionName: string) => Promise<void>;
+    activateLicense: (inputKey: string) => Promise<boolean>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -92,7 +101,8 @@ const COLLECTIONS = [
     'clinicSettings',
     'users',
     'transactions',
-    'purchases'
+    'purchases',
+    'roles'
 ];
 
 export function DataProvider({ children }: { children: ReactNode }) {
@@ -112,6 +122,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const [clinicSettings, setClinicSettings] = useState<any>(null);
     const [transactions, setTransactions] = useState<any[]>([]);
     const [purchases, setPurchases] = useState<any[]>([]);
+    const [roles, setRoles] = useState<any[]>([]);
     const [licenseStatus, setLicenseStatus] = useState<'valid' | 'expired' | 'missing' | 'checking'>('checking');
     const [licenseDaysLeft, setLicenseDaysLeft] = useState(0);
     const [licenseKey, setLicenseKey] = useState<string | null>(null);
@@ -141,6 +152,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         clinicSettings: setClinicSettings,
         transactions: setTransactions,
         purchases: setPurchases,
+        roles: setRoles,
     }), []);
 
     useEffect(() => {
@@ -181,6 +193,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         ? data.filter((s: any) => s && s.name && s.name.trim() !== '')
                         : [];
                     setter(validStaff);
+                } else if (collectionName === 'treatments') {
+                    // Filter out ghost treatments with NaN fees
+                    const validTreatments = Array.isArray(data)
+                        ? data.filter((t: any) => t && t.name && !isNaN(Number(t.fee)))
+                        : [];
+                    setter(validTreatments);
                 } else {
                     setter(Array.isArray(data) ? data : []);
                 }
@@ -223,7 +241,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     const defaultObject = {
                         status: 'active',
                         expiryDate: defaultExpiryDate,
-                        licenseKey: 'TRIAL-30-DAYS',
+                        licenseKey: 'FIRST-30-DAYS',
                         version: 'v1.3.0 Standard'
                     };
 
@@ -309,6 +327,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     price: Number(enrichedData.sellingPrice) || Number(enrichedData.price) || 0,
                     updatedAt: new Date().toISOString()
                 };
+            }
+
+            // Treatments specific sanitization
+            if (collectionName === 'treatments') {
+                const cleanFee = Number(enrichedData.fee);
+                if (isNaN(cleanFee)) {
+                    console.error('[updateLocal] Blocked invalid treatment fee:', data);
+                    // We don't throw here to avoid crashing UI, just ensure it's 0 or handle logic
+                    enrichedData.fee = 0;
+                } else {
+                    enrichedData.fee = cleanFee;
+                }
             }
 
             console.log(`[updateLocal] Starting for ${collectionName}:`, enrichedData.id);
@@ -399,6 +429,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         try {
             await saveToLocal('queue', updatedItem);
             console.log(`[updateQueueItemOptimistic] Saved to IndexedDB successfully: ${itemId}`);
+            toast.success("Done", { duration: 1000, id: "sync-status" });
         } catch (dbError) {
             console.error(`[updateQueueItemOptimistic] IndexedDB persistence failed:`, dbError);
             if (typeof window !== 'undefined') {
@@ -412,6 +443,182 @@ export function DataProvider({ children }: { children: ReactNode }) {
         // 6. Return the updated item immediately after disk write (Fast)
         return updatedItem;
     }, [queue, backgroundFirebaseSync]);
+
+    /**
+     * updateAttendance - Specialized function for staff attendance
+     * Ensures presentDoctors refresh immediately across Admin & Operator
+     */
+    const updateAttendance = useCallback(async (record: Attendance): Promise<Attendance> => {
+        console.log(`[updateAttendance] Marking status: ${record.status} for ${record.staffId} on ${record.date}`);
+
+        try {
+            // 1. STEP 1: Update IndexedDB (Awaited for local persistence)
+            await saveToLocal('attendance', record);
+
+            // 2. STEP 2: Update React State (Triggers useAvailableDoctors refresh)
+            setAttendance(prev => {
+                const index = prev.findIndex(a => a.id === record.id || (a.staffId === record.staffId && a.date === record.date));
+                if (index !== -1) {
+                    const next = [...prev];
+                    next[index] = record;
+                    return next;
+                }
+                return [record, ...prev];
+            });
+
+            // 3. STEP 3: Background Sync (Fire and Forget)
+            backgroundFirebaseSync('attendance', record);
+
+            return record;
+        } catch (error) {
+            console.error('[updateAttendance] Failed:', error);
+            throw error;
+        }
+    }, [backgroundFirebaseSync]);
+
+    /**
+     * updatePatientStatus - Specialized function for patient status updates
+     * Ensures immediate UI refresh and proper timestamp management for finance tracking
+     */
+    const updatePatientStatus = useCallback(async (
+        patientId: string,
+        status: string,
+        additionalData?: Partial<Patient>
+    ): Promise<Patient> => {
+        const normalizedStatus = status.toLowerCase().trim().replace(/[\s-]/g, '_');
+        console.log(`[updatePatientStatus] Updating patient ${patientId} to status: ${normalizedStatus}`);
+
+        try {
+            // 1. Find current patient
+            const currentPatient = patients.find(p => p.id === patientId);
+            if (!currentPatient) {
+                throw new Error(`Patient ${patientId} not found`);
+            }
+
+            // 2. Create updated patient object
+            const updatedPatient: Patient = {
+                ...currentPatient,
+                ...additionalData,
+                status: normalizedStatus as any,
+                updatedAt: new Date().toISOString(), // Always refresh timestamp
+                lastUpdated: Date.now()
+            };
+
+            // Special handling for 'completed' status - ensure timestamp for finance calculations
+            if (status === 'completed') {
+                updatedPatient.lastVisit = new Date().toISOString();
+                updatedPatient.totalVisits = (currentPatient.totalVisits || 0) + 1;
+            }
+
+            // 3. STEP 1: Update React State (Immediate UI feedback)
+            setPatients(prev => {
+                const index = prev.findIndex(p => p.id === patientId);
+                if (index !== -1) {
+                    const next = [...prev];
+                    next[index] = updatedPatient;
+                    return next;
+                }
+                return prev;
+            });
+
+            // 4. STEP 2: Save to IndexedDB (Awaited for local persistence)
+            await saveToLocal('patients', updatedPatient);
+            console.log(`[updatePatientStatus] Saved to IndexedDB: ${patientId}`);
+
+            // 5. STEP 3: Background Firebase Sync (Fire and Forget)
+            backgroundFirebaseSync('patients', updatedPatient);
+
+            return updatedPatient;
+        } catch (error) {
+            console.error('[updatePatientStatus] Failed:', error);
+            throw error;
+        }
+    }, [patients, backgroundFirebaseSync]);
+
+    /**
+     * handleMovePatient - Specialized function for patient workflow transitions
+     * Handles Start, Complete, and Back actions with proper status management
+     */
+    const handleMovePatient = useCallback(async (
+        patientId: string,
+        action: 'start' | 'complete' | 'back',
+        currentStatus: string
+    ): Promise<Patient> => {
+        const normalizedCurrentStatus = currentStatus.toLowerCase().trim().replace(/[\s-]/g, '_');
+        console.log(`[handleMovePatient] Action: ${action}, Current Status: ${normalizedCurrentStatus}, Patient: ${patientId}`);
+
+        try {
+            // 1. Find current patient
+            const currentPatient = patients.find(p => p.id === patientId);
+            if (!currentPatient) {
+                throw new Error(`Patient ${patientId} not found`);
+            }
+
+            // 2. Determine new status based on action
+            let newStatus: string;
+            switch (action) {
+                case 'start':
+                    newStatus = 'in_treatment';
+                    break;
+                case 'complete':
+                    newStatus = 'completed';
+                    break;
+                case 'back':
+                    // Back logic: completed -> in_treatment, in_treatment -> waiting
+                    if (normalizedCurrentStatus === 'completed') {
+                        newStatus = 'in_treatment';
+                    } else if (normalizedCurrentStatus === 'in_treatment') {
+                        newStatus = 'waiting';
+                    } else {
+                        newStatus = normalizedCurrentStatus; // No change if already waiting
+                    }
+                    break;
+                default:
+                    throw new Error(`Invalid action: ${action}`);
+            }
+
+            console.log(`[handleMovePatient] Transitioning from ${currentStatus} to ${newStatus}`);
+
+            // 3. Create updated patient object
+            const updatedPatient: Patient = {
+                ...currentPatient,
+                status: newStatus as any,
+                updatedAt: new Date().toISOString(),
+                lastUpdated: Date.now()
+            };
+
+            // 4. Special handling for 'completed' status
+            if (newStatus === 'completed') {
+                updatedPatient.lastVisit = new Date().toISOString();
+                updatedPatient.totalVisits = (currentPatient.totalVisits || 0) + 1;
+            }
+
+            // 5. STEP 1: Update React State (Immediate UI feedback - triggers re-render)
+            setPatients(prev => {
+                const index = prev.findIndex(p => p.id === patientId);
+                if (index !== -1) {
+                    const next = [...prev];
+                    next[index] = updatedPatient;
+                    console.log(`[handleMovePatient] State updated - card will move to ${newStatus} column`);
+                    return next;
+                }
+                return prev;
+            });
+
+            // 6. STEP 2: Save to IndexedDB (Awaited for local persistence)
+            await saveToLocal('patients', updatedPatient);
+            console.log(`[handleMovePatient] Saved to IndexedDB (ClinicDB): ${patientId}`);
+            toast.success("Done", { duration: 1000, id: "sync-status" });
+
+            // 7. STEP 3: Background Firebase Sync (Fire and Forget)
+            backgroundFirebaseSync('patients', updatedPatient);
+
+            return updatedPatient;
+        } catch (error) {
+            console.error('[handleMovePatient] Failed:', error);
+            throw error;
+        }
+    }, [patients, backgroundFirebaseSync]);
 
     /**
      * Delete local data (State + IndexedDB) - FIRE AND FORGET version
@@ -645,7 +852,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             });
 
                             if (!obj.id) {
-                                obj.id = `${collectionName.slice(0, 3).toUpperCase()}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+                                obj.id = `${collectionName.slice(0, 3)}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
                             }
 
                             promises.push(addItem(collectionName, obj));
@@ -657,7 +864,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     await initializeData();
                     resolve();
                 } catch (error) {
-                    console.error("Import from CSV failed:", error);
                     reject(error);
                 }
             };
@@ -666,6 +872,116 @@ export function DataProvider({ children }: { children: ReactNode }) {
             reader.readAsText(file);
         });
     }, [addItem, initializeData]);
+
+    const exportToJSON = useCallback((collectionName: string) => {
+        if (collectionName === 'inventory_full') {
+            const fullInventory = {
+                stock: inventory,
+                sales: sales,
+                purchases: purchases
+            };
+            const blob = new Blob([JSON.stringify(fullInventory, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `Full_Inventory_Backup_${new Date().toISOString().split('T')[0]}.json`;
+            link.click();
+            return;
+        }
+
+        let data = null;
+        switch (collectionName) {
+            case 'patients': data = patients; break;
+            case 'queue': data = queue; break;
+            case 'appointments': data = appointments; break;
+            case 'staff': data = staff; break;
+            case 'salaryPayments': data = salaryPayments; break;
+            case 'attendance': data = attendance; break;
+            case 'inventory': data = inventory; break;
+            case 'sales': data = sales; break;
+            case 'expenses': data = expenses; break;
+            case 'bills': data = bills; break;
+            case 'treatments': data = treatments; break;
+            case 'clinicSettings': data = clinicSettings; break;
+            case 'transactions': data = transactions; break;
+            case 'purchases': data = purchases; break;
+            case 'roles': data = roles; break;
+            default: return;
+        }
+
+        if (!data) return;
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${collectionName}_backup_${new Date().toISOString().split('T')[0]}.json`;
+        link.click();
+    }, [patients, queue, appointments, staff, salaryPayments, attendance, inventory, sales, expenses, bills, treatments, clinicSettings, transactions, purchases, roles]);
+
+    const importFromJSON = useCallback(async (file: File, collectionName: string) => {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                const data = JSON.parse(e.target?.result as string);
+
+                if (collectionName === 'inventory_full') {
+                    if (data.stock) {
+                        setInventory(data.stock);
+                        for (const item of data.stock) await updateLocal('inventory', item);
+                    }
+                    if (data.sales) {
+                        setSales(data.sales);
+                        for (const item of data.sales) await updateLocal('sales', item);
+                    }
+                    if (data.purchases) {
+                        setPurchases(data.purchases);
+                        for (const item of data.purchases) await updateLocal('purchases', item);
+                    }
+                    if (typeof window !== 'undefined') {
+                        toast.success("Full Inventory (Stock, Sales, Purchases) Restored");
+                    }
+                    return;
+                }
+
+                const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
+                if (setter) {
+                    setter(data);
+                    const items = Array.isArray(data) ? data : [data];
+                    for (const item of items) {
+                        await updateLocal(collectionName, item);
+                    }
+                    if (typeof window !== 'undefined') {
+                        toast.success(`${collectionName} restored from JSON`);
+                    }
+                }
+            } catch (err) {
+                console.error("Import JSON Error:", err);
+                if (typeof window !== 'undefined') {
+                    toast.error("Invalid JSON file");
+                }
+            }
+        };
+        reader.readAsText(file);
+    }, [stateSetterMap, updateLocal, setInventory, setSales, setPurchases]);
+
+    const clearDataStore = useCallback(async (collectionName: string) => {
+        try {
+            await clearStore(collectionName);
+            const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
+            if (setter) {
+                if (collectionName === 'clinicSettings') setter({});
+                else setter([]);
+            }
+            if (typeof window !== 'undefined') {
+                toast.success(`${collectionName} cleared locally`);
+            }
+        } catch (e) {
+            console.error(e);
+            if (typeof window !== 'undefined') {
+                toast.error("Failed to clear store");
+            }
+        }
+    }, [stateSetterMap]);
 
     const fetchFullCloudBackup = useCallback(async () => {
         try {
@@ -722,7 +1038,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 // Point 3: Password protection for admin/operator
                 if (colName === 'users') {
                     const localUsers = await getFromLocal('users');
-                    const localUsersMap = new Map(localUsers.map((u: any) => [u.id, u]));
+                    const localUsersMap = new Map<string, any>(localUsers.map((u: any) => [u.id, u]));
                     data = data.map((remoteUser: any) => {
                         const localUser = localUsersMap.get(remoteUser.id);
                         if (localUser && (remoteUser.id === 'admin' || remoteUser.id === 'operator')) {
@@ -776,7 +1092,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 // Point 3: Password protection
                 if (colName === 'users') {
                     const localUsers = await getFromLocal('users');
-                    const localUsersMap = new Map(localUsers.map((u: any) => [u.id, u]));
+                    const localUsersMap = new Map<string, any>(localUsers.map((u: any) => [u.id, u]));
                     data = data.map((remoteUser: any) => {
                         const localUser = localUsersMap.get(remoteUser.id);
                         if (localUser && (remoteUser.id === 'admin' || remoteUser.id === 'operator')) {
@@ -809,6 +1125,70 @@ export function DataProvider({ children }: { children: ReactNode }) {
             setLoading(false);
         }
     }, [fetchFullCloudBackup, stateSetterMap, initializeData]);
+
+    const activateLicense = useCallback(async (inputKey: string) => {
+        try {
+            const clinicName = clinicSettings?.name || 'Jinnah Dental Clinic';
+            const isValid = await validateLicense(inputKey, clinicName);
+            if (!isValid) {
+                toast.error("Invalid License Key");
+                return false;
+            }
+
+            const currentExpiryISO = licenseExpiryDate || clinicSettings?.licenseExpiry || new Date().toISOString();
+            const currentExpiry = new Date(currentExpiryISO);
+            const newExpiry = new Date(currentExpiry.getTime() + (30 * 24 * 60 * 60 * 1000));
+            const newExpiryISO = newExpiry.toISOString();
+
+            // 1. Update React State
+            setLicenseKey(inputKey);
+            setLicenseExpiryDate(newExpiryISO);
+
+            const days = Math.ceil((newExpiry.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+            setLicenseDaysLeft(Math.max(0, days));
+            setLicenseStatus(days > 0 ? 'valid' : 'expired');
+
+            // 2. Update clinicSettings (Local + Firebase via updateLocal)
+            const updatedSettings = {
+                ...(clinicSettings || {}),
+                id: (clinicSettings?.id) || 'clinic-settings',
+                licenseExpiry: newExpiryISO,
+                licenseKey: inputKey,
+                updatedAt: new Date().toISOString()
+            };
+
+            await updateLocal('clinicSettings', updatedSettings);
+
+            // 3. Update dedicated license doc if needed
+            const licenseDocData = {
+                id: 'clinic_license',
+                key: inputKey,
+                expiryDate: newExpiryISO,
+                updatedAt: new Date().toISOString()
+            };
+
+            await saveToLocal('settings', licenseDocData);
+
+            if (isOnline) {
+                try {
+                    await setDoc(doc(db, 'settings', 'license'), {
+                        key: inputKey,
+                        expiryDate: newExpiryISO,
+                        updatedAt: new Date().toISOString()
+                    }, { merge: true });
+                } catch (e) {
+                    console.warn("Could not sync dedicated license doc:", e);
+                }
+            }
+
+            toast.success(`License Extended! New expiry: ${newExpiry.toLocaleDateString()}`);
+            return true;
+        } catch (error) {
+            console.error("License activation failed:", error);
+            toast.error("Failed to activate license");
+            return false;
+        }
+    }, [licenseExpiryDate, clinicSettings, updateLocal, isOnline]);
 
     const handleFirebaseUpdate = useCallback(async (collectionName: string, remoteData: any[]) => {
         if (isSyncingRef.current) return;
@@ -961,21 +1341,26 @@ export function DataProvider({ children }: { children: ReactNode }) {
         <DataContext.Provider value={{
             patients, queue, appointments, staff, salaryPayments, attendance,
             inventory, sales, expenses, bills, treatments, clinicSettings,
-            transactions, purchases,
-            loading, isOnline,
+            transactions, purchases, roles, loading, isOnline,
             licenseStatus, licenseDaysLeft,
             licenseKey, licenseExpiryDate,
             updateLocal, deleteLocal, addItem, refreshCollection,
             exportToCSV, exportSalesHistoryToCSV, generateStaffReport, importFromCSV,
             setPatients, setQueue, setAppointments, setStaff, setInventory,
             setSales, setExpenses, setBills, setTreatments, setAttendance, setSalaryPayments,
-            setTransactions, setPurchases,
-            // NEW: Expose optimistic update function
+            setTransactions, setPurchases, setRoles,
+            updateAttendance,
+            updatePatientStatus,
+            handleMovePatient,
             updateQueueItemOptimistic,
             fetchFullCloudBackup,
             restoreLocalFromCloud,
             fetchDataFromFirebase,
-            manualCloudRestore
+            manualCloudRestore,
+            activateLicense,
+            exportToJSON,
+            importFromJSON,
+            clearDataStore
         }}>
             {children}
         </DataContext.Provider>

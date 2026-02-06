@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Key, ShieldCheck, AlertCircle } from 'lucide-react';
-import { applyLicense } from '@/services/licenseService';
 import { useData } from '@/context/DataContext';
 import { toast } from 'sonner';
 
@@ -16,7 +15,7 @@ interface LicenseModalProps {
 }
 
 export function LicenseModal({ open, onOpenChange }: LicenseModalProps) {
-    const { updateLocal, setClinicSettings } = useData(); // We might not need these directly if we reload window or handle state internally
+    const { activateLicense } = useData();
     const [licenseKey, setLicenseKey] = useState('');
     const [isLoading, setIsLoading] = useState(false);
 
@@ -31,20 +30,11 @@ export function LicenseModal({ open, onOpenChange }: LicenseModalProps) {
         setIsLoading(true);
 
         try {
-            const result = await applyLicense(licenseKey);
+            const success = await activateLicense(licenseKey);
 
-            if (result.success) {
-                toast.success(result.message);
+            if (success) {
                 onOpenChange(false);
                 setLicenseKey('');
-
-                // Force a reload to ensure all contexts pick up the new license state immediately
-                // Alternatively, we could expose a setLicenseStatus in context, but reload is safer for critical auth/license changes
-                setTimeout(() => {
-                    window.location.reload();
-                }, 1000);
-            } else {
-                toast.error(result.message);
             }
         } catch (error) {
             console.error('License application failed:', error);

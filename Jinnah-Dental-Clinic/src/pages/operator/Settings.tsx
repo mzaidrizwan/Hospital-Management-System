@@ -2,27 +2,15 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-  Save,
   Download,
   Upload,
   Lock,
   User,
-  Calendar,
-  Clock,
-  DollarSign,
   Plus,
   Edit,
   Trash2,
-  Search,
   Database,
-  Settings as SettingsIcon,
-  FileText,
-  Eye,
-  EyeOff,
-  CheckCircle,
-  AlertCircle,
   RefreshCw,
-  CloudDownload,
   ShieldCheck,
   ShieldAlert,
   Key,
@@ -30,24 +18,25 @@ import {
 } from 'lucide-react';
 import { LicenseModal } from '@/components/modals/LicenseModal';
 import { cn } from "@/lib/utils";
-import { format, parseISO } from 'date-fns';
+
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Treatment } from '@/types';
+import { Treatment, User as UserType } from '@/types';
 import TreatmentFormModal from '@/components/modals/TreatmentFormModal';
-import Papa from 'papaparse';
 import { useAuth } from '@/context/AuthContext';
 import OperatorChangePassword from '@/components/settings/OperatorChangePassword';
+import DataSyncSection from '@/components/settings/DataSyncSection';
+import LicenseSection from '@/components/settings/LicenseSection';
 import { useData } from '@/context/DataContext';
 
 // Format currency function
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'USD'
+    currency: 'PKR'
   }).format(amount);
 };
 
@@ -56,7 +45,6 @@ export default function OperatorSettings() {
   const {
     patients,
     treatments: contextTreatments,
-    clinicSettings: contextClinicSettings,
     updateLocal,
     deleteLocal,
     exportToCSV,
@@ -66,7 +54,10 @@ export default function OperatorSettings() {
     licenseStatus,
     licenseDaysLeft,
     licenseKey,
-    licenseExpiryDate
+    licenseExpiryDate,
+    roles,
+    exportToJSON,
+    importFromJSON
   } = useData();
 
   const [activeTab, setActiveTab] = useState('security');
@@ -78,61 +69,32 @@ export default function OperatorSettings() {
   const [selectedTreatment, setSelectedTreatment] = useState<Treatment | null>(null);
   const [showTreatmentForm, setShowTreatmentForm] = useState(false);
   const [isEditingTreatment, setIsEditingTreatment] = useState(false);
-  const [backupHistory, setBackupHistory] = useState<any[]>([]); // Keep backups local/manual fetch for now
 
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [userInfo, setUserInfo] = useState<{ role: string; name: string } | null>(null);
+  const [userInfo, setUserInfo] = useState<UserType | null>(null);
   const [showLicenseModal, setShowLicenseModal] = useState(false);
+  const [newRoleTitle, setNewRoleTitle] = useState('');
 
-  // Initialize clinicData from context
-  const [clinicData, setClinicData] = useState({
-    id: 'clinic-settings',
-    clinicName: '',
-    address: '',
-    phone: '',
-    email: '',
-    taxRate: '',
-    currency: 'USD',
-    businessHours: ''
-  });
 
-  // Sync local clinicData state with context updates
-  useEffect(() => {
-    if (contextClinicSettings) {
-      setClinicData(prev => ({ ...prev, ...contextClinicSettings }));
-    }
-  }, [contextClinicSettings]);
 
-  // Backup Selection
-  const [backupSelection, setBackupSelection] = useState({
-    patients: true,
-    appointments: true,
-    bills: true,
-    inventory: true,
-    staff: true,
-    treatments: true,
-    expenses: true,
-  });
+
 
   // Load user info from localStorage on mount
   useEffect(() => {
     const stored = localStorage.getItem('currentUser');
     if (stored) {
-      const parsed = JSON.parse(stored);
-      setUserInfo({ role: parsed.role, name: parsed.name });
+      const parsed = JSON.parse(stored) as UserType;
+      setUserInfo(parsed);
     }
   }, []);
 
   // No manual loadData useEffect needed for treatments/clinicSettings as useData handles it.
-  // We might still want to load backups from IDB if it's there.
   useEffect(() => {
-    async function loadBackups() {
-      // Lazy load backups since they aren't in context
-      const { getFromLocal } = await import('@/services/indexedDbUtils');
-      let localBackups = await getFromLocal('backups') as any[];
-      if (localBackups) setBackupHistory(localBackups);
+    // Synchronize current user info
+    const stored = localStorage.getItem('currentUser');
+    if (stored) {
+      const parsed = JSON.parse(stored) as UserType;
+      setUserInfo(parsed);
     }
-    loadBackups();
   }, []);
 
   // Manual Sync (Optional now, as it happens automatically)
@@ -141,131 +103,9 @@ export default function OperatorSettings() {
   };
 
 
-  // Handle save clinic settings (Write-Through)
-  const handleSaveClinicSettings = async () => {
-    try {
-      await updateLocal('clinicSettings', { ...clinicData, role: 'clinic-settings' });
-      toast.success('Clinic settings saved');
-    } catch (error) {
-      toast.error('Failed to save clinic settings');
-    }
-  };
 
-  // Toggle all backup items
-  const toggleAllBackup = (checked: boolean) => {
-    setBackupSelection({
-      patients: checked,
-      appointments: checked,
-      bills: checked,
-      inventory: checked,
-      staff: checked,
-      treatments: checked,
-      expenses: checked,
-    });
-  };
 
-  // Handle backup
-  const handleBackup = async () => {
-    const selectedItems = Object.entries(backupSelection)
-      .filter(([_, value]) => value)
-      .map(([key]) => key);
 
-    if (selectedItems.length === 0) {
-      toast.error('Select at least one item to backup');
-      return;
-    }
-
-    const newBackup = {
-      id: Date.now().toString(),
-      date: new Date().toISOString(),
-      type: selectedItems.length === Object.keys(backupSelection).length ? 'full' : 'partial',
-      size: `${Math.floor(Math.random() * 50 + 10)} MB`,
-      status: 'success',
-      items: selectedItems
-    };
-
-    setBackupHistory(prev => [newBackup, ...prev]);
-
-    // Local save and background sync (Write-Through)
-    try {
-      // Backups not in context, so we still manually save. 
-      // Or we can use updateLocal even if it's not in stateMap (it handles it gracefully for IDB+Sync)
-      await updateLocal('backups', newBackup);
-    } catch (error) {
-      console.error('Backup sync failed:', error);
-    }
-
-    // Download JSON and CSV
-    downloadBackup(newBackup, 'json');
-    downloadBackup(newBackup, 'csv');
-
-    toast.success('Backup created successfully');
-  };
-
-  // Handle download backup (JSON or CSV)
-  const downloadBackup = (backup: any, format: 'json' | 'csv') => {
-    let dataStr;
-    if (format === 'json') {
-      const backupData = {
-        timestamp: backup.date,
-        items: backup.items,
-        treatments: treatments
-      };
-      dataStr = JSON.stringify(backupData, null, 2);
-    } else {
-      const csvData = Papa.unparse(treatments);
-      dataStr = csvData;
-    }
-
-    const type = format === 'json' ? 'application/json' : 'text/csv';
-    const dataBlob = new Blob([dataStr], { type });
-    const url = URL.createObjectURL(dataBlob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `clinic_backup_${format}_${new Date(backup.date).toISOString().split('T')[0]}.${format}`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  // Handle download individual data
-  const handleDownloadData = async (type: string) => {
-    let data: any = {};
-
-    switch (type) {
-      case 'patients':
-        data = { patients: [] };
-        break;
-      case 'doctors':
-        data = { doctors: [] };
-        break;
-      case 'treatments':
-        data = { treatments };
-        break;
-      case 'bills':
-        data = { bills: [] };
-        break;
-      case 'staff':
-        data = { staff: [] };
-        break;
-      default:
-        data = { message: 'Data export' };
-    }
-
-    const dataStr = JSON.stringify(data, null, 2);
-    const dataBlob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(dataBlob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${type}_export_${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    toast.success(`${type.charAt(0).toUpperCase() + type.slice(1)} data exported`);
-  };
 
   // Note: CSV import is now handled inline in the Backup tab with importFromCSV from DataContext
 
@@ -295,6 +135,15 @@ export default function OperatorSettings() {
   };
 
   const handleSaveTreatment = async (treatmentData: any) => {
+    // Check for duplicates
+    if (!isEditingTreatment) {
+      const exists = treatments.some(t => t.name.toLowerCase() === treatmentData.name.toLowerCase());
+      if (exists) {
+        toast.error("This treatment already exists.");
+        return;
+      }
+    }
+
     let updatedTreatment: Treatment;
     if (isEditingTreatment && selectedTreatment) {
       updatedTreatment = {
@@ -307,12 +156,14 @@ export default function OperatorSettings() {
       };
     } else {
       updatedTreatment = {
-        id: `t${Date.now()}`,
+        id: Date.now().toString(),
         name: treatmentData.name,
         fee: parseFloat(treatmentData.fee),
         category: treatmentData.category,
         duration: parseInt(treatmentData.duration),
-        description: treatmentData.description
+        description: treatmentData.description,
+        isActive: true,
+        createdAt: new Date().toISOString()
       };
     }
 
@@ -327,6 +178,44 @@ export default function OperatorSettings() {
     setShowTreatmentForm(false);
   };
 
+  const handleAddRole = async () => {
+    if (!newRoleTitle.trim()) {
+      toast.error("Role title cannot be empty");
+      return;
+    }
+
+    // Check duplicate
+    if (roles && roles.some((r: any) => r.title.toLowerCase() === newRoleTitle.trim().toLowerCase())) {
+      toast.error("Role already exists");
+      return;
+    }
+
+    try {
+      const newRole = {
+        id: `role-${Date.now()}`,
+        title: newRoleTitle.trim(),
+        createdAt: new Date().toISOString()
+      };
+      await updateLocal('roles', newRole);
+      setNewRoleTitle('');
+      toast.success("Role added successfully");
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to add role");
+    }
+  };
+
+  const handleDeleteRole = async (id: string) => {
+    if (confirm("Are you sure you want to delete this role?")) {
+      try {
+        await deleteLocal('roles', id);
+        toast.success("Role deleted");
+      } catch (error) {
+        toast.error("Failed to delete role");
+      }
+    }
+  };
+
   return (
     <div className="space-y-6 p-4 md:p-6">
       {/* Header with Sync */}
@@ -336,31 +225,22 @@ export default function OperatorSettings() {
           <p className="text-muted-foreground">Manage clinic settings and configurations</p>
         </div>
         <div className="flex gap-2">
-          <Button
-            variant="outline"
-            className="gap-2"
-            onClick={handleBackup}
-          >
-            <Database className="w-4 h-4" />
-            Create Backup
-          </Button>
         </div>
       </div>
 
       {/* Tabs - Only 4 tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-        <TabsList className="grid grid-cols-2 sm:grid-cols-5">
+        <TabsList className="grid grid-cols-2 sm:grid-cols-4">
           <TabsTrigger value="security">
             <Lock className="w-4 h-4 mr-2" />
             Security
           </TabsTrigger>
-          <TabsTrigger value="clinic">
-            <SettingsIcon className="w-4 h-4 mr-2" />
-            Clinic
-          </TabsTrigger>
-          <TabsTrigger value="treatments">
-            <FileText className="w-4 h-4 mr-2" />
-            Treatments
+
+          <TabsTrigger value="clinic-features">
+            <div className="flex items-center gap-2">
+              <span className="h-4 w-4"><Database className="w-4 h-4" /></span>
+              <span>Clinic Features</span>
+            </div>
           </TabsTrigger>
           <TabsTrigger value="backup">
             <Database className="w-4 h-4 mr-2" />
@@ -397,86 +277,12 @@ export default function OperatorSettings() {
           </div>
         </TabsContent>
 
-        {/* Clinic Tab */}
-        <TabsContent value="clinic" className="space-y-6">
-          <div className="bg-white rounded-lg border p-6">
-            <h3 className="text-lg font-medium mb-4">Clinic Information</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-2">Clinic Name</label>
-                <Input
-                  value={clinicData.clinicName}
-                  onChange={(e) => setClinicData({ ...clinicData, clinicName: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Address</label>
-                <Input
-                  value={clinicData.address}
-                  onChange={(e) => setClinicData({ ...clinicData, address: e.target.value })}
-                />
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium mb-2">Phone</label>
-                  <Input
-                    value={clinicData.phone}
-                    onChange={(e) => setClinicData({ ...clinicData, phone: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-2">Email</label>
-                  <Input
-                    type="email"
-                    value={clinicData.email}
-                    onChange={(e) => setClinicData({ ...clinicData, email: e.target.value })}
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium mb-2">Tax Rate (%)</label>
-                  <Input
-                    type="number"
-                    value={clinicData.taxRate}
-                    onChange={(e) => setClinicData({ ...clinicData, taxRate: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-2">Currency</label>
-                  <select
-                    value={clinicData.currency}
-                    onChange={(e) => setClinicData({ ...clinicData, currency: e.target.value })}
-                    className="w-full px-3 py-2 border rounded-lg"
-                  >
-                    <option value="USD">USD ($)</option>
-                    <option value="EUR">EUR (€)</option>
-                    <option value="GBP">GBP (£)</option>
-                    <option value="PKR">PKR (₨)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-2">Business Hours</label>
-                  <Input
-                    value={clinicData.businessHours}
-                    onChange={(e) => setClinicData({ ...clinicData, businessHours: e.target.value })}
-                  />
-                </div>
-              </div>
-              <div className="pt-4">
-                <Button onClick={handleSaveClinicSettings}>
-                  <Save className="w-4 h-4 mr-2" />
-                  Save Clinic Settings
-                </Button>
-              </div>
-            </div>
-          </div>
-        </TabsContent>
+
 
         {/* Treatments Tab */}
-        <TabsContent value="treatments" className="space-y-6">
+        <TabsContent value="clinic-features" className="space-y-6">
           <div className="flex justify-between items-center">
-            <h3 className="text-lg font-medium">Manage Treatments</h3>
+            <h3 className="text-lg font-medium">Clinic Features</h3>
             <Button onClick={handleAddTreatment} className="gap-2">
               <Plus className="w-4 h-4" />
               Add Treatment
@@ -523,265 +329,77 @@ export default function OperatorSettings() {
               </table>
             </div>
           </div>
+
+          {/* Staff Roles Section */}
+          <div className="bg-white rounded-lg border p-6 mt-6">
+            <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
+              <User className="w-5 h-5" />
+              Staff Roles
+            </h3>
+            <div className="space-y-4">
+              <div className="flex gap-2 items-end">
+                <div className="flex-1">
+                  <p className="text-sm font-medium mb-2">New Role Title</p>
+                  <Input
+                    placeholder="e.g. Senior Doctor, Receptionist"
+                    value={newRoleTitle}
+                    onChange={(e) => setNewRoleTitle(e.target.value)}
+                  />
+                </div>
+                <Button onClick={handleAddRole} className="gap-1">
+                  <Plus className="w-4 h-4" /> Add Role
+                </Button>
+              </div>
+
+              <div className="rounded-md border overflow-hidden mt-4">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="text-left p-3 font-medium">Role Title</th>
+                      <th className="text-right p-3 font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {roles && roles.length > 0 ? (
+                      roles.map((role: any) => (
+                        <tr key={role.id} className="border-b hover:bg-gray-50">
+                          <td className="p-3 font-medium">{role.title}</td>
+                          <td className="p-3 text-right">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDeleteRole(role.id)}
+                              className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={2} className="text-center py-4 text-muted-foreground">
+                          No custom roles defined.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </TabsContent>
 
         {/* Backup Tab */}
         <TabsContent value="backup" className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Backup Settings */}
-            <div className="lg:col-span-2 space-y-6">
-              <div className="bg-white rounded-lg border p-6">
-                <h3 className="text-lg font-medium mb-4">Backup Settings</h3>
-                <div className="space-y-4">
-                  {/* Individual Export Buttons */}
-                  <div className="flex items-center justify-between p-3 border rounded-lg">
-                    <div className="flex items-center gap-3">
-                      <span className="font-medium">Patients</span>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => exportToCSV(patients, 'patients_backup.csv')}
-                      className="gap-2"
-                    >
-                      <Download className="w-4 h-4" /> Export CSV
-                    </Button>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 border rounded-lg">
-                    <div className="flex items-center gap-3">
-                      <span className="font-medium">Treatments</span>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => exportToCSV(treatments, 'treatments_backup.csv')}
-                      className="gap-2"
-                    >
-                      <Download className="w-4 h-4" /> Export CSV
-                    </Button>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 border rounded-lg bg-primary/5 border-primary/20">
-                    <div className="flex items-center gap-3">
-                      <span className="font-medium text-primary">Cloud Sync</span>
-                    </div>
-                    <Button
-                      variant="default"
-                      size="sm"
-                      onClick={() => manualCloudRestore()}
-                      className="gap-2"
-                    >
-                      <CloudDownload className="w-4 h-4" /> Restore from Cloud
-                    </Button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Restore Backup */}
-              <div className="bg-white rounded-lg border p-6">
-                <h3 className="text-lg font-medium mb-4">Restore Backup (CSV/JSON)</h3>
-                <div className="space-y-4">
-
-                  {/* Collection Selector for Import */}
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Select Target Collection for CSV Import</label>
-                    <select
-                      className="w-full px-3 py-2 border rounded-lg mb-4"
-                      id="importCollectionSelector"
-                    >
-                      <option value="patients">Patients</option>
-                      <option value="treatments">Treatments</option>
-                      <option value="appointments">Appointments</option>
-                      <option value="inventory">Inventory</option>
-                    </select>
-                  </div>
-
-                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
-                    <Upload className="w-12 h-12 mx-auto text-gray-400 mb-4" />
-                    <p className="text-gray-600 mb-4">Upload backup file (.csv)</p>
-                    <label className="cursor-pointer">
-                      <input
-                        type="file"
-                        accept=".csv"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (!file) return;
-
-                          const selector = document.getElementById('importCollectionSelector') as HTMLSelectElement;
-                          const collectionName = selector.value;
-
-                          const toastId = toast.loading("Importing data...");
-                          importFromCSV(file, collectionName)
-                            .then(() => toast.success("Import successful", { id: toastId }))
-                            .catch((err) => {
-                              console.error(err);
-                              toast.error("Import failed", { id: toastId });
-                            });
-
-                          // Reset input
-                          e.target.value = '';
-                        }}
-                        className="hidden"
-                      />
-                      <span className="bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 transition-colors">
-                        Choose File
-                      </span>
-                    </label>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Backup History */}
-            <div className="space-y-6">
-              <div className="bg-white rounded-lg border p-6">
-                <h3 className="text-lg font-medium mb-4">Backup History</h3>
-                <div className="space-y-3">
-                  {backupHistory.map((backup) => (
-                    <div key={backup.id} className="flex items-center justify-between p-3 border rounded-lg">
-                      <div>
-                        <div className="font-medium">{new Date(backup.date).toLocaleDateString()}</div>
-                        <div className="text-sm text-gray-500">
-                          {backup.type} • {backup.size}
-                        </div>
-                      </div>
-                      <Badge className="bg-green-100 text-green-800">
-                        {backup.status}
-                      </Badge>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Quick Actions */}
-              <div className="bg-white rounded-lg border p-6">
-                <h3 className="text-lg font-medium mb-4">Quick Actions</h3>
-                <div className="space-y-3">
-                  <Button
-                    variant="outline"
-                    className="w-full justify-start gap-2"
-                    onClick={() => handleDownloadData('patients')}
-                  >
-                    <Download className="w-4 h-4" />
-                    Export Patients
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="w-full justify-start gap-2"
-                    onClick={() => handleDownloadData('doctors')}
-                  >
-                    <Download className="w-4 h-4" />
-                    Export Doctors
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="w-full justify-start gap-2"
-                    onClick={() => handleDownloadData('treatments')}
-                  >
-                    <Download className="w-4 h-4" />
-                    Export Treatments
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="w-full justify-start gap-2"
-                    onClick={() => handleBackup()}
-                  >
-                    <Database className="w-4 h-4" />
-                    Create Full Backup
-                  </Button>
-                </div>
-              </div>
-            </div>
+          <div className="max-w-4xl mx-auto">
+            <DataSyncSection />
           </div>
         </TabsContent>
 
         {/* License Tab */}
         <TabsContent value="license" className="space-y-6">
-          <div className="bg-white rounded-lg border p-6">
-            <h3 className="text-lg font-medium mb-6 flex items-center gap-2">
-              <Key className="w-5 h-5 text-primary" />
-              License Information
-            </h3>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-              <div className="p-4 bg-gray-50 rounded-xl border flex items-center gap-4">
-                <div className={cn(
-                  "p-3 rounded-full",
-                  licenseStatus === 'valid' ? "bg-emerald-100 text-emerald-600" : "bg-amber-100 text-amber-600"
-                )}>
-                  {licenseStatus === 'valid' ? <ShieldCheck className="w-6 h-6" /> : <ShieldAlert className="w-6 h-6" />}
-                </div>
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Status</p>
-                  <p className="text-lg font-bold capitalize">{licenseStatus === 'valid' ? 'Active' : licenseStatus}</p>
-                </div>
-              </div>
-
-              <div className="p-4 bg-gray-50 rounded-xl border flex items-center gap-4">
-                <div className="p-3 rounded-full bg-blue-100 text-blue-600">
-                  <Info className="w-6 h-6" />
-                </div>
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">App Version</p>
-                  <p className="text-lg font-bold">v1.3.0 Standard</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <div className="flex flex-col md:flex-row items-start md:items-center justify-between p-4 bg-primary/5 rounded-lg border border-primary/10 gap-4">
-                <div className="flex flex-col">
-                  <p className="font-bold text-primary">Expiration Details</p>
-                  <p className="text-sm text-muted-foreground">
-                    {licenseExpiryDate
-                      ? new Date(licenseExpiryDate).toLocaleDateString()
-                      : userInfo?.createdAt
-                        ? new Date(new Date(userInfo.createdAt).getTime() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString()
-                        : "No expiration date found"}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-2xl font-black text-primary">
-                    {licenseExpiryDate
-                      ? Math.ceil((new Date(licenseExpiryDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
-                      : userInfo?.createdAt
-                        ? Math.ceil((new Date(new Date(userInfo.createdAt).getTime() + 30 * 24 * 60 * 60 * 1000).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
-                        : "30" // Fallback default
-                    }
-                  </p>
-                  <p className="text-[10px] font-bold uppercase tracking-tight text-muted-foreground">Days Remaining</p>
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2 uppercase tracking-wide text-xs text-muted-foreground">License Key</label>
-              <div className="relative">
-                <Input
-                  value={licenseKey || 'No license key found'}
-                  readOnly
-                  className="bg-gray-50 font-mono text-sm pr-10 border-dashed"
-                />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">
-                  <Lock className="w-4 h-4" />
-                </div>
-              </div>
-            </div>
-
-            <div className="pt-4 flex justify-end">
-              <Button
-                onClick={() => setShowLicenseModal(true)}
-                variant="outline"
-                className="gap-2 font-bold"
-                disabled={userInfo?.role !== 'admin'}
-                title={userInfo?.role !== 'admin' ? "Only administrators can renew the license" : ""}
-              >
-                <RefreshCw className="w-4 h-4" />
-                Renew License
-              </Button>
-            </div>
-          </div>
+          <LicenseSection />
         </TabsContent>
       </Tabs>
 
@@ -789,15 +407,17 @@ export default function OperatorSettings() {
       <LicenseModal open={showLicenseModal} onOpenChange={setShowLicenseModal} />
 
       {/* Treatment Form Modal */}
-      {showTreatmentForm && (
-        <TreatmentFormModal
-          open={showTreatmentForm}
-          onClose={() => setShowTreatmentForm(false)}
-          onSubmit={handleSaveTreatment}
-          treatment={selectedTreatment}
-          isEditing={isEditingTreatment}
-        />
-      )}
-    </div>
+      {
+        showTreatmentForm && (
+          <TreatmentFormModal
+            open={showTreatmentForm}
+            onClose={() => setShowTreatmentForm(false)}
+            onSubmit={handleSaveTreatment}
+            treatment={selectedTreatment}
+            isEditing={isEditingTreatment}
+          />
+        )
+      }
+    </div >
   );
 }

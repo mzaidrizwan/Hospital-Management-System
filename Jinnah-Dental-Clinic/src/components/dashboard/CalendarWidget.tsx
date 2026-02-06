@@ -8,8 +8,8 @@ import { TimeSlot } from '@/types';
 // Demo time slots
 const generateTimeSlots = (): TimeSlot[] => {
   const slots: TimeSlot[] = [];
-  const statuses: Array<'available' | 'booked' | 'in-treatment'> = [
-    'available', 'booked', 'available', 'in-treatment', 'booked',
+  const statuses: Array<'available' | 'booked' | 'in_treatment'> = [
+    'available', 'booked', 'available', 'in_treatment', 'booked',
     'available', 'available', 'booked', 'available', 'available'
   ];
 
@@ -47,7 +47,7 @@ export function CalendarWidget() {
   const slotCounts = {
     available: slots.filter(s => s.status === 'available').length,
     booked: slots.filter(s => s.status === 'booked').length,
-    inTreatment: slots.filter(s => s.status === 'in-treatment').length,
+    inTreatment: slots.filter(s => s.status === 'in_treatment').length,
   };
 
   return (
@@ -100,7 +100,7 @@ export function CalendarWidget() {
               "calendar-slot text-center",
               slot.status === 'available' && "calendar-slot-available",
               slot.status === 'booked' && "calendar-slot-booked",
-              slot.status === 'in-treatment' && "calendar-slot-in-treatment",
+              slot.status === 'in_treatment' && "calendar-slot-in_treatment",
             )}
           >
             <span className="font-medium">{slot.time}</span>

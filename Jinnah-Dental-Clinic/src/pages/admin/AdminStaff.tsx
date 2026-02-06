@@ -87,6 +87,7 @@ export default function AdminStaff() {
     setExpenses,
     loading: dataLoading,
     updateLocal,
+    updateAttendance,
     deleteLocal,
     generateStaffReport,
     exportToCSV
@@ -158,7 +159,7 @@ export default function AdminStaff() {
         salaryStatus: salStatus,
         isPaymentDue: paymentDue, // Add this new field
         nextSalaryDate: calculateNextSalaryDate(s),
-        attendanceStatus
+        ...(attendanceStatus && { attendanceStatus })
       };
     }).filter(Boolean) as (Staff & { isPaymentDue: boolean })[];
   }, [contextStaff, contextAttendance, getSalaryStatus]);
@@ -367,7 +368,7 @@ export default function AdminStaff() {
     toast.success("Staff report generated and downloaded");
   };
 
-  const handleMarkAttendance = (staffMember: Staff, attData: any) => {
+  const handleMarkAttendance = async (staffMember: Staff, attData: any) => {
     try {
       const newAtt: Attendance = {
         id: attData.id || `att-${Date.now()}`,
@@ -380,44 +381,17 @@ export default function AdminStaff() {
       const todayStr = new Date().toISOString().split('T')[0];
       const isToday = attData.date === todayStr;
 
-      // 1. OPTIMISTIC UPDATE: Immediate UI cleanup
+      // 1. OPTIMISTIC UI: Close modal immediately
       setShowAttendanceModal(null);
 
-      // Update local React states directly for instant feedback
-      setAttendance(prev => {
-        const index = prev.findIndex(a => a.id === newAtt.id || (a.staffId === newAtt.staffId && a.date === newAtt.date));
-        if (index !== -1) {
-          const updated = [...prev];
-          updated[index] = newAtt;
-          return updated;
-        }
-        return [...prev, newAtt];
-      });
+      // 2. Use centralized context function (Handles State + Local DB + Background Sync)
+      await updateAttendance(newAtt);
 
-      setStaff(prev => prev.map(s =>
-        s.id === staffMember.id
-          ? {
-            ...s,
-            attendance: [...(s.attendance || []), newAtt],
-            attendanceStatus: isToday ? (newAtt.status === 'present' ? 'Present' : newAtt.status === 'absent' ? 'Absent' : 'Leave') : s.attendanceStatus
-          }
-          : s
-      ));
-
-      // 2. Show success toast immediately
-      toast.success(isToday ? `Marked ${staffMember.name} as ${newAtt.status} for today` : `Attendance updated for ${attData.date}`);
-
-      // 3. Background Synchronization (Non-blocking)
-      const performSync = async () => {
-        try {
-          await smartSync('attendance', newAtt);
-          await updateLocal('attendance', newAtt);
-        } catch (error) {
-          console.error('Background attendance sync failed:', error);
-        }
-      };
-
-      performSync();
+      // 3. Success Feedback
+      toast.success(isToday
+        ? `Marked ${staffMember.name} as ${newAtt.status} for today`
+        : `Attendance updated for ${attData.date}`
+      );
 
     } catch (error) {
       console.error('Attendance recording failed:', error);

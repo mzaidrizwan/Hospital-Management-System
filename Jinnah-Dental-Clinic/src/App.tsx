@@ -60,7 +60,6 @@ function AuthenticatedApp() {
         <Route path="analytics" element={<AdminAnalytics />} />
         <Route path="patients" element={<AdminPatients />} />
         <Route path="staff" element={<AdminStaff />} />
-        <Route path="inventory" element={<SharedInventory />} />
         <Route path="expenses" element={<ExpensesPage />} />
         <Route path="finances" element={<AdminFinances />} />
         <Route path="reports" element={<AdminReports />} />

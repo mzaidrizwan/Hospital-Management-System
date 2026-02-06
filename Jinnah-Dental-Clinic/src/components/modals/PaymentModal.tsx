@@ -9,6 +9,7 @@ import { QueueItem, Bill, Patient } from '@/types';
 import { toast } from 'sonner';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { updateQueueItem, addBill } from '@/services/queueService';
+import { useData } from '@/context/DataContext';
 
 // IndexedDB Utilities
 import { saveToLocal, openDB } from '@/services/indexedDbUtils';
@@ -28,6 +29,7 @@ export default function PaymentModal({
   onClose,
   onSubmit
 }: PaymentModalProps) {
+  const { licenseDaysLeft } = useData();
   const [paymentData, setPaymentData] = useState({
     amount: 0,
     paymentMethod: 'cash' as 'cash' | 'online' | 'bank',
@@ -123,6 +125,11 @@ export default function PaymentModal({
     if (payAmount <= 0) return toast.error('Enter valid amount');
     if (payAmount > maxPayable) return toast.error(`Cannot pay more than $${maxPayable.toFixed(2)}`);
     if (disc > maxDiscount) return toast.error(`Discount cannot exceed $${maxDiscount.toFixed(2)}`);
+
+    if (licenseDaysLeft <= 0) {
+      toast.error("License Expired. Please renew to process payments.");
+      return;
+    }
 
     setIsSubmitting(true);
     const toastId = toast.loading('Processing payment...');
@@ -605,7 +612,7 @@ Powered by Saynz Technologies
               </Button>
               <Button
                 type="submit"
-                disabled={isSubmitting || maxPayable <= 0}
+                disabled={isSubmitting || maxPayable <= 0 || licenseDaysLeft <= 0}
                 className="flex-1 bg-green-600 hover:bg-green-700"
               >
                 {isSubmitting ? (

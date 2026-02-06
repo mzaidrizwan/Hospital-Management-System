@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Patient } from '@/types';
+import { useAvailableDoctors } from '@/hooks/useAvailableDoctors';
 
 interface AddToQueueModalProps {
   patients: Patient[];
@@ -14,13 +15,14 @@ interface AddToQueueModalProps {
   onSubmit: (data: any) => void;
 }
 
-export default function AddToQueueModal({ 
-  patients = [], 
-  treatments = [], 
-  doctors = [], 
-  onClose, 
-  onSubmit 
+export default function AddToQueueModal({
+  patients = [],
+  treatments = [],
+  doctors = [],
+  onClose,
+  onSubmit
 }: AddToQueueModalProps) {
+  const { presentDoctors, allDoctors, isAnyDoctorPresent } = useAvailableDoctors();
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [formData, setFormData] = useState({
@@ -60,11 +62,11 @@ export default function AddToQueueModal({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (showNewPatient) {
       // Create new patient and add to queue
       const newPatientId = `p${patients.length + 1}`;
-      
+
       onSubmit({
         patientId: newPatientId,
         patientName: newPatientData.name,
@@ -99,15 +101,15 @@ export default function AddToQueueModal({
               <div className="flex gap-2">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input 
-                    placeholder="Search existing patient..." 
+                  <Input
+                    placeholder="Search existing patient..."
                     className="pl-9"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                 </div>
-                <Button 
-                  type="button" 
+                <Button
+                  type="button"
                   variant="outline"
                   onClick={() => setShowNewPatient(true)}
                   className="gap-2"
@@ -149,15 +151,15 @@ export default function AddToQueueModal({
             <div className="space-y-4 border-t pt-4">
               <div className="flex items-center justify-between">
                 <h3 className="font-medium">New Patient Details</h3>
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   onClick={() => setShowNewPatient(false)}
                   className="text-sm text-blue-600 hover:text-blue-700"
                 >
                   Back to search
                 </button>
               </div>
-              
+
               <div className="space-y-3">
                 <div className="space-y-2">
                   <Label htmlFor="name">Full Name *</Label>
@@ -226,8 +228,8 @@ export default function AddToQueueModal({
                     {selectedPatient.phone} • {selectedPatient.age} years • {selectedPatient.gender}
                   </div>
                 </div>
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   onClick={() => setSelectedPatient(null)}
                   className="text-sm text-blue-600 hover:text-blue-700"
                 >
@@ -259,20 +261,42 @@ export default function AddToQueueModal({
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="doctor">Doctor *</Label>
+                  <Label htmlFor="doctor" className="flex items-center justify-between">
+                    <span>Doctor *</span>
+                    {!isAnyDoctorPresent && (
+                      <span className="text-[10px] text-amber-600 font-medium bg-amber-50 px-1.5 py-0.5 rounded border border-amber-100">
+                        None Present Today
+                      </span>
+                    )}
+                  </Label>
                   <select
                     id="doctor"
                     name="doctor"
                     value={formData.doctor}
                     onChange={handleFormChange}
-                    className="w-full px-3 py-2 border rounded-lg"
+                    className={`w-full px-3 py-2 border rounded-lg ${!isAnyDoctorPresent ? 'border-amber-200 bg-amber-50/30' : ''}`}
                     required
                   >
                     <option value="">Select Doctor</option>
-                    {(doctors || []).map(doctor => (
-                      <option key={doctor} value={doctor}>{doctor}</option>
-                    ))}
+                    {isAnyDoctorPresent ? (
+                      presentDoctors.map(doc => (
+                        <option key={doc.id} value={doc.id}>
+                          {doc.name} - {doc.role || 'General'}
+                        </option>
+                      ))
+                    ) : (
+                      allDoctors.map(doc => (
+                        <option key={doc.id} value={doc.id} className="text-gray-400">
+                          {doc.name} ({doc.role || 'Doctor'}) - Not Present
+                        </option>
+                      ))
+                    )}
                   </select>
+                  {!isAnyDoctorPresent && (
+                    <p className="text-[11px] text-amber-700 mt-1 italic">
+                      No doctors marked &apos;Present&apos; today. You can still assign from full list.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2">

@@ -243,7 +243,7 @@ export interface TimeSlot {
   startTime: string;
   endTime: string;
   duration: number;
-  status: 'available' | 'booked' | 'blocked' | 'break';
+  status: 'available' | 'booked' | 'blocked' | 'break' | 'in_treatment';
   appointmentId?: string;
 }
 
@@ -301,6 +301,7 @@ export interface QueueItem {
   treatmentEndTime?: string | null;
   treatment?: string;
   doctor?: string;
+  doctorId?: string;
   priority: 'normal' | 'urgent';
   notes?: string;
   fee?: number;
