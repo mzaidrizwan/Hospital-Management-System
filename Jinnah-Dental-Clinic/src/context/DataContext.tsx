@@ -10,6 +10,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { InventoryFormModal } from '@/components/modals/InventoryFormModal';
 import { validateLicenseKey, validateLicense } from '@/services/licenseService';
 import { calculateRemainingDays } from '@/hooks/useLicenseStatus';
+import { parseISO } from 'date-fns';
 import {
     Patient,
     QueueItem,
@@ -180,11 +181,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }, [stateSetterMap]);
 
     const checkSubscription = useCallback((settings: any) => {
-        if (!settings?.licenseExpiry) return 0;
-        const expiry = new Date(settings.licenseExpiry);
-        const today = new Date();
-        const diffTime = expiry.getTime() - today.getTime();
-        return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        return calculateRemainingDays(settings?.licenseExpiry);
     }, []);
 
     const initializeData = async () => {

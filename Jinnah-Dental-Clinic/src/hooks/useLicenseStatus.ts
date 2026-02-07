@@ -18,18 +18,29 @@ export interface LicenseStatusResult {
  */
 export function calculateRemainingDays(expiryDate?: string | null): number {
     if (!expiryDate) {
-        return 30; // Default to 30 days
+        return 0; // Default to 0 days if no license
     }
 
     try {
-        const expiry = new Date(expiryDate);
+        const expiry = parseISO(expiryDate);
         const now = new Date();
-        const diffInTime = expiry.getTime() - now.getTime();
-        const diffInDays = Math.ceil(diffInTime / (1000 * 60 * 60 * 24));
+
+        // Exact time difference in milliseconds
+        const diffInMs = expiry.getTime() - now.getTime();
+
+        // If it's already in the past, return 0
+        if (diffInMs <= 0) {
+            return 0;
+        }
+
+        // Return number of days remaining (rounding up)
+        // This ensures that even if 1 hour is left, it shows "1 day left"
+        // rather than "0 days / Expired"
+        const diffInDays = Math.ceil(diffInMs / (1000 * 60 * 60 * 24));
         return Math.max(0, diffInDays);
     } catch (error) {
         console.error('Error calculating remaining days:', error);
-        return 30;
+        return 0;
     }
 }
 
@@ -44,16 +55,17 @@ export function useLicenseStatus(): LicenseStatusResult {
         const diffInDays = calculateRemainingDays(licenseExpiryDate);
         let status: LicenseStatusType = 'active';
 
+        // Critical status if expired or less than 5 days left
         if (diffInDays <= 0) {
             status = 'expired';
-        } else if (diffInDays <= 3) {
+        } else if (diffInDays <= 5) {
             status = 'warning';
         }
 
         return {
             status,
             daysLeft: diffInDays,
-            isCritical: diffInDays <= 1,
+            isCritical: diffInDays <= 2, // Highlight red if 2 days or less
         };
     }, [licenseExpiryDate]);
 }
