@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useMemo, useRef } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, query, setDoc, doc, getDocs, getDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, setDoc, doc, getDocs, getDoc, deleteDoc } from 'firebase/firestore';
 import { getFromLocal, saveToLocal, openDB, getAllStores, saveMultipleToLocal, deleteFromLocal, clearStore } from '@/services/indexedDbUtils';
 import { processSyncQueue, smartSync } from '@/services/syncService';
 import { useConnectionStatus } from '@/hooks/useConnectionStatus';
@@ -75,14 +75,16 @@ interface DataContextType {
     handleMovePatient: (patientId: string, action: 'start' | 'complete' | 'back', currentStatus: string) => Promise<Patient>;
     // NEW: Optimistic update function for queue
     updateQueueItemOptimistic: (itemId: string, updates: Partial<QueueItem>) => Promise<QueueItem>;
+    exportToJSON: (collectionName: string) => void;
+    importFromJSON: (file: File, collectionName: string) => Promise<void>;
     fetchFullCloudBackup: () => Promise<any>;
     restoreLocalFromCloud: () => Promise<void>;
     fetchDataFromFirebase: () => Promise<any>;
     manualCloudRestore: () => Promise<void>;
-    clearDataStore: (collectionName: string) => Promise<void>;
-    exportToJSON: (collectionName: string) => void;
-    importFromJSON: (file: File, collectionName: string) => Promise<void>;
     activateLicense: (inputKey: string) => Promise<boolean>;
+    clearDataStore: (collectionName: string) => Promise<void>;
+    autoSyncEnabled: boolean;
+    setAutoSyncEnabled: (enabled: boolean) => void;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -113,6 +115,22 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const [queue, setQueue] = useState<QueueItem[]>([]);
     const [appointments, setAppointments] = useState<Appointment[]>([]);
     const [staff, setStaff] = useState<Staff[]>([]);
+
+    // Auto-sync control persisted in localStorage
+    const [autoSyncEnabled, setAutoSyncEnabledState] = useState<boolean>(() => {
+        const stored = localStorage.getItem('autoSyncEnabled');
+        return stored !== null ? JSON.parse(stored) : true;
+    });
+
+    const setAutoSyncEnabled = useCallback((enabled: boolean) => {
+        setAutoSyncEnabledState(enabled);
+        localStorage.setItem('autoSyncEnabled', JSON.stringify(enabled));
+        if (!enabled) {
+            toast.warning("Automatic cloud sync disabled.");
+        } else {
+            toast.success("Automatic cloud sync enabled.");
+        }
+    }, []);
     const [salaryPayments, setSalaryPayments] = useState<SalaryPayment[]>([]);
     const [attendance, setAttendance] = useState<Attendance[]>([]);
     const [inventory, setInventory] = useState<any[]>([]);
@@ -974,20 +992,31 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
     const clearDataStore = useCallback(async (collectionName: string) => {
         try {
+            // Set sync lock to prevent listeners from re-fetching while we wipe
+            isSyncingRef.current = true;
+
+            // 1. Clear Local IndexedDB
             await clearStore(collectionName);
+
+            // 2. Update React State
             const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
             if (setter) {
                 if (collectionName === 'clinicSettings') setter({});
                 else setter([]);
             }
-            if (typeof window !== 'undefined') {
-                toast.success(`${collectionName} cleared locally`);
-            }
+
+            // Note: We no longer delete from cloud as per user request.
+            // Data remains safe in Firebase.
+
+            // Release lock after a short delay
+            setTimeout(() => {
+                isSyncingRef.current = false;
+            }, 500);
+
         } catch (e) {
-            console.error(e);
-            if (typeof window !== 'undefined') {
-                toast.error("Failed to clear store");
-            }
+            console.error(`Error clearing ${collectionName}:`, e);
+            isSyncingRef.current = false;
+            throw e;
         }
     }, [stateSetterMap]);
 
@@ -1306,7 +1335,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }, [isOnline, initialLoadComplete]);
 
     useEffect(() => {
-        if (!isOnline || !initialLoadComplete) {
+        // Stop listeners if offline, not initialized, OR if user disabled auto-sync
+        if (!isOnline || !initialLoadComplete || !autoSyncEnabled) {
             if (listenersRef.current.length > 0) {
                 listenersRef.current.forEach(unsub => unsub && unsub());
                 listenersRef.current = [];
@@ -1375,7 +1405,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
             activateLicense,
             exportToJSON,
             importFromJSON,
-            clearDataStore
+            clearDataStore,
+            autoSyncEnabled,
+            setAutoSyncEnabled
         }}>
             {children}
         </DataContext.Provider>

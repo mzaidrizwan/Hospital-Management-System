@@ -24,7 +24,8 @@ import {
   Eye,
   CreditCard,
   FileText,
-  Plus // Added missing import
+  Plus,
+  Clock // Added for 'Add to Waiting' button
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -60,7 +61,8 @@ export default function OperatorPatients() {
     queue: contextQueue,
     bills: contextBills,
     loading: contextLoading,
-    deleteLocal
+    deleteLocal,
+    updateLocal
   } = useData();
 
   // State Management
@@ -249,6 +251,57 @@ export default function OperatorPatients() {
     } catch (error) {
       console.error('Error deleting patient:', error);
       toast.error('Failed to delete patient');
+    }
+  };
+
+  // Handle add to waiting queue
+  const handleAddToWaiting = async (patient: Patient) => {
+    if (!patient) return;
+
+    try {
+      // 1. Get today's queue to calculate next token
+      const today = new Date();
+      const todayString = today.toDateString();
+      const todayQueueItems = (contextQueue || []).filter(item => {
+        if (!item.checkInTime) return false;
+        try {
+          const d = parseISO(item.checkInTime);
+          return d.toDateString() === todayString;
+        } catch (e) {
+          return false;
+        }
+      });
+
+      const nextToken = todayQueueItems.length > 0
+        ? Math.max(...todayQueueItems.map(q => q.tokenNumber)) + 1
+        : 1;
+
+      // 2. Create queue item
+      const queueItemData = {
+        id: `Q-${Date.now()}`,
+        patientId: patient.id,
+        patientNumber: patient.patientNumber,
+        patientName: patient.name || '',
+        patientPhone: patient.phone || '',
+        tokenNumber: nextToken,
+        status: 'waiting' as const,
+        checkInTime: new Date().toISOString(),
+        treatment: '',
+        doctor: '',
+        priority: 'normal',
+        notes: '',
+        fee: 0,
+        paymentStatus: 'pending' as const,
+        amountPaid: 0,
+        previousPending: patient.pendingBalance || 0
+      } as QueueItem;
+
+      // 3. Save to local (State + IndexedDB)
+      await updateLocal('queue', queueItemData);
+      toast.success(`${patient.name} added to Waiting (Token #${nextToken})`);
+    } catch (error) {
+      console.error('Error adding to waiting:', error);
+      toast.error('Failed to add to waiting queue');
     }
   };
 
@@ -474,12 +527,13 @@ export default function OperatorPatients() {
   const totalPages = Math.ceil(filteredPatients.length / patientsPerPage);
 
   // Memoized row component
-  const PatientRow = React.memo(({ patient, onEdit, onDelete, onViewDetails, onRecalculate }: {
+  const PatientRow = React.memo(({ patient, onEdit, onDelete, onViewDetails, onRecalculate, onAddToWaiting }: {
     patient: Patient;
     onEdit: (p: Patient) => void;
     onDelete: (p: Patient) => void;
     onViewDetails: (p: Patient) => void;
     onRecalculate: (p: Patient) => void;
+    onAddToWaiting: (p: Patient) => void;
   }) => {
     if (!patient) return null;
 
@@ -522,6 +576,16 @@ export default function OperatorPatients() {
               <Eye className="w-4 h-4" />
             </Button>
             <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-2 text-green-600 border-green-200 hover:bg-green-50 hover:text-green-700 gap-1"
+              onClick={() => onAddToWaiting(patient)}
+              title="Add to Waiting"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-bold uppercase tracking-wider"></span>
+            </Button>
+            <Button
               variant="ghost"
               size="icon"
               className="h-8 w-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
@@ -530,7 +594,7 @@ export default function OperatorPatients() {
             >
               <Edit className="w-4 h-4" />
             </Button>
-            <Button
+            {/* <Button
               variant="ghost"
               size="icon"
               className="h-8 w-8 text-gray-400 hover:text-blue-600 hover:bg-blue-50"
@@ -538,7 +602,7 @@ export default function OperatorPatients() {
               title="Recalculate Stats"
             >
               <RefreshCw className="w-4 h-4" />
-            </Button>
+            </Button> */}
             <Button
               variant="ghost"
               size="icon"
@@ -770,6 +834,7 @@ export default function OperatorPatients() {
                       onDelete={handleDeletePatient}
                       onViewDetails={handleViewPatientDetails}
                       onRecalculate={handleRecalculateStats}
+                      onAddToWaiting={handleAddToWaiting}
                     />
                   ))
                 )}

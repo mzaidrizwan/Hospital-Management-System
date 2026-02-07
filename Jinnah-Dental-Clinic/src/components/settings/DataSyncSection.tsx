@@ -12,7 +12,9 @@ export default function DataSyncSection() {
         importFromJSON,
         clearDataStore,
         manualCloudRestore,
-        isOnline
+        isOnline,
+        autoSyncEnabled,
+        setAutoSyncEnabled
     } = useData();
     const { user } = useAuth();
 
@@ -34,19 +36,33 @@ export default function DataSyncSection() {
     };
 
     const handleClearDatabase = async () => {
-        if (confirm("WARNING: This will delete ALL local data (Patients, Staff, Expenses, Settings). Are you absolutely sure?")) {
-            if (confirm("Double check: This action cannot be undone unless you have a backup. Proceed?")) {
-                const stores = [
-                    'patients', 'staff', 'expenses', 'clinicSettings',
-                    'queue', 'appointments', 'inventory', 'sales',
-                    'bills', 'treatments', 'roles', 'salaryPayments',
-                    'attendance', 'transactions', 'purchases'
-                ];
+        if (confirm("WARNING: This will delete ALL local data (Patients, Staff, Expenses, Settings). Are you sure?")) {
+            if (confirm("Cloud data will remain safe in Firebase, but automatic fetching will be DISABLED. Proceed?")) {
+                try {
+                    toast.loading("Clearing local database and disabling auto-sync...", { id: 'wipe-data' });
 
-                for (const store of stores) {
-                    await clearDataStore(store);
+                    // 1. Disable Auto-Sync FIRST to prevent listeners from re-fetching
+                    setAutoSyncEnabled(false);
+
+                    const stores = [
+                        'patients', 'staff', 'expenses', 'clinicSettings',
+                        'queue', 'appointments', 'inventory', 'sales',
+                        'bills', 'treatments', 'roles', 'salaryPayments',
+                        'attendance', 'transactions', 'purchases'
+                    ];
+
+                    for (const store of stores) {
+                        await clearDataStore(store);
+                    }
+
+                    toast.success("Local data cleared and Auto-Sync disabled.", { id: 'wipe-data' });
+
+                    // Optional: reload to ensure clean state
+                    setTimeout(() => window.location.reload(), 1500);
+                } catch (error) {
+                    console.error("Wipe failed:", error);
+                    toast.error("Failed to clear local data.", { id: 'wipe-data' });
                 }
-                toast.success("Database cleared successfully");
             }
         }
     };
@@ -82,9 +98,13 @@ export default function DataSyncSection() {
                                 <CloudDownload className="w-4 h-4" />
                                 Restore Cloud
                             </Button>
-                            <Button variant="default" className="gap-2">
-                                <RefreshCw className="w-4 h-4" />
-                                Sync Now
+                            <Button
+                                variant={autoSyncEnabled ? "outline" : "default"}
+                                onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
+                                className="gap-2"
+                            >
+                                <RefreshCw className={autoSyncEnabled ? "w-4 h-4 animate-spin" : "w-4 h-4"} />
+                                {autoSyncEnabled ? 'Auto-Sync Active' : 'Enable Auto-Sync'}
                             </Button>
                         </div>
                     </div>
