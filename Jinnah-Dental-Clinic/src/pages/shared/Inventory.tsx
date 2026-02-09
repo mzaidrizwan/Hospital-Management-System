@@ -167,19 +167,16 @@ export default function SharedInventory() {
         };
 
         try {
-            setInventory(prev => prev.map(i => i.id === updatedItem.id ? updatedItem : i));
-            setSales(prev => [saleRecord, ...(prev || [])]);
             setIsSellDialogOpen(false);
 
             await Promise.all([
                 updateLocal('inventory', updatedItem),
-                updateLocal('sales', saleRecord),
-                smartSync('sales', saleRecord),
-                smartSync('inventory', updatedItem)
+                updateLocal('sales', saleRecord)
             ]);
 
             toast.success("Sale registered");
         } catch (err) {
+            console.error('Sale operation failed:', err);
             toast.error("Sale failed");
         } finally {
             setIsProcessingSale(false);

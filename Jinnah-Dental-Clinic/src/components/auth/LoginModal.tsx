@@ -39,7 +39,7 @@ export function LoginModal({ onOpenChange }: { onOpenChange?: (open: boolean) =>
         // Check & create default admin
         let admin = await getFromLocal('users', 'admin');
         if (!admin || !admin.id) {
-          admin = { ...admin, id: 'admin', role: 'admin', password: '123', name: 'Admin User' };
+          admin = { ...admin, id: 'admin', role: 'admin', password: 'admin123', name: 'Admin User' };
           await saveToLocal('users', admin);
           // Optional: Firebase sync
           setDoc(doc(db, 'users', 'admin'), admin).catch(console.error);
@@ -48,7 +48,7 @@ export function LoginModal({ onOpenChange }: { onOpenChange?: (open: boolean) =>
         // Check & create default operator
         let operator = await getFromLocal('users', 'operator');
         if (!operator || !operator.id) {
-          operator = { ...operator, id: 'operator', role: 'operator', password: '123', name: 'Operator User' };
+          operator = { ...operator, id: 'operator', role: 'operator', password: 'operator123', name: 'Operator User' };
           await saveToLocal('users', operator);
           // Optional: Firebase sync
           setDoc(doc(db, 'users', 'operator'), operator).catch(console.error);

@@ -114,7 +114,7 @@ export default function LicenseSection() {
                                 className="h-7 text-[10px] font-bold uppercase gap-1"
                             >
                                 {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
-                                Copy Hardware ID
+                                Copy ID
                             </Button>
                         </div>
                         <div className="relative group">

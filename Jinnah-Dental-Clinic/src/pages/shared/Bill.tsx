@@ -9,7 +9,7 @@ import { QueueItem } from '@/types';
 import { toast } from 'sonner';
 
 export default function Bill() {
-    const { queue, handleMovePatient } = useData();
+    const { queue, updateQueueItemOptimistic } = useData();
     const { presentDoctors } = useAvailableDoctors();
 
     // Modal state
@@ -26,7 +26,7 @@ export default function Bill() {
             }
 
             const currentStatus = item.status;
-            let action: 'start' | 'complete' | 'back';
+            let action: 'start' | 'complete' | 'back' | '';
 
             if (newStatus === 'in_treatment' && currentStatus === 'waiting') {
                 action = 'start';
@@ -38,11 +38,21 @@ export default function Bill() {
             ) {
                 action = 'back';
             } else {
-                toast.error('Invalid status transition');
-                return;
+                action = '';
             }
 
-            await handleMovePatient(id, action, currentStatus);
+            const now = new Date().toISOString();
+            let updates: Partial<QueueItem> = { status: newStatus };
+
+            if (action === 'start') {
+                updates.treatmentStartTime = now;
+            } else if (action === 'complete') {
+                updates.treatmentEndTime = now;
+                // Note: Real completion usually involves a modal for fee/doctor
+            }
+
+            await updateQueueItemOptimistic(id, updates);
+            toast.success(`Patient moved to ${newStatus.replace('_', ' ')}`);
         } catch (error) {
             console.error('Status update failed:', error);
             toast.error('Failed to update status');

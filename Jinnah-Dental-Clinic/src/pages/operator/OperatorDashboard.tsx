@@ -12,6 +12,8 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { cn } from '@/lib/utils';
 import { StatCard } from '@/components/dashboard/StatCard';
 import QueueSection from '@/components/dashboard/QueueSection';
+import TreatmentModal from '@/components/modals/TreatmentModal';
+import { useAvailableDoctors } from '@/hooks/useAvailableDoctors';
 import { CalendarWidget } from '@/components/dashboard/CalendarWidget';
 import { Button } from '@/components/ui/button';
 import { QueueItem, Patient } from '@/types';
@@ -29,9 +31,13 @@ export default function OperatorDashboard() {
     queue: queueData,
     patients,
     inventory,
-    loading: dataLoading
+    loading: dataLoading,
+    updateLocal,
+    deleteLocal,
+    updateQueueItemOptimistic
   } = useData();
   const { status, daysLeft } = useLicenseStatus();
+  const { presentDoctors } = useAvailableDoctors();
 
   const waitingPatients = queueData.filter(p => p.status === 'waiting');
   const inTreatmentPatients = queueData.filter(p => p.status === 'in_treatment');
@@ -44,6 +50,131 @@ export default function OperatorDashboard() {
     const itemDate = (item.checkInTime || item.createdAt || '').split('T')[0];
     return itemDate === today;
   }).length;
+
+  const [selectedPatientData, setSelectedPatientData] = useState<any>(null);
+  const [selectedQueueItemForTreatment, setSelectedQueueItemForTreatment] = useState<any>(null);
+  const [showTreatmentModal, setShowTreatmentModal] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState<any>(null);
+
+  const getPatientDataForQueueItem = (queueItem: QueueItem) => {
+    return patients.find(p =>
+      p.patientNumber === queueItem.patientNumber ||
+      p.id === queueItem.patientId
+    ) || null;
+  };
+
+  const speakAnnouncement = (tokenNumber: number | string) => {
+    if (!('speechSynthesis' in window)) return;
+    const synth = window.speechSynthesis;
+    const speak = () => {
+      const voices = synth.getVoices();
+      const femaleVoice =
+        voices.find(v => v.name === 'Google UK English Female') ||
+        voices.find(v => v.name.toLowerCase().includes('female')) ||
+        voices.find(v => v.lang === 'en-GB');
+
+      const text = `Token number ${tokenNumber}. please proceed to the treatment room.`;
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.voice = femaleVoice || null;
+      utterance.lang = 'en-GB';
+      utterance.rate = 0.9;
+      synth.cancel();
+      synth.speak(utterance);
+    };
+    if (synth.getVoices().length === 0) {
+      synth.onvoiceschanged = speak;
+    } else {
+      speak();
+    }
+  };
+
+  const handleQueueAction = async (item: QueueItem, action: string) => {
+    try {
+      const now = new Date().toISOString();
+      let updateData: Partial<QueueItem> = {};
+
+      if (action === 'start-treatment') {
+        updateData = {
+          status: 'in_treatment' as const,
+          treatmentStartTime: now
+        };
+        speakAnnouncement(item.tokenNumber);
+      } else if (action === 'complete') {
+        const patientData = getPatientDataForQueueItem(item);
+        if (patientData) {
+          setSelectedPatientData(patientData);
+          setSelectedQueueItemForTreatment(item);
+          setShowTreatmentModal(true);
+          return;
+        }
+      } else if (action === 'back-to-waiting') {
+        updateData = {
+          status: 'waiting' as const,
+          treatmentStartTime: null,
+          treatment: '',
+          fee: 0,
+          doctor: ''
+        };
+      } else if (action === 'cancel') {
+        const reason = prompt('Cancellation reason:') || 'Patient request';
+        updateData = {
+          status: 'cancelled' as const,
+          cancelledAt: now,
+          notes: `${item.notes || ''}\nCancelled: ${reason}`
+        };
+      } else if (action === 'delete') {
+        if (confirm(`Remove ${item.patientName} from queue?`)) {
+          await deleteLocal('queue', item.id);
+          toast.success(`Removed ${item.patientName} from queue`);
+        }
+        return;
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        await updateQueueItemOptimistic(item.id, updateData);
+      }
+    } catch (error) {
+      console.error('Queue action error:', error);
+      toast.error('Failed to update queue');
+    }
+  };
+
+  const handleTreatmentSubmit = async (data: {
+    treatment: string;
+    fee: number;
+    doctor: string;
+    doctorId?: string;
+  }) => {
+    if (!selectedQueueItemForTreatment || !selectedPatientData) return;
+
+    try {
+      const now = new Date().toISOString();
+      const updateData = {
+        status: 'completed' as const,
+        treatmentEndTime: now,
+        treatment: data.treatment,
+        fee: data.fee,
+        doctor: data.doctor,
+        doctorId: data.doctorId
+      };
+
+      await updateQueueItemOptimistic(selectedQueueItemForTreatment.id, updateData);
+
+      const updatedPatient = {
+        ...selectedPatientData,
+        pendingBalance: (selectedPatientData.pendingBalance || 0) + data.fee,
+        totalVisits: (selectedPatientData.totalVisits || 0) + 1,
+        lastVisit: now
+      };
+
+      await updateLocal('patients', updatedPatient);
+      setShowTreatmentModal(false);
+      toast.success('Treatment completed');
+    } catch (error) {
+      console.error('Error completing treatment:', error);
+      toast.error('Failed to complete treatment');
+    }
+  };
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -161,23 +292,48 @@ export default function OperatorDashboard() {
               title="Waiting"
               items={waitingPatients}
               status="waiting"
-              onAction={() => { }} // Read-only for operator
+              onAction={handleQueueAction}
             />
             <QueueSection
               title="In Treatment"
               items={inTreatmentPatients}
               status="in_treatment"
-              onAction={() => { }}
+              onAction={handleQueueAction}
+              showBackButton={true}
             />
             <QueueSection
               title="Completed"
               items={completedPatients}
               status="completed"
-              onAction={() => { }}
+              onAction={handleQueueAction}
+              showBackButton={true}
             />
           </div>
         )}
       </div>
+
+      {showTreatmentModal && selectedQueueItemForTreatment && (
+        <TreatmentModal
+          open={showTreatmentModal}
+          onClose={() => {
+            setShowTreatmentModal(false);
+            setSelectedQueueItemForTreatment(null);
+            setSelectedPatientData(null);
+          }}
+          onSubmit={handleTreatmentSubmit}
+          queueItem={selectedQueueItemForTreatment}
+          doctors={presentDoctors}
+          patientData={selectedPatientData}
+          patientHistory={{
+            queueHistory: [],
+            paymentHistory: [],
+            bills: []
+          }}
+          patientInfo={{
+            pendingBalance: selectedPatientData?.pendingBalance || 0
+          }}
+        />
+      )}
     </div>
   );
 }

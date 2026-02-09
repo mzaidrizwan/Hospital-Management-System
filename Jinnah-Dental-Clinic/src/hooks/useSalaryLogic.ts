@@ -20,6 +20,11 @@ export const getSalaryStatus = (staff: Staff) => {
         return { status: "Pending" as const, amountDue: staff.salary || 0 };
     }
 
+    // Force pending if no salary has ever been paid (e.g. joining day)
+    if (staff.totalPaid === 0) {
+        return { status: "Pending" as const, amountDue: staff.salary || 0 };
+    }
+
     const today = startOfToday();
     const lastPaid = parseISO(staff.lastPaidDate);
     const salaryType = staff.salaryType || staff.salaryDuration || "monthly";

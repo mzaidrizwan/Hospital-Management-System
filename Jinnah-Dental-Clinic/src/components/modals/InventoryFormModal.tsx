@@ -22,7 +22,18 @@ const categories = ['Materials', 'Supplies', 'Anesthetics', 'Instruments', 'Equi
 
 export function InventoryFormModal({ open, onOpenChange, editingItem }: InventoryFormModalProps) {
     const { setInventory, isOnline, addItem, licenseDaysLeft } = useData();
-    const [item, setItem] = useState({
+    const [item, setItem] = useState<{
+        id?: string;
+        name: string;
+        sku: string;
+        quantity: number;
+        min: number;
+        category: string;
+        buyingPrice: number;
+        sellingPrice: number;
+        price: number;
+    }>({
+        id: undefined,
         name: '',
         sku: '',
         quantity: 0,
@@ -43,6 +54,7 @@ export function InventoryFormModal({ open, onOpenChange, editingItem }: Inventor
             });
         } else {
             setItem({
+                id: undefined,
                 name: '',
                 sku: '',
                 quantity: 0,
@@ -70,7 +82,7 @@ export function InventoryFormModal({ open, onOpenChange, editingItem }: Inventor
 
         const itemToSave = {
             ...item,
-            id: item.id || Date.now().toString(),
+            id: item.id || `inv-${Date.now()}`,
             quantity: Number(item.quantity) || 0,
             min: Number(item.min) || 0,
             buyingPrice: Number(item.buyingPrice) || 0,
@@ -110,7 +122,7 @@ export function InventoryFormModal({ open, onOpenChange, editingItem }: Inventor
                         <Label htmlFor="category" className="text-xs font-bold uppercase text-muted-foreground">Category</Label>
                         <Select value={item.category} onValueChange={(value) => setItem(prev => ({ ...prev, category: value }))}>
                             <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
-                            <SelectContent position="popper" className="max-h-60 overflow-y-auto">
+                            <SelectContent className="max-h-60 overflow-y-auto">
                                 {categories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                             </SelectContent>
                         </Select>

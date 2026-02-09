@@ -18,6 +18,8 @@ interface Patient {
   gender?: string;
   address?: string;
   openingBalance?: number;
+  pendingBalance?: number;
+  totalVisits?: number;
 }
 
 interface PatientFormModalProps {
@@ -53,9 +55,11 @@ export default function PatientFormModal({
     openingBalance: '0'
   });
 
-  const { updateLocal } = useData();
+  const { updateLocal, queue } = useData();
   const [idError, setIdError] = useState('');
   const [lastGeneratedId, setLastGeneratedId] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [matchingPatients, setMatchingPatients] = useState<Patient[]>([]);
 
   // Generate next available 4-digit number
   const generateNextSequentialNumber = () => {
@@ -145,6 +149,26 @@ export default function PatientFormModal({
       const formatted = parts.length > 2 ? parts[0] + '.' + parts.slice(1).join('') : cleaned;
       setFormData(prev => ({ ...prev, [name]: formatted }));
     }
+    else if (name === 'name' || name === 'phone') {
+      // Update form data
+      setFormData(prev => ({ ...prev, [name]: value }));
+
+      // Filter matching patients when typing name or phone
+      if (value.trim().length >= 2 && !isEditing) {
+        const searchTerm = value.toLowerCase().trim();
+        const matches = existingPatients.filter(p => {
+          const nameMatch = p.name?.toLowerCase().includes(searchTerm);
+          const phoneMatch = p.phone?.toLowerCase().includes(searchTerm);
+          return nameMatch || phoneMatch;
+        }).slice(0, 5); // Limit to 5 suggestions
+
+        setMatchingPatients(matches);
+        setShowSuggestions(matches.length > 0);
+      } else {
+        setShowSuggestions(false);
+        setMatchingPatients([]);
+      }
+    }
     else {
       setFormData(prev => ({ ...prev, [name]: value }));
     }
@@ -156,6 +180,8 @@ export default function PatientFormModal({
     // Basic validation
     if (!formData.name.trim()) return toast.error('Patient name is required');
     if (!formData.phone.trim()) return toast.error('Phone number is required');
+    if (!formData.age) return toast.error('Patient age is required');
+    if (!formData.gender) return toast.error('Patient gender is required');
     if (!formData.patientNumber || formData.patientNumber.length !== 4) {
       return toast.error('Patient Number must be exactly 4 digits (0001-9999)');
     }
@@ -216,6 +242,90 @@ export default function PatientFormModal({
     setFormData(prev => ({ ...prev, patientNumber: newNumber }));
     setLastGeneratedId(newNumber);
     setIdError('');
+  };
+
+  const handleAddExistingToQueue = async (patient: Patient) => {
+    const toastId = toast.loading('Adding to queue...');
+
+    // Timeout guard to prevent stuck toast
+    const timeoutId = setTimeout(() => {
+      toast.dismiss(toastId);
+      console.warn('TOAST GUARD: Forced dismissal after 4 seconds');
+    }, 4000);
+
+    try {
+      // Close suggestions
+      setShowSuggestions(false);
+      setMatchingPatients([]);
+
+      // Get today's queue items to calculate next token number
+      const today = new Date();
+      const todayString = today.toDateString();
+
+      // Filter today's queue items
+      const todayQueueItems = (queue || []).filter(item => {
+        const itemDate = new Date(item.checkInTime);
+        return itemDate.toDateString() === todayString;
+      });
+
+      const nextToken = todayQueueItems.length > 0
+        ? Math.max(...todayQueueItems.map(q => q.tokenNumber || 0)) + 1
+        : 1;
+
+      // Create queue item with all necessary fields
+      const queueItemData = {
+        id: `Q-${Date.now()}`,
+        patientId: patient.id,
+        patientNumber: patient.patientNumber,
+        patientName: patient.name || '',
+        patientPhone: patient.phone || '',
+        tokenNumber: nextToken,
+        status: 'waiting' as const,
+        checkInTime: new Date().toISOString(),
+        treatment: '',
+        doctor: '',
+        priority: 'normal',
+        notes: '',
+        fee: 0,
+        paymentStatus: 'pending' as const,
+        amountPaid: 0,
+        previousPending: patient.pendingBalance || 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      // Add to queue using updateLocal
+      await updateLocal('queue', queueItemData);
+
+      // Clear timeout and dismiss loading toast
+      clearTimeout(timeoutId);
+      toast.dismiss(toastId);
+
+      // Show success message
+      toast.success(`${patient.name} added to waiting queue (Token #${nextToken})`);
+
+      // Close modal
+      onClose();
+    } catch (error) {
+      console.error('Error adding patient to queue:', error);
+
+      // Clear timeout and dismiss loading toast
+      clearTimeout(timeoutId);
+      toast.dismiss(toastId);
+
+      // Show error message
+      toast.error('Failed to add patient to queue');
+    }
+  };
+
+  const formatCurrency = (amount: number | undefined) => {
+    const numAmount = amount || 0;
+    return new Intl.NumberFormat('en-PK', {
+      style: 'currency',
+      currency: 'PKR',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(numAmount);
   };
 
   if (!open) return null;
@@ -313,6 +423,69 @@ export default function PatientFormModal({
                     className="h-11"
                   />
                 </div>
+
+                {/* Patient Suggestions */}
+                {showSuggestions && matchingPatients.length > 0 && (
+                  <div className="mt-4 p-4 bg-blue-50 border-2 border-blue-200 rounded-lg space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-semibold text-blue-900 text-sm">Existing Patients Found</h4>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowSuggestions(false);
+                          setMatchingPatients([]);
+                        }}
+                        className="text-blue-600 hover:text-blue-800"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {matchingPatients.map((patient) => (
+                        <div
+                          key={patient.id}
+                          className="bg-white p-3 rounded-lg border border-blue-200 hover:border-blue-400 transition-all"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <h5 className="font-bold text-gray-900 truncate">{patient.name}</h5>
+                                <span className="text-xs font-mono bg-gray-100 px-2 py-0.5 rounded">
+                                  #{patient.patientNumber}
+                                </span>
+                              </div>
+                              <p className="text-sm text-gray-600 mb-2">{patient.phone}</p>
+                              <div className="flex flex-wrap gap-2 text-xs">
+                                <span className={`px-2 py-1 rounded-full font-medium ${(patient.pendingBalance || 0) > 0
+                                  ? 'bg-red-100 text-red-700'
+                                  : (patient.pendingBalance || 0) < 0
+                                    ? 'bg-blue-100 text-blue-700'
+                                    : 'bg-green-100 text-green-700'
+                                  }`}>
+                                  {(patient.pendingBalance || 0) > 0 && 'Due: '}
+                                  {(patient.pendingBalance || 0) < 0 && 'Credit: '}
+                                  {(patient.pendingBalance || 0) === 0 && 'Settled'}
+                                  {(patient.pendingBalance || 0) !== 0 && ` ${formatCurrency(Math.abs(patient.pendingBalance || 0))}`}
+                                </span>
+                                <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded-full font-medium">
+                                  {patient.totalVisits || 0} visits
+                                </span>
+                              </div>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() => handleAddExistingToQueue(patient)}
+                              className="bg-green-600 hover:bg-green-700 text-white shrink-0"
+                            >
+                              Add to Waiting
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -323,7 +496,7 @@ export default function PatientFormModal({
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="age">Age</Label>
+                    <Label htmlFor="age">Age <span className="text-red-500">*</span></Label>
                     <Input
                       id="age"
                       name="age"
@@ -339,7 +512,7 @@ export default function PatientFormModal({
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="gender">Gender</Label>
+                    <Label htmlFor="gender">Gender <span className="text-red-500">*</span></Label>
                     <select
                       id="gender"
                       name="gender"

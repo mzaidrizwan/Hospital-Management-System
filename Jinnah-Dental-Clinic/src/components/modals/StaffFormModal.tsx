@@ -141,8 +141,8 @@ export default function StaffFormModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formData.name?.trim() || !formData.role || !formData.phone?.trim() || Number(formData.salary) <= 0) {
-      alert('Please fill required fields');
+    if (!formData.name?.trim() || !formData.role) {
+      alert('Please fill required fields (Name and Role)');
       return;
     }
 
@@ -156,6 +156,7 @@ export default function StaffFormModal({
       onClose();
     } catch (error) {
       console.error('Error submitting form:', error);
+      // Optional: Show error to user if needed, but avoid getting stuck
     } finally {
       setIsSubmitting(false);
     }

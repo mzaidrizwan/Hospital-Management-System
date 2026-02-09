@@ -294,6 +294,8 @@ export default function OperatorQueue() {
 
   const handleSavePatient = (patientData: any) => {
     // PatientFormModal handles updateLocal internally
+    setShowPatientModal(false);
+    setSelectedPatient(null);
   };
 
   const speakAnnouncement = (tokenNumber: number | string) => {
@@ -370,7 +372,10 @@ export default function OperatorQueue() {
           notes: `${item.notes || ''}\nCancelled: ${reason}`
         };
       } else if (action === 'edit') {
-        const patient = patients.find(pt => pt.patientNumber === item.patientNumber);
+        const patient = patients.find(pt =>
+          (item.patientNumber && pt.patientNumber === item.patientNumber) ||
+          pt.id === item.patientId
+        );
         if (patient) {
           setSelectedPatient(patient);
           setModalMode('walk-in');

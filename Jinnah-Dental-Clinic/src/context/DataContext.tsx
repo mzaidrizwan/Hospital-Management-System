@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useCa
 import { db } from '@/lib/firebase';
 import { collection, onSnapshot, query, setDoc, doc, getDocs, getDoc, deleteDoc } from 'firebase/firestore';
 import { getFromLocal, saveToLocal, openDB, getAllStores, saveMultipleToLocal, deleteFromLocal, clearStore } from '@/services/indexedDbUtils';
-import { processSyncQueue, smartSync } from '@/services/syncService';
+import { processSyncQueue, smartSync, smartDelete } from '@/services/syncService';
 import { useConnectionStatus } from '@/hooks/useConnectionStatus';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { InventoryFormModal } from '@/components/modals/InventoryFormModal';
@@ -299,9 +299,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
         setTimeout(async () => {
             try {
                 if (isOnline) {
-                    console.log(`[Background Sync] Syncing ${collectionName} to Firebase:`, data.id);
-                    await smartSync(collectionName, data);
-                    console.log(`[Background Sync] Successfully synced ${collectionName}:`, data.id);
+                    if (data._deleted) {
+                        console.log(`[Background Sync] Deleting ${collectionName} from Firebase:`, data.id);
+                        await smartDelete(collectionName, data.id);
+                        console.log(`[Background Sync] Successfully deleted ${collectionName}:`, data.id);
+                    } else {
+                        console.log(`[Background Sync] Syncing ${collectionName} to Firebase:`, data.id);
+                        await smartSync(collectionName, data);
+                        console.log(`[Background Sync] Successfully synced ${collectionName}:`, data.id);
+                    }
                 }
             } catch (syncError) {
                 console.error(`[Background Sync] Failed for ${collectionName}:`, syncError);
@@ -315,27 +321,21 @@ export function DataProvider({ children }: { children: ReactNode }) {
      */
     const updateLocal = useCallback(async (collectionName: string, data: any): Promise<any> => {
         try {
-            // 1. Add timestamps and sync markers
+            // Pre-processing & Validation
             let enrichedData = {
                 ...data,
+                id: data.id || (collectionName === 'clinicSettings' ? 'clinic-settings' : `${collectionName.slice(0, 3).toUpperCase()}-${Date.now()}`),
                 createdAt: data.createdAt || new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
-                needsSync: true,
                 lastUpdated: Date.now()
             };
 
             // Staff specific defaults and validation
             if (collectionName === 'staff') {
-                // Validation: Block staff with empty names
-                if (!data.name || data.name.trim() === '') {
-                    console.error('[updateLocal] Blocked attempt to save staff member with empty name:', data);
-                    throw new Error('Staff name is required');
-                }
-
+                if (!data.name || data.name.trim() === '') throw new Error('Staff name is required');
                 enrichedData = {
                     ...enrichedData,
                     salaryType: enrichedData.salaryType || enrichedData.salaryDuration || 'monthly',
-                    lastPaidDate: enrichedData.lastPaidDate || enrichedData.joinDate || new Date().toISOString(),
                     totalEarned: Number(enrichedData.totalEarned) || 0
                 };
             }
@@ -346,74 +346,32 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     ...enrichedData,
                     buyingPrice: Number(enrichedData.buyingPrice) || 0,
                     sellingPrice: Number(enrichedData.sellingPrice) || 0,
-                    quantity: Number(enrichedData.quantity) || 0,
-                    price: Number(enrichedData.sellingPrice) || Number(enrichedData.price) || 0,
-                    updatedAt: new Date().toISOString()
+                    quantity: Number(enrichedData.quantity) || 0
                 };
             }
 
-            // Treatments specific sanitization
-            if (collectionName === 'treatments') {
-                const cleanFee = Number(enrichedData.fee);
-                if (isNaN(cleanFee)) {
-                    console.error('[updateLocal] Blocked invalid treatment fee:', data);
-                    // We don't throw here to avoid crashing UI, just ensure it's 0 or handle logic
-                    enrichedData.fee = 0;
-                } else {
-                    enrichedData.fee = cleanFee;
-                }
-            }
-
-            console.log(`[updateLocal] Starting for ${collectionName}:`, enrichedData.id);
-
-            // 2. STEP 1: Update React State IMMEDIATELY (Fast)
+            // 1. Update App State (Immediate UI feedback)
             const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
             if (setter) {
                 if (collectionName === 'clinicSettings') {
                     setter(enrichedData);
                 } else {
-                    setter((prev: any[]) => {
-                        const index = prev.findIndex((item: any) => item.id === enrichedData.id);
-                        if (index !== -1) {
-                            const next = [...prev];
-                            next[index] = enrichedData;
-                            return next;
-                        } else {
-                            return [enrichedData, ...prev];
-                        }
-                    });
+                    setter((prev: any[]) => [...(prev || []).filter(i => i.id !== enrichedData.id), enrichedData]);
                 }
             }
 
-            // 3. STEP 2: Save to IndexedDB (Wait for local persistence)
-            try {
-                // IMPORTANT: This await is crucial to prevent "not on disk" errors
-                await saveToLocal(collectionName, enrichedData);
-                console.log(`[updateLocal] Saved to IndexedDB successfully for ${collectionName}:`, enrichedData.id);
+            // 2. Save to IndexedDB (Local persistence)
+            await saveToLocal(collectionName, enrichedData);
 
-                if (collectionName === 'inventory' && typeof window !== 'undefined') {
-                    toast.success("Item saved locally!");
-                }
-            } catch (dbError) {
-                console.error(`Critical DB Error for ${collectionName}:`, dbError);
-                // We still proceed since state is updated, but notify if critical
-                if (typeof window !== 'undefined') {
-                    toast.error(`Database Write Failed for ${collectionName}: ${dbError instanceof Error ? dbError.message : 'Unknown error'}`);
-                }
-            }
-
-            // 4. STEP 3: Trigger Firebase sync in background (Non-blocking)
-            // DO NOT AWAIT THIS
+            // 3. Push to Firebase in background (Cloud sync)
             backgroundFirebaseSync(collectionName, enrichedData);
 
-            // 5. Return the saved data
             return enrichedData;
-
         } catch (error) {
-            console.error(`[updateLocal] Error:`, error);
+            console.error(`[updateLocal] Error in ${collectionName}:`, error);
             throw error;
         }
-    }, [stateSetterMap, backgroundFirebaseSync]);
+    }, [stateSetterMap]);
 
     /**
      * NEW: Optimistic update for queue items - FIRE AND FORGET version
@@ -683,26 +641,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
      */
     const addItem = useCallback(async (collectionName: string, item: any): Promise<any> => {
         try {
+            // Ensure ID exists early
+            const id = item.id || `${collectionName.slice(0, 3).toUpperCase()}-${Date.now()}`;
+            const newItem = { ...item, id };
+
             // STRICT VALIDATION: Block ghost expenses
             if (collectionName === 'expenses') {
-                if (!item.title || item.title.trim() === "" || isNaN(Number(item.amount))) {
-                    console.warn("Blocked ghost expense creation:", item);
-                    return; // Stop the function here
+                if (!newItem.title || newItem.title.trim() === "" || isNaN(Number(newItem.amount))) {
+                    console.warn("Blocked ghost expense creation:", newItem);
+                    return;
                 }
-                // Ensure amount is a number
-                item = { ...item, amount: Number(item.amount) };
             }
 
-            console.log(`[addItem] Starting for ${collectionName}:`, item.id || 'new-item');
-
-            // Ensure item has ID
-            const itemWithId = {
-                ...item,
-                id: item.id || `${collectionName.slice(0, 3).toUpperCase()}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`
-            };
-
-            // Call updateLocal (which is now fire and forget)
-            const result = await updateLocal(collectionName, itemWithId);
+            // --- THE STRICT PATTERN via updateLocal ---
+            const result = await updateLocal(collectionName, newItem);
 
             // AUTO-EXPENSE LOGIC: Trigger an expense record for inventory purchases
             if (collectionName === 'inventory') {
@@ -724,9 +676,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         date: new Date().toISOString()
                     };
                     await updateLocal('purchases', purchaseRecord);
-                    setPurchases(prev => [purchaseRecord, ...(prev || [])]);
 
-                    // 2. Recursive call to addItem to create the general expense
+                    // 2. Create the general expense
                     await addItem('expenses', {
                         title: `Stock Purchase: ${result.name}`,
                         amount: totalExpense,
@@ -742,14 +693,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }
             }
 
-            console.log(`[addItem] Completed successfully for ${collectionName}:`, result.id);
             return result;
-
         } catch (error) {
-            console.error("Critical DB Error:", error);
-            if (typeof window !== 'undefined') {
-                toast.error(`Database Write Failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-            }
+            console.error("Error adding item:", error);
             throw error;
         }
     }, [updateLocal]);

@@ -89,7 +89,7 @@ export default function AdminSettings() {
     }
 
     // Check duplicate
-    if (roles && roles.some((r: any) => r.title.toLowerCase() === newRoleTitle.trim().toLowerCase())) {
+    if (roles && roles.some((r: any) => r && r.title && r.title.toLowerCase() === newRoleTitle.trim().toLowerCase())) {
       toast.error("Role already exists");
       return;
     }

@@ -39,7 +39,7 @@ import PaySalaryModal from '@/components/modals/PaySalaryModal';
 import AttendanceModal from '@/components/modals/AttendanceModal';
 import StaffActivityModal from '@/components/staff/StaffActivityModal';
 import { Staff, SalaryPayment, Attendance, Transaction, Expense } from '@/types';
-import { smartSync, smartDelete } from '@/services/syncService';
+
 import { cn } from '@/lib/utils';
 import { useSalaryLogic } from '@/hooks/useSalaryLogic';
 
@@ -111,6 +111,8 @@ export default function AdminStaff() {
   const [selectedStaffForHistory, setSelectedStaffForHistory] = useState<Staff | null>(null);
 
   const isPaymentDue = (staff: Staff): boolean => {
+    // Enable payment on joining day (when totalPaid is 0)
+    if (staff.totalPaid === 0) return true;
     if (!staff.lastPaidDate) return true;
 
     const today = new Date();
@@ -235,24 +237,18 @@ export default function AdminStaff() {
         } as Staff;
       }
 
-      // 1. Update LOCAL immediately (State + IndexedDB)
-      // This is fast and ensures the UI updates instantly
+      // Update using DataContext's updateLocal (handles State → IndexedDB → Firebase)
       await updateLocal('staff', updatedStaff);
-
-      // 2. Close Modal immediately
-      setShowStaffForm(false);
-      setSelectedStaff(null);
-
-      // 3. Trigger Firebase Sync in background (no await)
-      smartSync('staff', updatedStaff).catch(err => {
-        console.error('Background sync failed:', err);
-      });
 
       toast.success(isEditing ? 'Staff updated successfully' : 'Staff added to directory');
 
     } catch (error) {
       console.error('Staff operation failed:', error);
       toast.error('Failed to save staff information');
+    } finally {
+      // Always close the modal and reset selection
+      setShowStaffForm(false);
+      setSelectedStaff(null);
     }
   };
 
@@ -263,11 +259,6 @@ export default function AdminStaff() {
       // 1. Update LOCAL immediately (State + IndexedDB)
       // This makes the card disappear instantly
       await deleteLocal('staff', staffMember.id);
-
-      // 2. Trigger Firebase Delete in background (no await)
-      smartDelete('staff', staffMember.id).catch(err => {
-        console.error('Background delete failed:', err);
-      });
 
       toast.success(`${staffMember.name} removed from record`);
     } catch (error) {
@@ -302,6 +293,7 @@ export default function AdminStaff() {
         date: timestamp,
         description: `Monthly salary payment for ${staffMember.name}. ${paymentData.notes || ''}`,
         status: 'paid',
+        isRecurring: false,
         createdAt: timestamp,
         updatedAt: timestamp
       };
@@ -327,35 +319,18 @@ export default function AdminStaff() {
         salaryStatus: 'Paid'
       };
 
-      // 1. OPTIMISTIC UPDATE: Immediate UI cleanup
+      // 1. OPTIMISTIC UI: Close modal immediately
       setShowPaySalary(null);
 
-      // Update local React states directly
-      setTransactions(prev => [newTransaction, ...(prev || [])]);
-      setStaff(prev => prev.map(s => s.id === updatedStaff.id ? updatedStaff : s));
-      setExpenses(prev => [newExpense, ...(prev || [])]);
+      // 2. Perform updates via updateLocal (handles State, IndexedDB, and Firebase sync)
+      await Promise.all([
+        updateLocal('transactions', newTransaction),
+        updateLocal('expenses', newExpense),
+        updateLocal('staff', updatedStaff),
+        updateLocal('salaryPayments', newSalaryPayment)
+      ]);
 
-      // 2. Show success toast immediately
       toast.success(`Salary Payment recorded for ${staffMember.name}`);
-
-      // 3. Background Synchronization
-      const performSync = async () => {
-        try {
-          await Promise.all([
-            smartSync('transactions', newTransaction),
-            updateLocal('transactions', newTransaction),
-            smartSync('expenses', newExpense),
-            updateLocal('expenses', newExpense),
-            updateLocal('staff', updatedStaff),
-            smartSync('salaryPayments', newSalaryPayment),
-            updateLocal('salaryPayments', newSalaryPayment)
-          ]);
-        } catch (error) {
-          console.error('Background payment sync failed:', error);
-        }
-      };
-
-      performSync();
     } catch (error) {
       console.error('Payment processing failed:', error);
       toast.error('Failed to process payment');
