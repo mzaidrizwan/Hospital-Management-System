@@ -140,7 +140,7 @@ export default function QueueSection({
       case 'in_treatment':
         return (
           <>
-            {/* ← Yeh naya Back button */}
+            {/* yeh naya Back button */}
             {showBackButton && (
               <Button
                 size="sm"

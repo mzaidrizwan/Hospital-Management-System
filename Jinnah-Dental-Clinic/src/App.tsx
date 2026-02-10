@@ -18,11 +18,11 @@ import OperatorSettings from "@/pages/operator/Settings";
 
 // Admin Pages
 import AdminDashboard from "@/pages/admin/AdminDashboard";
-import AdminAnalytics from "@/pages/admin/AdminAnalytics";
 import AdminPatients from "@/pages/admin/AdminPatients";
 import AdminStaff from "@/pages/admin/AdminStaff";
 import AdminFinances from "@/pages/admin/AdminFinances";
 import AdminReports from "@/pages/admin/AdminReports";
+import AdminAnalytics from "@/pages/admin/AdminAnalytics";
 import AdminSettings from "@/pages/admin/AdminSettings";
 
 import NotFound from "./pages/NotFound";
@@ -46,8 +46,8 @@ function AuthenticatedApp() {
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-slate-900 mb-2">System Temporarily Offline</h1>
-          <p className="text-slate-600 mb-6">The application has been locked by the administrator. Please contact support or check back later.</p>
-          <div className="text-xs text-slate-400 font-mono">ERR_SYSTEM_SHUTDOWN_ACTIVE</div>
+          <p className="text-slate-600 mb-6">The application has been locked. Please contact support or check back later.</p>
+          <div className="text-xs text-slate-400 font-mono">ERR_SYSTEM_OFF</div>
         </div>
       </div>
     );
@@ -78,12 +78,12 @@ function AuthenticatedApp() {
       <Route path="/admin" element={<DashboardLayout />}>
         <Route index element={<AdminDashboard />} />
         <Route path="dashboard" element={<AdminDashboard />} />
-        <Route path="analytics" element={<AdminAnalytics />} />
         <Route path="patients" element={<AdminPatients />} />
         <Route path="staff" element={<AdminStaff />} />
         <Route path="expenses" element={<ExpensesPage />} />
         <Route path="finances" element={<AdminFinances />} />
         <Route path="reports" element={<AdminReports />} />
+        <Route path="analytics" element={<AdminAnalytics />} />
         <Route path="settings" element={<AdminSettings />} />
       </Route>
 

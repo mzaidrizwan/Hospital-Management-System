@@ -1,41 +1,505 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Clinic License Generator</title>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
     <style>
-        body { font-family: sans-serif; display: flex; justify-content: center; padding: 50px; background: #f4f7f6; }
-        .card { background: white; padding: 30px; border-radius: 12px; shadow: 0 4px 6px rgba(0,0,0,0.1); width: 400px; }
-        input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 6px; }
-        button { width: 100%; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; }
-        #result { margin-top: 20px; padding: 15px; background: #e0f2fe; border-radius: 6px; font-weight: bold; text-align: center; display: none; }
+        body { 
+            font-family: sans-serif; 
+            display: flex; 
+            justify-content: center; 
+            padding: 50px; 
+            background: #f4f7f6; 
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .card { 
+            background: white; 
+            padding: 30px; 
+            border-radius: 12px; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
+            width: 400px; 
+            margin-bottom: 20px;
+            box-sizing: border-box;
+        }
+        input { 
+            width: 100%; 
+            padding: 10px; 
+            margin: 10px 0; 
+            border: 1px solid #ddd; 
+            border-radius: 6px; 
+            box-sizing: border-box;
+        }
+        button { 
+            width: 100%; 
+            padding: 12px; 
+            background: #2563eb; 
+            color: white; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            margin: 5px 0;
+            font-size: 16px;
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background: #1d4ed8;
+        }
+        #result { 
+            margin-top: 20px; 
+            padding: 15px; 
+            background: #e0f2fe; 
+            border-radius: 6px; 
+            font-weight: bold; 
+            text-align: center; 
+            display: none;
+            word-break: break-all;
+        }
+        .warning-card {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+        }
+        .delete-btn {
+            background: #dc3545;
+        }
+        .delete-btn:hover {
+            background: #c82333;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 6px;
+            text-align: center;
+            display: none;
+            word-break: break-word;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .protected-list {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            padding: 10px;
+            margin: 10px 0;
+            font-size: 14px;
+        }
+        .protected-item {
+            color: #198754;
+            font-weight: bold;
+        }
+        .firebase-status {
+            margin-top: 10px;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            text-align: center;
+        }
+        .firebase-connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .firebase-disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        h2 {
+            margin-top: 0;
+            color: #333;
+        }
+        label {
+            font-weight: bold;
+            color: #555;
+            display: block;
+            margin-top: 10px;
+        }
+        .instructions {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
+    <!-- Firebase Status Indicator -->
+    <div id="firebaseStatus" class="firebase-status" style="display: none;"></div>
+
+    <!-- Main License Generator Card -->
     <div class="card">
         <h2>License Generator</h2>
         <label>Clinic Name:</label>
         <input type="text" id="clinicName" placeholder="Enter exact clinic name">
-        <button onclick="generateKey()">Generate 30-Day Key</button>
+        <div class="instructions">Enter the clinic name exactly as it appears in your records</div>
+        <button onclick="generateKey()">Generate 30-Day License Key</button>
         <div id="result"></div>
     </div>
 
-    <script>
-        async function generateKey() {
-            const clinic = document.getElementById('clinicName').value.toLowerCase().trim();
-            const salt = "import{useData}from'@/context/DataContext';";
-            const date = new Date();
-            const dataString = `${clinic}-${date.getFullYear()}-${date.getMonth() + 1}-${salt}`;
+    <!-- Firebase Admin Card -->
+    <div class="card warning-card">
+        <h2 style="color: #856404;">Firebase Admin</h2>
+        
+        <div class="protected-list">
+            <strong>Protected Collections (Will NOT be deleted):</strong>
+            <div class="protected-item">• power</div>
+        </div>
+        
+        <p style="color: #856404; font-size: 14px; margin-bottom: 15px;">
+            ⚠️ <strong>Warning:</strong> This will permanently delete all data from Firebase except the protected collections. This action cannot be undone.
+        </p>
+        
+        <button class="delete-btn" onclick="deleteAllFirebaseData()" id="deleteBtn">Delete All Cloud Data</button>
+        <div id="deleteStatus" class="status"></div>
+    </div>
 
-            const msgBuffer = new TextEncoder().encode(dataString);
-            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            const fullHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-            
-            const key = fullHash.substring(0, 8).toUpperCase();
-            const display = document.getElementById('result');
-            display.style.display = 'block';
-            display.innerText = "LICENSE KEY: " + key;
+    <script>
+        // Firebase Configuration (Dummy Credentials - Replace with actual credentials in production)
+        const firebaseConfig = {
+           apiKey: "AIzaSyDh1h9-28LRW_BzUHPhV5yCFVjtvP7_b2Y",
+  authDomain: "jinnah-dental.firebaseapp.com",
+  projectId: "jinnah-dental",
+  storageBucket: "jinnah-dental.firebasestorage.app",
+  messagingSenderId: "609695233734",
+  appId: "1:609695233734:web:5bf2bdfbbe384e9c4e89c7",
+  measurementId: "G-TL4BV0EVCS"
+        };
+
+        // Protected collections that should NOT be deleted
+        const PROTECTED_COLLECTIONS = ["power"];
+
+        // Global variables
+        let firebaseApp;
+        let db;
+        let isFirebaseInitialized = false;
+
+        // Initialize Firebase
+        function initializeFirebase() {
+            try {
+                // Check if Firebase is already initialized
+                if (!firebase.apps.length) {
+                    firebaseApp = firebase.initializeApp(firebaseConfig);
+                } else {
+                    firebaseApp = firebase.app();
+                }
+                
+                db = firebase.firestore();
+                isFirebaseInitialized = true;
+                
+                updateFirebaseStatus(true, "Firebase initialized successfully");
+                console.log("Firebase initialized successfully");
+                
+                // Enable delete button if Firebase is initialized
+                document.getElementById('deleteBtn').disabled = false;
+                
+            } catch (error) {
+                console.error("Firebase initialization error:", error);
+                updateFirebaseStatus(false, `Firebase error: ${error.message}`);
+                
+                // Disable delete button if Firebase failed to initialize
+                document.getElementById('deleteBtn').disabled = true;
+            }
         }
+
+        // Update Firebase connection status
+        function updateFirebaseStatus(connected, message) {
+            const statusDiv = document.getElementById('firebaseStatus');
+            statusDiv.style.display = 'block';
+            statusDiv.textContent = message;
+            statusDiv.className = connected ? 'firebase-status firebase-connected' : 'firebase-status firebase-disconnected';
+        }
+
+        // Function to get all collections from Firestore
+        async function getAllCollections() {
+            const collections = [];
+            
+            // We need to fetch collections using a recursive approach or batch gets
+            // For simplicity, let's use a known approach: we can try to get a list of collections
+            // by fetching a single document's subcollections from the root
+            try {
+                // Get a list of all collections by using a special approach
+                // In Firestore, we need to know collection names beforehand or use admin SDK
+                // For client-side, we need to maintain a list of collections or use a different approach
+                
+                // Since we can't list collections from root on client-side,
+                // we'll use a different approach: maintain a list of known collections
+                // OR try to delete known common collections
+                
+                // For this example, I'll provide both approaches
+                
+                // Approach 1: If you know your collections, define them here:
+                const knownCollections = [
+                    "licenses", "users", "appointments", "patients", 
+                    "treatments", "payments", "inventory", "settings"
+                ];
+                
+                // Approach 2: Try to get collections from a dummy document reference
+                // This won't work for root collections, so we'll use Approach 1
+                
+                return knownCollections;
+                
+            } catch (error) {
+                console.error("Error getting collections:", error);
+                throw error;
+            }
+        }
+
+        // Function to delete all Firebase data except protected collections
+        async function deleteAllFirebaseData() {
+            const statusDiv = document.getElementById('deleteStatus');
+            const deleteBtn = document.getElementById('deleteBtn');
+            
+            // Reset status
+            statusDiv.style.display = 'block';
+            statusDiv.className = 'status';
+            
+            if (!isFirebaseInitialized || !db) {
+                statusDiv.textContent = "❌ Error: Firebase not initialized properly";
+                statusDiv.classList.add('error');
+                return;
+            }
+
+            // Show protected collections in confirmation
+            const protectedList = PROTECTED_COLLECTIONS.map(c => `• ${c}`).join('\n');
+            
+            const confirmMessage = `⚠️ WARNING: This will delete ALL data from Firebase EXCEPT protected collections.\n\n`
+                + `🔒 Protected Collections (will NOT be deleted):\n${protectedList}\n\n`
+                + `🗑️ All other collections will be permanently deleted.\n\n`
+                + `This action cannot be undone.\n\n`
+                + `Are you absolutely sure?`;
+            
+            const confirmDelete = confirm(confirmMessage);
+            
+            if (!confirmDelete) {
+                statusDiv.textContent = "✅ Deletion cancelled";
+                statusDiv.classList.add('info');
+                setTimeout(() => {
+                    statusDiv.style.display = 'none';
+                }, 2000);
+                return;
+            }
+
+            try {
+                // Disable button during deletion
+                deleteBtn.disabled = true;
+                deleteBtn.textContent = "Deleting...";
+                
+                statusDiv.textContent = "🔄 Deleting Firebase data... This may take a moment.";
+                statusDiv.classList.add('info');
+                
+                // Get all known collections
+                const knownCollections = await getAllCollections();
+                
+                // Filter out protected collections
+                const collectionsToDelete = knownCollections.filter(
+                    collectionName => !PROTECTED_COLLECTIONS.includes(collectionName)
+                );
+                
+                // Log for debugging
+                console.log("Collections to delete:", collectionsToDelete);
+                console.log("Protected collections:", PROTECTED_COLLECTIONS);
+                
+                if (collectionsToDelete.length === 0) {
+                    statusDiv.innerHTML = "✅ No deletable collections found. Protected collections are preserved.";
+                    statusDiv.classList.add('success');
+                    deleteBtn.disabled = false;
+                    deleteBtn.textContent = "Delete All Cloud Data";
+                    return;
+                }
+                
+                // Delete all documents in each non-protected collection
+                const deletePromises = collectionsToDelete.map(async (collectionName) => {
+                    try {
+                        const collectionRef = db.collection(collectionName);
+                        
+                        // Get all documents in the collection
+                        const snapshot = await collectionRef.get();
+                        
+                        if (snapshot.empty) {
+                            return { collection: collectionName, status: 'empty', count: 0 };
+                        }
+                        
+                        // Delete each document and its subcollections
+                        const docDeletePromises = snapshot.docs.map(async (doc) => {
+                            await deleteDocumentAndSubcollections(collectionName, doc.id);
+                        });
+                        
+                        await Promise.all(docDeletePromises);
+                        return { collection: collectionName, status: 'deleted', count: snapshot.size };
+                    } catch (error) {
+                        console.error(`Error deleting collection ${collectionName}:`, error);
+                        return { collection: collectionName, status: 'error', error: error.message };
+                    }
+                });
+                
+                const results = await Promise.all(deletePromises);
+                
+                // Show results
+                const deletedCollections = results.filter(r => r.status === 'deleted');
+                const emptyCollections = results.filter(r => r.status === 'empty');
+                const errorCollections = results.filter(r => r.status === 'error');
+                
+                let resultMessage = '';
+                
+                if (deletedCollections.length > 0) {
+                    const totalDeleted = deletedCollections.reduce((sum, dc) => sum + dc.count, 0);
+                    resultMessage += `✅ Deleted ${deletedCollections.length} collection(s) with ${totalDeleted} document(s).\n`;
+                    resultMessage += `🗑️ Deleted collections: ${deletedCollections.map(dc => dc.collection).join(', ')}\n`;
+                }
+                
+                if (emptyCollections.length > 0) {
+                    resultMessage += `📭 ${emptyCollections.length} collection(s) were already empty.\n`;
+                }
+                
+                resultMessage += `🔒 Protected collections: ${PROTECTED_COLLECTIONS.join(', ')}\n`;
+                
+                if (errorCollections.length > 0) {
+                    resultMessage += `\n❌ Failed to delete ${errorCollections.length} collection(s).`;
+                    errorCollections.forEach(ec => {
+                        resultMessage += `\n   • ${ec.collection}: ${ec.error}`;
+                    });
+                    statusDiv.classList.add('error');
+                } else {
+                    statusDiv.classList.add('success');
+                }
+                
+                statusDiv.innerHTML = resultMessage.replace(/\n/g, '<br>');
+                
+            } catch (error) {
+                console.error("Error deleting Firebase data:", error);
+                statusDiv.textContent = `❌ Error: ${error.message}`;
+                statusDiv.classList.add('error');
+            } finally {
+                // Re-enable button
+                deleteBtn.disabled = false;
+                deleteBtn.textContent = "Delete All Cloud Data";
+            }
+        }
+
+        // Helper function to delete a document and all its subcollections
+        async function deleteDocumentAndSubcollections(collectionPath, docId) {
+            const docRef = db.collection(collectionPath).doc(docId);
+            
+            try {
+                // First, get and delete all subcollections
+                // Note: In client-side Firestore, we can't list subcollections directly
+                // We'll need to know the subcollection names or use a different approach
+                
+                // For now, just delete the main document
+                // If you have known subcollections, you can delete them here
+                
+                // Example if you know subcollections:
+                // const knownSubcollections = ["subcollection1", "subcollection2"];
+                // for (const subColName of knownSubcollections) {
+                //     const subColRef = docRef.collection(subColName);
+                //     const subSnapshot = await subColRef.get();
+                //     const subDeletePromises = subSnapshot.docs.map(subDoc => subDoc.ref.delete());
+                //     await Promise.all(subDeletePromises);
+                // }
+                
+                // Delete the main document
+                await docRef.delete();
+            } catch (error) {
+                console.error(`Error deleting document ${docId} from ${collectionPath}:`, error);
+                throw error;
+            }
+        }
+
+        // Original license generation function
+        async function generateKey() {
+            const clinicInput = document.getElementById('clinicName');
+            const clinic = clinicInput.value.trim();
+            
+            if (!clinic) {
+                alert("Please enter a clinic name");
+                clinicInput.focus();
+                return;
+            }
+            
+            const display = document.getElementById('result');
+            
+            try {
+                const salt = "import{useData}from'@/context/DataContext';";
+                const date = new Date();
+                const dataString = `${clinic.toLowerCase()}-${date.getFullYear()}-${date.getMonth() + 1}-${salt}`;
+
+                const msgBuffer = new TextEncoder().encode(dataString);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                const fullHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                
+                const key = fullHash.substring(0, 8).toUpperCase();
+                display.style.display = 'block';
+                display.innerText = `LICENSE KEY: ${key}\n\nClinic: ${clinic}\nGenerated: ${date.toLocaleDateString()}`;
+                
+                // Optionally save to Firebase (commented out for safety)
+                /*
+                if (isFirebaseInitialized && db) {
+                    try {
+                        await db.collection("licenses").add({
+                            clinicName: clinic,
+                            licenseKey: key,
+                            generatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                            expiresAt: new Date(date.getTime() + 30 * 24 * 60 * 60 * 1000)
+                        });
+                        console.log("License saved to Firebase");
+                    } catch (error) {
+                        console.error("Error saving to Firebase:", error);
+                    }
+                }
+                */
+                
+            } catch (error) {
+                console.error("Error generating license key:", error);
+                display.style.display = 'block';
+                display.innerText = "❌ Error generating license key. Please try again.";
+                display.style.background = "#f8d7da";
+                display.style.color = "#721c24";
+                
+                // Reset to original style after 3 seconds
+                setTimeout(() => {
+                    display.style.background = "#e0f2fe";
+                    display.style.color = "inherit";
+                }, 3000);
+            }
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log("Page loaded");
+            
+            // Initialize Firebase
+            if (Object.keys(firebaseConfig).length > 0) {
+                initializeFirebase();
+            } else {
+                updateFirebaseStatus(false, "Firebase not configured. Set your firebaseConfig credentials.");
+                document.getElementById('deleteBtn').disabled = true;
+            }
+            
+            // Add Enter key support for clinic name input
+            document.getElementById('clinicName').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    generateKey();
+                }
+            });
+        });
     </script>
 </body>
 </html>

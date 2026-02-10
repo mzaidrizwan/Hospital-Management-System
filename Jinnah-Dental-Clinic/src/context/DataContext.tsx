@@ -1200,12 +1200,29 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }, [licenseExpiryDate, clinicSettings, updateLocal, isOnline]);
 
     const handleFirebaseUpdate = useCallback(async (collectionName: string, remoteData: any[]) => {
-        if (isSyncingRef.current) return;
+        // Reduced strict lock to prevent missing sync updates
+        if (isSyncingRef.current) {
+            // If we are currently saving a batch, we might want to wait instead of returning
+            // but for now, low-latency return is okay if we use setTimeout
+        }
 
         try {
-            if (remoteData.length === 0) return;
-
+            // FIX: Handle empty remote data (collection cleared in cloud)
             const localData = (await getFromLocal(collectionName) || []) as any[];
+
+            if (remoteData.length === 0) {
+                if (localData.length > 0) {
+                    console.log(`[Sync] Collection ${collectionName} is empty in cloud. Syncing local...`);
+                    // Check if local items are pending sync
+                    const pendingSync = localData.some(i => i.needsSync);
+                    if (!pendingSync) {
+                        await clearStore(collectionName);
+                        const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
+                        if (setter) setter([]);
+                    }
+                }
+                return;
+            }
 
             if (collectionName === 'clinicSettings') {
                 const remoteSettings = remoteData[0];
@@ -1243,6 +1260,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
             let hasChanged = false;
             const updatesToSave: any[] = [];
 
+            // Track remote IDs to detect deletions
+            const remoteIds = new Set(remoteData.map(d => d.id));
+
             for (const remoteItem of remoteData) {
                 const localItem = localMap.get(remoteItem.id);
 
@@ -1264,10 +1284,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     const localTimestamp = localItem.lastUpdated || localItem.updatedAt || 0;
 
                     const isLocalPendingSync = localItem.needsSync || localItem.syncPending;
-                    if (remoteTimestamp > localTimestamp && !isLocalPendingSync) {
+                    // If remote is newer OR if we don't have a sync pending and it's different
+                    if ((remoteTimestamp > localTimestamp || !isLocalPendingSync)) {
                         updatesToSave.push(remoteItem);
                         hasChanged = true;
                     }
+                }
+            }
+
+            // Handle Deletions: If item in local but not in remote and not pending sync
+            for (const localItem of localData) {
+                if (!remoteIds.has(localItem.id) && !localItem.needsSync) {
+                    console.log(`[Sync] Item ${localItem.id} not found in cloud, deleting locally.`);
+                    await deleteFromLocal(collectionName, localItem.id);
+                    hasChanged = true;
                 }
             }
 
@@ -1283,9 +1313,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     setter(Array.isArray(freshLocalData) ? freshLocalData : []);
                     dataChangedRef.current[collectionName] = true;
                 }
-                setTimeout(() => { isSyncingRef.current = false; }, 100);
+                setTimeout(() => { isSyncingRef.current = false; }, 200);
             } else if (updatesToSave.length > 0) {
-                setTimeout(() => { isSyncingRef.current = false; }, 100);
+                setTimeout(() => { isSyncingRef.current = false; }, 200);
             }
         } catch (error) {
             console.error(`Error handling Firebase update for ${collectionName}:`, error);
@@ -1382,8 +1412,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 const q = query(collection(db, collectionName));
                 const unsubscribe = onSnapshot(q,
                     (snapshot) => {
-                        if (snapshot.empty) return;
-
+                        // FIX: Don't return if empty, we need to sync empty collections too
                         const remoteData = snapshot.docs.map(doc => ({
                             id: doc.id,
                             ...doc.data()
