@@ -201,6 +201,17 @@ export default function AdminStaff() {
     const salaryAmount = Number(staffData.salary) || 0;
     const joinDate = staffData.joinDate || new Date().toISOString().split('T')[0];
 
+    // Check for duplicate name
+    const isDuplicateName = contextStaff.some(s =>
+      s.name.toLowerCase().trim() === (staffData.name || '').toLowerCase().trim() &&
+      (!isEditing || s.id !== selectedStaff?.id)
+    );
+
+    if (isDuplicateName) {
+      toast.error(`A staff member with the name "${staffData.name}" already exists.`);
+      return;
+    }
+
     try {
       let updatedStaff: Staff;
       if (isEditing && selectedStaff) {
@@ -215,8 +226,17 @@ export default function AdminStaff() {
           updatedAt: new Date().toISOString()
         } as Staff;
       } else {
+        // Generate name-based ID (slugified)
+        const nameSlug = (staffData.name || '').trim().toLowerCase().replace(/\s+/g, '-');
+
+        // Ensure uniqueness by checking existing staff
+        let uniqueId = nameSlug;
+        if (contextStaff.some(s => s.id === uniqueId)) {
+          uniqueId = `${nameSlug}-${Date.now().toString().slice(-4)}`;
+        }
+
         updatedStaff = {
-          id: `staff-${Date.now()}`,
+          id: uniqueId,
           name: staffData.name || '',
           role: staffData.role || '',
           phone: staffData.phone || '',

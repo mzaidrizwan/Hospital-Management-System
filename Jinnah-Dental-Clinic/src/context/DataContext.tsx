@@ -147,7 +147,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const [licenseDaysLeft, setLicenseDaysLeft] = useState(0);
     const [licenseKey, setLicenseKey] = useState<string | null>(null);
     const [licenseExpiryDate, setLicenseExpiryDate] = useState<string | null>(null);
-    const [isShutdown, setIsShutdown] = useState(false);
+    const [isShutdown, setIsShutdown] = useState(() => {
+        const stored = localStorage.getItem('force_shutdown');
+        const initialValue = stored === 'true';
+        console.log('🔍 DataContext - Initial isShutdown:', initialValue, 'localStorage:', stored);
+        return initialValue;
+    });
 
     const [loading, setLoading] = useState(true);
     const [initialLoadComplete, setInitialLoadComplete] = useState(false);
@@ -210,7 +215,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     const settings = Array.isArray(data) ? data[0] : data;
                     if (settings) {
                         setter(settings);
-                        if (settings.shutdown !== undefined) setIsShutdown(!!settings.shutdown);
+                        // Legacy shutdown check - disabled in favor of 'power' collection
+                        // if (settings.shutdown !== undefined) setIsShutdown(!!settings.shutdown);
                     }
                 } else if (collectionName === 'staff') {
                     // Filter out invalid staff members with empty or missing names
@@ -252,6 +258,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     }
                 }
 
+                // NO FREE TRIAL - License is required from the start
                 if (licenseData && (licenseData.key || licenseData.expiryDate)) {
                     setLicenseKey(licenseData.key || null);
                     setLicenseExpiryDate(licenseData.expiryDate);
@@ -260,20 +267,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     setLicenseDaysLeft(Math.max(0, days));
                     setLicenseStatus(days > 0 ? 'valid' : 'expired');
                 } else {
-                    const defaultExpiryDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-                    const defaultObject = {
-                        status: 'active',
-                        expiryDate: defaultExpiryDate,
-                        licenseKey: 'FIRST-30-DAYS',
-                        version: 'v1.3.0 Standard'
-                    };
-
-                    setLicenseKey(defaultObject.licenseKey);
-                    setLicenseExpiryDate(defaultObject.expiryDate);
-
-                    const days = checkSubscription({ licenseExpiry: defaultObject.expiryDate });
-                    setLicenseDaysLeft(days);
-                    setLicenseStatus('valid');
+                    // No license found - App should be disabled
+                    console.warn('⚠️ No license key found. Application is locked.');
+                    setLicenseKey(null);
+                    setLicenseExpiryDate(null);
+                    setLicenseDaysLeft(0);
+                    setLicenseStatus('missing');
                 }
             } catch (e) {
                 console.error('Error checking license:', e);
@@ -298,7 +297,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
         // Run Firebase sync in background - DO NOT AWAIT
         setTimeout(async () => {
             try {
-                if (isOnline) {
+                // BUG FIX: Only sync if autoSyncEnabled is TRUE
+                if (isOnline && autoSyncEnabled) {
                     if (data._deleted) {
                         console.log(`[Background Sync] Deleting ${collectionName} from Firebase:`, data.id);
                         await smartDelete(collectionName, data.id);
@@ -308,13 +308,42 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         await smartSync(collectionName, data);
                         console.log(`[Background Sync] Successfully synced ${collectionName}:`, data.id);
                     }
+                } else if (!autoSyncEnabled) {
+                    console.log(`[Background Sync] Skipping ${collectionName} - Auto-Sync is DISABLED`);
+                    // We still want to mark it as needing sync so it goes up when enabled
+                    if (data._deleted) {
+                        // For deletions, we add a DELETE task to syncQueue manually
+                        await saveToLocal('syncQueue', {
+                            id: `${collectionName}_${data.id}`,
+                            type: 'DELETE',
+                            collectionName,
+                            docId: data.id,
+                            timestamp: Date.now()
+                        });
+                    } else {
+                        // For updates, we mark the item itself and add a PATCH task
+                        const enrichedData = {
+                            ...data,
+                            needsSync: true,
+                            lastUpdated: Date.now(),
+                            updatedAt: new Date().toISOString()
+                        };
+                        await saveToLocal(collectionName, enrichedData);
+                        await saveToLocal('syncQueue', {
+                            id: `${collectionName}_${data.id}`,
+                            type: 'PATCH',
+                            collectionName,
+                            docId: data.id,
+                            timestamp: Date.now()
+                        });
+                    }
                 }
             } catch (syncError) {
                 console.error(`[Background Sync] Failed for ${collectionName}:`, syncError);
                 // Don't show alert for background sync failures
             }
         }, 0);
-    }, [isOnline]);
+    }, [isOnline, autoSyncEnabled]);
 
     /**
      * Update local data (State + IndexedDB) - FIRE AND FORGET version
@@ -1200,7 +1229,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     // Recalculate Subscription (Point 4)
                     const days = checkSubscription(remoteSettings);
                     setLicenseDaysLeft(days);
-                    setLicenseStatus(days > 0 ? 'active' : 'expired');
+                    setLicenseStatus(days > 0 ? 'valid' : 'expired');
 
                     if (remoteSettings.licenseKey) setLicenseKey(remoteSettings.licenseKey);
                     if (remoteSettings.licenseExpiry) setLicenseExpiryDate(remoteSettings.licenseExpiry);
@@ -1272,10 +1301,64 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }, []);
 
     useEffect(() => {
-        if (isOnline && initialLoadComplete) {
+        if (isOnline && initialLoadComplete && autoSyncEnabled) {
+            console.log("🔄 Auto-Sync Enabled: Processing Sync Queue...");
             processSyncQueue().catch(err => console.error('Sync queue error:', err));
         }
-    }, [isOnline, initialLoadComplete]);
+    }, [isOnline, initialLoadComplete, autoSyncEnabled]);
+
+    // Separate useEffect for CRITICAL Shutdown Listener (Always active if online)
+    useEffect(() => {
+        console.log("🔍 Power Listener Effect - isOnline:", isOnline);
+        if (!isOnline) return;
+
+        console.log("⚡ Setting up Critical Power Listener...");
+        let powerUnsub: (() => void) | undefined;
+
+        try {
+            const powerDocRef = doc(db, 'power', '1');
+            console.log("⚡ Power document reference created:", powerDocRef.path);
+
+            powerUnsub = onSnapshot(powerDocRef, (docSnap) => {
+                console.log("⚡ Power snapshot received. Exists:", docSnap.exists());
+
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    console.log("⚡ Power/Shutdown signal received:", data);
+                    console.log("⚡ Shutdown value:", data.shutDown, "Type:", typeof data.shutDown);
+
+                    if (data.shutDown === true) {
+                        console.log("⚡ SHUTDOWN TRIGGERED - Setting isShutdown to TRUE");
+                        setIsShutdown(true);
+                        localStorage.setItem('force_shutdown', 'true');
+                        console.log("⚡ localStorage updated to 'true'");
+                    } else if (data.shutDown === false) {
+                        console.log("⚡ SHUTDOWN CLEARED - Setting isShutdown to FALSE");
+                        setIsShutdown(false);
+                        localStorage.setItem('force_shutdown', 'false');
+                        console.log("⚡ localStorage updated to 'false'");
+                    } else {
+                        console.log("⚡ Shutdown value is neither true nor false:", data.shutDown);
+                    }
+                } else {
+                    console.log("⚡ Power document 'power/1' does not exist.");
+                }
+            }, (err) => {
+                console.error("❌ Error listening to power settings:", err);
+            });
+
+            console.log("⚡ Power listener successfully attached");
+        } catch (error) {
+            console.error("❌ Error setting up power listener:", error);
+        }
+
+        return () => {
+            if (powerUnsub) {
+                console.log("⚡ Cleaning up Power Listener");
+                powerUnsub();
+            }
+        };
+    }, [isOnline]);
 
     useEffect(() => {
         // Stop listeners if offline, not initialized, OR if user disabled auto-sync
@@ -1293,6 +1376,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
         const unsubscribeFunctions: (() => void)[] = [];
 
+        // 1. Setup standard collection listeners
         COLLECTIONS.forEach(collectionName => {
             try {
                 const q = query(collection(db, collectionName));
@@ -1323,7 +1407,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 listenersRef.current = [];
             }
         };
-    }, [isOnline, initialLoadComplete]);
+    }, [isOnline, initialLoadComplete, autoSyncEnabled]);
 
     return (
         <DataContext.Provider value={{

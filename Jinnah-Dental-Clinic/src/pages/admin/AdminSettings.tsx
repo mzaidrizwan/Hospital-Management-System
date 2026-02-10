@@ -52,34 +52,9 @@ export default function AdminSettings() {
   };
 
   const handleSaveTreatment = async (data: any) => {
-    try {
-      // Check for duplicates
-      if (!editingTreatment) {
-        const exists = treatments.some(t => t.name.toLowerCase() === data.name.toLowerCase());
-        if (exists) {
-          toast.error("This treatment already exists.");
-          return;
-        }
-      }
-
-      const treatmentData: Treatment = {
-        id: editingTreatment ? editingTreatment.id : Date.now().toString(),
-        name: data.name,
-        fee: parseFloat(data.fee),
-        duration: parseInt(data.duration),
-        category: data.category,
-        description: data.description,
-        createdAt: editingTreatment?.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
-      await updateLocal('treatments', treatmentData);
-      toast.success(editingTreatment ? 'Treatment updated' : 'Treatment added');
-      setIsTreatmentModalOpen(false);
-    } catch (error) {
-      console.error('Failed to save treatment:', error);
-      toast.error('Failed to save treatment');
-    }
+    // The TreatmentFormModal now handles the saving and validation.
+    // This callback is kept for any parent-specific side effects if needed.
+    setIsTreatmentModalOpen(false);
   };
 
   const handleAddRole = async () => {

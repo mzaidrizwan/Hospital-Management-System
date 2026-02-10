@@ -16,9 +16,9 @@ export function DashboardLayout() {
 
   return (
     <SidebarProvider>
-      {/* Blocking License Modal for Expired State */}
+      {/* Blocking License Modal for Expired or Missing License */}
       <LicenseModal
-        open={licenseStatus === 'expired'}
+        open={licenseStatus === 'expired' || licenseStatus === 'missing'}
         onOpenChange={() => { }} // No-op to prevent closing
       />
       <div className="min-h-screen flex w-full bg-background">

@@ -85,6 +85,12 @@ export default function AdminInventory() {
   const [saleNotes, setSaleNotes] = useState('');
   const [isProcessingSale, setIsProcessingSale] = useState(false);
 
+  // Edit sale states
+  const [isEditSaleDialogOpen, setIsEditSaleDialogOpen] = useState(false);
+  const [editingSale, setEditingSale] = useState<any>(null);
+  const [editSaleQuantity, setEditSaleQuantity] = useState(1);
+  const [editSaleNotes, setEditSaleNotes] = useState('');
+
   // Filtered inventory based on search and category
   const filteredInventory = useMemo(() => {
     return (contextInventory || []).filter(item => {
@@ -222,6 +228,120 @@ export default function AdminInventory() {
     };
 
     performSync();
+  };
+
+  // Delete sale record and restore inventory
+  const handleDeleteSale = async (sale: any) => {
+    if (!window.confirm(`Delete this sale of ${sale.quantity} unit(s) of ${sale.itemName}?`)) return;
+
+    try {
+      // 1. Find and update the inventory item (restore quantity)
+      const inventoryItem = contextInventory.find(item => item.id === sale.itemId);
+      if (inventoryItem) {
+        const updatedItem = {
+          ...inventoryItem,
+          quantity: inventoryItem.quantity + sale.quantity
+        };
+        await updateLocal('inventory', updatedItem);
+        setInventory(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
+      }
+
+      // 2. Delete the sale record
+      await deleteFromLocal('sales', sale.id);
+      setSales(prev => prev.filter(s => s.id !== sale.id));
+
+      // 3. Background sync
+      smartDelete('sales', sale.id).catch(err => console.error('Background delete failed:', err));
+
+      toast.success(`Sale deleted and ${sale.quantity} unit(s) restored to inventory`);
+    } catch (error) {
+      console.error('Error deleting sale:', error);
+      toast.error('Failed to delete sale');
+    }
+  };
+
+  // Delete purchase record (expense)
+  const handleDeletePurchase = async (purchase: any) => {
+    if (!window.confirm(`Delete this purchase record for ${purchase.title}?`)) return;
+
+    try {
+      // Delete the expense record
+      await deleteFromLocal('expenses', purchase.id);
+
+      // Background sync
+      smartDelete('expenses', purchase.id).catch(err => console.error('Background delete failed:', err));
+
+      toast.success('Purchase record deleted');
+
+      // Refresh to update the list
+      window.location.reload();
+    } catch (error) {
+      console.error('Error deleting purchase:', error);
+      toast.error('Failed to delete purchase record');
+    }
+  };
+
+  // Open edit sale dialog
+  const handleEditSale = (sale: any) => {
+    setEditingSale(sale);
+    setEditSaleQuantity(sale.quantity);
+    setEditSaleNotes(sale.notes || '');
+    setIsEditSaleDialogOpen(true);
+  };
+
+  // Save edited sale
+  const handleSaveEditedSale = async () => {
+    if (!editingSale) return;
+
+    const newQuantity = parseInt(editSaleQuantity.toString()) || 1;
+    const oldQuantity = editingSale.quantity;
+    const quantityDifference = newQuantity - oldQuantity;
+
+    if (newQuantity <= 0) {
+      toast.error('Quantity must be greater than 0');
+      return;
+    }
+
+    try {
+      // 1. Find and update inventory item
+      const inventoryItem = contextInventory.find(item => item.id === editingSale.itemId);
+      if (inventoryItem) {
+        // If quantity increased, reduce inventory; if decreased, restore inventory
+        const updatedItem = {
+          ...inventoryItem,
+          quantity: inventoryItem.quantity - quantityDifference
+        };
+
+        if (updatedItem.quantity < 0) {
+          toast.error(`Not enough stock. Only ${inventoryItem.quantity} units available.`);
+          return;
+        }
+
+        await updateLocal('inventory', updatedItem);
+        setInventory(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
+      }
+
+      // 2. Update the sale record
+      const updatedSale = {
+        ...editingSale,
+        quantity: newQuantity,
+        total: editingSale.price * newQuantity,
+        notes: editSaleNotes,
+        updatedAt: new Date().toISOString()
+      };
+
+      await updateLocal('sales', updatedSale);
+      setSales(prev => prev.map(s => s.id === updatedSale.id ? updatedSale : s));
+
+      // 3. Close dialog
+      setIsEditSaleDialogOpen(false);
+      setEditingSale(null);
+
+      toast.success('Sale updated successfully');
+    } catch (error) {
+      console.error('Error updating sale:', error);
+      toast.error('Failed to update sale');
+    }
   };
 
   const handleExportSales = () => {
@@ -488,12 +608,13 @@ export default function AdminInventory() {
                       <TableHead className="text-right font-bold">Total</TableHead>
                       {isAdmin && <TableHead className="text-right font-bold text-emerald-600">Profit</TableHead>}
                       <TableHead className="font-bold">Notes</TableHead>
+                      <TableHead className="text-right font-bold">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {sortedSales.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={6} className="text-center py-20">
+                        <TableCell colSpan={isAdmin ? 8 : 7} className="text-center py-20">
                           <Receipt className="w-16 h-16 mx-auto mb-4 opacity-10" />
                           <div className="text-lg font-medium text-muted-foreground">No sales recorded yet</div>
                         </TableCell>
@@ -522,6 +643,28 @@ export default function AdminInventory() {
                           )}
                           <TableCell className="text-xs text-muted-foreground max-w-[150px] truncate">
                             {sale.notes || '--'}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex gap-1 justify-end">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                                onClick={() => handleEditSale(sale)}
+                                title="Edit Sale"
+                              >
+                                <Edit className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-red-400 hover:text-red-600 hover:bg-red-50"
+                                onClick={() => handleDeleteSale(sale)}
+                                title="Delete Sale"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))
@@ -558,12 +701,13 @@ export default function AdminInventory() {
                       <TableHead className="text-center font-bold">Quantity Added</TableHead>
                       <TableHead className="text-right font-bold">Buying Price (Each)</TableHead>
                       <TableHead className="text-right font-bold">Total Cost</TableHead>
+                      <TableHead className="text-right font-bold">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {inventoryPurchases.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center py-20">
+                        <TableCell colSpan={6} className="text-center py-20">
                           <ShoppingCart className="w-16 h-16 mx-auto mb-4 opacity-10" />
                           <div className="text-lg font-medium text-muted-foreground">No purchase records found</div>
                         </TableCell>
@@ -583,6 +727,17 @@ export default function AdminInventory() {
                           </TableCell>
                           <TableCell className="text-right font-black text-primary">
                             {formatCurrency(p.amount || 0)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-red-400 hover:text-red-600 hover:bg-red-50"
+                              onClick={() => handleDeletePurchase(p)}
+                              title="Delete Purchase"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
                           </TableCell>
                         </TableRow>
                       ))
@@ -670,6 +825,82 @@ export default function AdminInventory() {
             <Button onClick={handleConfirmSale} disabled={isProcessingSale} className="font-bold px-8 shadow-lg shadow-primary/20">
               {isProcessingSale ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
               Confirm & Register Sale
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Sale Dialog */}
+      <Dialog open={isEditSaleDialogOpen} onOpenChange={setIsEditSaleDialogOpen}>
+        <DialogContent className="max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-black flex items-center gap-2">
+              <Edit className="w-6 h-6 text-amber-600" />
+              Edit Sale Record
+            </DialogTitle>
+            <DialogDescription className="text-sm">
+              Modify the sale details. Inventory will be adjusted automatically.
+            </DialogDescription>
+          </DialogHeader>
+          {editingSale && (
+            <div className="space-y-6 py-4">
+              <div className="bg-gray-50 p-4 rounded-xl border">
+                <div className="text-sm font-bold text-gray-600 mb-1">Product</div>
+                <div className="text-lg font-black text-gray-900">{editingSale.itemName}</div>
+                <div className="text-xs font-mono text-gray-500">{editingSale.sku}</div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
+                  <div className="text-xs font-bold text-blue-600 uppercase mb-1">Original Qty</div>
+                  <div className="text-xl font-black text-blue-900">{editingSale.quantity}</div>
+                </div>
+                <div className="bg-green-50 p-3 rounded-lg border border-green-100">
+                  <div className="text-xs font-bold text-green-600 uppercase mb-1">Unit Price</div>
+                  <div className="text-xl font-black text-green-900">{formatCurrency(editingSale.price)}</div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="editSaleQuantity" className="text-sm font-bold">
+                  New Quantity <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="editSaleQuantity"
+                  type="number"
+                  min="1"
+                  value={editSaleQuantity}
+                  onChange={(e) => setEditSaleQuantity(parseInt(e.target.value) || 1)}
+                  className="h-12 text-lg font-bold text-center"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="editSaleNotes" className="text-sm font-bold">Notes (Optional)</Label>
+                <Input
+                  id="editSaleNotes"
+                  value={editSaleNotes}
+                  onChange={(e) => setEditSaleNotes(e.target.value)}
+                  placeholder="Add any notes..."
+                  className="h-10"
+                />
+              </div>
+
+              <div className="bg-primary/5 p-4 rounded-xl border border-primary/10">
+                <div className="flex justify-between items-baseline">
+                  <span className="text-xs font-bold uppercase text-primary/70">New Total:</span>
+                  <span className="text-2xl font-black text-primary">
+                    {formatCurrency(editingSale.price * (parseInt(editSaleQuantity.toString()) || 0))}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setIsEditSaleDialogOpen(false)} className="font-bold">Cancel</Button>
+            <Button onClick={handleSaveEditedSale} className="font-bold px-8 bg-amber-600 hover:bg-amber-700">
+              <CheckCircle className="w-4 h-4 mr-2" />
+              Save Changes
             </Button>
           </DialogFooter>
         </DialogContent>

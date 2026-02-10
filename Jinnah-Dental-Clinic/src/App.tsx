@@ -33,6 +33,9 @@ function AuthenticatedApp() {
   const { isAuthenticated, user } = useAuth();
   const { isShutdown } = useData();
 
+  console.log("🔍 AuthenticatedApp - isShutdown:", isShutdown);
+  console.log("🔍 localStorage force_shutdown:", localStorage.getItem('force_shutdown'));
+
   if (isShutdown) {
     return (
       <div className="fixed inset-0 z-[9999] bg-slate-900 flex flex-col items-center justify-center p-6 text-center">

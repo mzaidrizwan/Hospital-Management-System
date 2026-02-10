@@ -147,90 +147,134 @@
 'use client';
 
 import * as React from 'react';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Check } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
-interface SelectProps {
+interface SelectContextType {
+  value: string;
+  onValueChange: (value: string) => void;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  placeholder?: string;
+}
+
+const SelectContext = React.createContext<SelectContextType | null>(null);
+
+export function Select({
+  value,
+  onValueChange,
+  children,
+  className,
+  placeholder
+}: {
   value: string;
   onValueChange: (value: string) => void;
   children: React.ReactNode;
   className?: string;
   placeholder?: string;
-}
-
-export function Select({ value, onValueChange, children, className = '', placeholder }: SelectProps) {
+}) {
   const [open, setOpen] = React.useState(false);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  // Close on click outside
+  React.useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   return (
-    <div className={`relative ${className}`}>
-      <button
-        type="button"
-        className="flex items-center justify-between w-full px-3 py-2 text-sm border rounded-md bg-white"
-        onClick={() => setOpen(!open)}
-      >
-        <span>{value || placeholder || 'Select...'}</span>
-        <ChevronDown className="w-4 h-4 ml-2" />
-      </button>
-      {open && (
-        <div className="absolute z-10 w-full mt-1 bg-white border rounded-md shadow-lg">
-          {React.Children.map(children, (child) => {
-            if (React.isValidElement(child) && child.type === SelectContent) {
-              return React.cloneElement(child, { onSelect: onValueChange, onClose: () => setOpen(false) } as any);
-            }
-            return child;
-          })}
-        </div>
-      )}
-    </div>
+    <SelectContext.Provider value={{ value, onValueChange, open, setOpen, placeholder }}>
+      <div ref={containerRef} className={cn("relative", className)}>
+        {children}
+      </div>
+    </SelectContext.Provider>
   );
 }
 
 export function SelectTrigger({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <div className={className}>{children}</div>;
+  const context = React.useContext(SelectContext);
+  if (!context) return null;
+
+  return (
+    <button
+      type="button"
+      onClick={() => context.setOpen(!context.open)}
+      className={cn(
+        "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+        className
+      )}
+    >
+      {children}
+      <ChevronDown className="h-4 w-4 opacity-50 ml-2" />
+    </button>
+  );
 }
 
 export function SelectValue({ placeholder }: { placeholder?: string }) {
-  return <span>{placeholder}</span>;
+  const context = React.useContext(SelectContext);
+  if (!context) return null;
+
+  const displayValue = context.value || placeholder || context.placeholder || "Select...";
+
+  return <span className="truncate">{displayValue}</span>;
 }
 
-export function SelectContent({ children, onSelect, onClose }: { 
-  children: React.ReactNode; 
-  onSelect?: (value: string) => void;
-  onClose?: () => void;
-}) {
+export function SelectContent({ children, className }: { children: React.ReactNode; className?: string }) {
+  const context = React.useContext(SelectContext);
+  if (!context || !context.open) return null;
+
   return (
-    <div className="py-1">
-      {React.Children.map(children, (child) => {
-        if (React.isValidElement(child) && child.type === SelectItem) {
-          return React.cloneElement(child, { 
-            onClick: () => {
-              if (child.props.value && onSelect) {
-                onSelect(child.props.value);
-              }
-              if (onClose) onClose();
-            }
-          } as any);
-        }
-        return child;
-      })}
+    <div
+      className={cn(
+        "absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-popover text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95",
+        className
+      )}
+    >
+      <div className="py-1">
+        {children}
+      </div>
     </div>
   );
 }
 
-export function SelectItem({ 
-  children, 
-  value, 
-  onClick 
-}: { 
-  children: React.ReactNode; 
+export function SelectItem({
+  children,
+  value,
+  className
+}: {
+  children: React.ReactNode;
   value: string;
-  onClick?: () => void;
+  className?: string;
 }) {
+  const context = React.useContext(SelectContext);
+  if (!context) return null;
+
+  const isSelected = context.value === value;
+
   return (
     <button
-      className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100"
-      onClick={onClick}
+      type="button"
+      onClick={() => {
+        context.onValueChange(value);
+        context.setOpen(false);
+      }}
+      className={cn(
+        "relative flex w-full cursor-pointer select-none items-center rounded-sm py-1.5 pl-3 pr-8 text-sm outline-none hover:bg-accent hover:text-accent-foreground",
+        isSelected && "bg-accent text-accent-foreground font-medium",
+        className
+      )}
     >
-      {children}
+      <span className="truncate">{children}</span>
+      {isSelected && (
+        <span className="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
+          <Check className="w-4 h-4" />
+        </span>
+      )}
     </button>
   );
 }

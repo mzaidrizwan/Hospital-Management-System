@@ -135,46 +135,7 @@ export default function OperatorSettings() {
   };
 
   const handleSaveTreatment = async (treatmentData: any) => {
-    // Check for duplicates
-    if (!isEditingTreatment) {
-      const exists = treatments.some(t => t.name.toLowerCase() === treatmentData.name.toLowerCase());
-      if (exists) {
-        toast.error("This treatment already exists.");
-        return;
-      }
-    }
-
-    let updatedTreatment: Treatment;
-    if (isEditingTreatment && selectedTreatment) {
-      updatedTreatment = {
-        ...selectedTreatment,
-        name: treatmentData.name,
-        fee: parseFloat(treatmentData.fee),
-        category: treatmentData.category,
-        duration: parseInt(treatmentData.duration),
-        description: treatmentData.description
-      };
-    } else {
-      updatedTreatment = {
-        id: Date.now().toString(),
-        name: treatmentData.name,
-        fee: parseFloat(treatmentData.fee),
-        category: treatmentData.category,
-        duration: parseInt(treatmentData.duration),
-        description: treatmentData.description,
-        isActive: true,
-        createdAt: new Date().toISOString()
-      };
-    }
-
-    try {
-      await updateLocal('treatments', updatedTreatment);
-      toast.success(`Treatment "${treatmentData.name}" saved`);
-    } catch (error) {
-      console.error('Failed to save treatment:', error);
-      toast.error('Failed to save treatment');
-    }
-
+    // The TreatmentFormModal now handles the saving and validation.
     setShowTreatmentForm(false);
   };
 

@@ -67,6 +67,10 @@ export default function DataSyncSection() {
         }
     };
 
+    const toggleAutoSync = () => {
+        setAutoSyncEnabled(!autoSyncEnabled);
+    };
+
     const rows = [
         { label: 'Patient Details', store: 'patients' },
         { label: 'Staff', store: 'staff' },
@@ -100,7 +104,7 @@ export default function DataSyncSection() {
                             </Button>
                             <Button
                                 variant={autoSyncEnabled ? "outline" : "default"}
-                                onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
+                                onClick={toggleAutoSync}
                                 className="gap-2"
                             >
                                 <RefreshCw className={autoSyncEnabled ? "w-4 h-4 animate-spin" : "w-4 h-4"} />

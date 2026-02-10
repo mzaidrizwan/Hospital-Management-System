@@ -21,7 +21,7 @@ interface InventoryFormModalProps {
 const categories = ['Materials', 'Supplies', 'Anesthetics', 'Instruments', 'Equipment', 'Medications'];
 
 export function InventoryFormModal({ open, onOpenChange, editingItem }: InventoryFormModalProps) {
-    const { setInventory, isOnline, addItem, licenseDaysLeft } = useData();
+    const { inventory, setInventory, isOnline, addItem, licenseDaysLeft } = useData();
     const [item, setItem] = useState<{
         id?: string;
         name: string;
@@ -72,6 +72,30 @@ export function InventoryFormModal({ open, onOpenChange, editingItem }: Inventor
 
         if (!item.name || !item.sku) {
             toast.error("Name and SKU are required.");
+            return;
+        }
+
+        // Check for duplicates
+        const normalizedName = item.name.toLowerCase().trim();
+        const normalizedSKU = item.sku.toLowerCase().trim();
+
+        const duplicateName = inventory?.find((invItem: any) =>
+            invItem.name?.toLowerCase().trim() === normalizedName &&
+            (!editingItem || invItem.id !== editingItem.id)
+        );
+
+        if (duplicateName) {
+            toast.error(`Duplicate Name: "${item.name}" already exists in inventory.`);
+            return;
+        }
+
+        const duplicateSKU = inventory?.find((invItem: any) =>
+            invItem.sku?.toLowerCase().trim() === normalizedSKU &&
+            (!editingItem || invItem.id !== editingItem.id)
+        );
+
+        if (duplicateSKU) {
+            toast.error(`Duplicate SKU: "${item.sku}" already exists in inventory.`);
             return;
         }
 

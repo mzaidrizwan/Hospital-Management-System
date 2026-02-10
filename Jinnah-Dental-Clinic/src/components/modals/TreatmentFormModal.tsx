@@ -25,7 +25,7 @@ export default function TreatmentFormModal({
   treatment,
   isEditing = false
 }: TreatmentFormModalProps) {
-  const { updateLocal } = useData(); // 2. Get updateLocal
+  const { treatments, updateLocal } = useData(); // 2. Get treatments and updateLocal
   const [formData, setFormData] = useState({
     name: '',
     fee: '',
@@ -57,38 +57,55 @@ export default function TreatmentFormModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // 1. Validation for empty fields
+    if (!formData.name.trim()) {
+      toast.error("Treatment name is required");
+      return;
+    }
+
+    // 2. Duplicate Check
+    const isDuplicate = treatments.some(t =>
+      t.name.toLowerCase().trim() === formData.name.toLowerCase().trim() &&
+      (!isEditing || t.id !== treatment?.id)
+    );
+
+    if (isDuplicate) {
+      toast.error(`Treatment "${formData.name}" already exists!`);
+      return;
+    }
+
     setIsSubmitting(true);
     const toastId = toast.loading('Saving treatment...');
 
     try {
-      // 1. Construct Data
+      // 3. Construct Data
       const treatmentId = treatment?.id || `t${Date.now()}`;
       const feeVal = parseFloat(formData.fee) || 0;
 
       const newTreatment: Treatment = {
         id: treatmentId,
-        name: formData.name,
+        name: formData.name.trim(),
         fee: feeVal,
         description: formData.actions, // Saving Actions as description
         category: formData.category,
         duration: parseInt(formData.duration) || 30,
+        isActive: treatment?.isActive ?? true,
         createdAt: treatment?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
 
-      // 2. Save to Local (IndexedDB + State update)
+      // 4. Save to Local (IndexedDB + State update)
       await updateLocal('treatments', newTreatment);
 
-      // 3. Notify User
+      // 5. Notify User
       toast.success(isEditing ? 'Treatment updated' : 'Treatment added', { id: toastId });
 
-      // 4. Close Modal Instantly
+      // 6. Close Modal
       onClose();
 
-      // 5. Call parent callback if provided (for any extra side effects)
+      // 7. Call parent callback if provided (for any extra side effects)
       if (onSubmit) {
-        // We pass the data, but parent might re-save. 
-        // Ideally parent should just refresh/ignore if modal handles it.
         onSubmit(newTreatment);
       }
 
