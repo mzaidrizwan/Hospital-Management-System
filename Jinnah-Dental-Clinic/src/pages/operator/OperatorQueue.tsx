@@ -194,9 +194,11 @@ export default function OperatorQueue() {
       await updateLocal('bills', newBill);
 
       const newPending = (patientData.pendingBalance || 0) - newPayment;
+      const newTotalPaid = (patientData.totalPaid || 0) + newPayment;
       const updatedPatient = {
         ...patientData,
-        pendingBalance: newPending
+        pendingBalance: newPending,
+        totalPaid: newTotalPaid
       };
       await updateLocal('patients', updatedPatient);
 

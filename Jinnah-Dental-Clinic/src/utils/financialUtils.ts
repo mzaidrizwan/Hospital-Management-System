@@ -93,10 +93,13 @@ export const calculateFinancialStats = (
     };
 
     // 1. Filter Data (Using inclusive logic for revenue - collector's view)
-    // We count bills that have money paid in them during this period
-    const filteredBills = bills.filter(b => isInRange(b.createdDate || b.date || b.createdAt));
+    const filteredBills = (bills || []).filter(b => isInRange(b.createdDate || b.date || (b as any).createdAt));
     const filteredSales = (sales || []).filter(s => isInRange(s.date || s.createdAt));
-    const filteredExpenses = (expenses || []).filter(e => e.status === 'paid' && isInRange(e.date));
+
+    // Deduplicate salaries: they exist in both 'expenses' (category: salary) and 'salaryPayments'.
+    const rawExpenses = (expenses || []).filter(e => e.status === 'paid' && isInRange(e.date));
+    const filteredExpenses = rawExpenses.filter(e => e.category !== 'salary');
+
     const filteredSalaries = (salaryPayments || []).filter(s => isInRange(s.date));
 
     // 2. Combine all revenue sources for detailed tracking
@@ -138,7 +141,7 @@ export const calculateFinancialStats = (
     const totalExpenses = overheadExpenses + totalSalaries;
 
     const totalRevenue = treatmentRevenue + salesRevenue;
-    const netProfit = treatmentRevenue + salesProfit - totalExpenses;
+    const netProfit = totalRevenue - totalExpenses;
 
     return {
         totalRevenue,

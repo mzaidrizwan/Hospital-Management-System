@@ -91,7 +91,7 @@ export const openDB = (): Promise<IDBDatabase> => {
         };
 
         request.onsuccess = (event) => {
-            console.log('Database opened successfully');
+            // console.log('Database opened successfully');
             isUpgrading = false;
             resolve((event.target as IDBOpenDBRequest).result);
         };

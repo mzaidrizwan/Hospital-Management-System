@@ -150,7 +150,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const [isShutdown, setIsShutdown] = useState(() => {
         const stored = localStorage.getItem('force_shutdown');
         const initialValue = stored === 'true';
-        console.log('🔍 DataContext - Initial isShutdown:', initialValue, 'localStorage:', stored);
+        // console.log('🔍 DataContext - Initial isShutdown:', initialValue, 'localStorage:', stored);
         return initialValue;
     });
 
@@ -1339,45 +1339,45 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
     // Separate useEffect for CRITICAL Shutdown Listener (Always active if online)
     useEffect(() => {
-        console.log("🔍 Power Listener Effect - isOnline:", isOnline);
+        // console.log("🔍 Power Listener Effect - isOnline:", isOnline);
         if (!isOnline) return;
 
-        console.log("⚡ Setting up Critical Power Listener...");
+        // console.log("⚡ Setting up Critical Power Listener...");
         let powerUnsub: (() => void) | undefined;
 
         try {
             const powerDocRef = doc(db, 'power', '1');
-            console.log("⚡ Power document reference created:", powerDocRef.path);
+            // console.log("⚡ Power document reference created:", powerDocRef.path);
 
             powerUnsub = onSnapshot(powerDocRef, (docSnap) => {
-                console.log("⚡ Power snapshot received. Exists:", docSnap.exists());
+                // console.log("⚡ Power snapshot received. Exists:", docSnap.exists());
 
                 if (docSnap.exists()) {
                     const data = docSnap.data();
-                    console.log("⚡ Power/Shutdown signal received:", data);
-                    console.log("⚡ Shutdown value:", data.shutDown, "Type:", typeof data.shutDown);
+                    // console.log("⚡ Power/Shutdown signal received:", data);
+                    // console.log("⚡ Shutdown value:", data.shutDown, "Type:", typeof data.shutDown);
 
                     if (data.shutDown === true) {
-                        console.log("⚡ SHUTDOWN TRIGGERED - Setting isShutdown to TRUE");
+                        // console.log("⚡ SHUTDOWN TRIGGERED - Setting isShutdown to TRUE");
                         setIsShutdown(true);
-                        localStorage.setItem('force_shutdown', 'true');
-                        console.log("⚡ localStorage updated to 'true'");
+                        // localStorage.setItem('force_shutdown', 'true');
+                        // console.log("⚡ localStorage updated to 'true'");
                     } else if (data.shutDown === false) {
-                        console.log("⚡ SHUTDOWN CLEARED - Setting isShutdown to FALSE");
+                        // console.log("⚡ SHUTDOWN CLEARED - Setting isShutdown to FALSE");
                         setIsShutdown(false);
-                        localStorage.setItem('force_shutdown', 'false');
-                        console.log("⚡ localStorage updated to 'false'");
+                        // localStorage.setItem('force_shutdown', 'false');
+                        // console.log("⚡ localStorage updated to 'false'");
                     } else {
-                        console.log("⚡ Shutdown value is neither true nor false:", data.shutDown);
+                        // console.log("⚡ Shutdown value is neither true nor false:", data.shutDown);
                     }
                 } else {
-                    console.log("⚡ Power document 'power/1' does not exist.");
+                    // console.log("⚡ Power document 'power/1' does not exist.");
                 }
             }, (err) => {
-                console.error("❌ Error listening to power settings:", err);
+                // console.error("❌ Error listening to power settings:", err);
             });
 
-            console.log("⚡ Power listener successfully attached");
+            // console.log("⚡ Power listener successfully attached");
         } catch (error) {
             console.error("❌ Error setting up power listener:", error);
         }

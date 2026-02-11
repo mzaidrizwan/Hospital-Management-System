@@ -33,8 +33,8 @@ function AuthenticatedApp() {
   const { isAuthenticated, user } = useAuth();
   const { isShutdown } = useData();
 
-  console.log("🔍 AuthenticatedApp - isShutdown:", isShutdown);
-  console.log("🔍 localStorage force_shutdown:", localStorage.getItem('force_shutdown'));
+  // console.log("🔍 AuthenticatedApp - isShutdown:", isShutdown);
+  // console.log("🔍 localStorage force_shutdown:", localStorage.getItem('force_shutdown'));
 
   if (isShutdown) {
     return (

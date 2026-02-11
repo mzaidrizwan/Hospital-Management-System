@@ -54,7 +54,7 @@ export function LoginModal({ onOpenChange }: { onOpenChange?: (open: boolean) =>
           setDoc(doc(db, 'users', 'operator'), operator).catch(console.error);
         }
 
-        console.log('Default users ready');
+        // console.log('Default users ready');
       } catch (err) {
         console.error('Setup default users failed:', err);
       }
@@ -171,13 +171,6 @@ export function LoginModal({ onOpenChange }: { onOpenChange?: (open: boolean) =>
             </Button>
           </form>
 
-          <div className="mt-6 p-4 rounded-lg bg-muted/50 border border-border">
-            <p className="text-xs text-muted-foreground text-center">
-              <strong>Demo Credentials:</strong><br />
-              Operator: <code className="text-primary">operator123</code><br />
-              Admin: <code className="text-primary">admin123</code>
-            </p>
-          </div>
         </div>
 
         <p className="text-center text-xs text-muted-foreground mt-4">

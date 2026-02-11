@@ -40,9 +40,6 @@ export function DashboardLayout() {
             </div>
 
             <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold">
-                {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </h1>
               {/* <Button variant="ghost" size="icon" className="relative">
                 <Bell className="w-5 h-5" />
                 <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-destructive text-destructive-foreground text-[10px] font-medium flex items-center justify-center">

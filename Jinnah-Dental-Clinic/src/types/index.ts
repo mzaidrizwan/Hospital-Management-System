@@ -164,6 +164,7 @@ export interface Bill {
   // For filtering/sorting
   doctor?: string;
   status?: string;
+  notes?: string;
 }
 
 export interface BillItem {

@@ -46,7 +46,7 @@ export default function AdminFinances() {
           amount: bill.amountPaid || 0,
           date: bill.createdDate || bill.date || new Date().toISOString(),
           patient: bill.patientName || 'Unknown',
-          status: bill.paymentStatus || 'Pending',
+          status: bill.paymentStatus || 'paid',
         });
       });
 
@@ -60,6 +60,29 @@ export default function AdminFinances() {
           status: 'paid',
         });
       });
+
+      financialStats.filteredExpenses.forEach(exp => {
+        transactions.push({
+          id: exp.id,
+          type: 'Expense',
+          amount: -Number(exp.amount || 0), // Negative for expense
+          date: exp.date || new Date().toISOString(),
+          patient: exp.title || 'General Expense',
+          status: exp.status || 'paid',
+        });
+      });
+
+      financialStats.filteredSalaries.forEach(sal => {
+        transactions.push({
+          id: sal.id,
+          type: 'Salary',
+          amount: -Number(sal.amount || 0), // Negative for expense
+          date: sal.date || new Date().toISOString(),
+          patient: sal.staffName || 'Staff Member',
+          status: 'paid',
+        });
+      });
+
 
       // Outstanding from patients
       const outstanding = patients.reduce((sum, p) => sum + Number(p.pendingBalance || 0), 0);

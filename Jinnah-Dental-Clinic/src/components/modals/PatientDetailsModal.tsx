@@ -100,9 +100,9 @@ export default function PatientDetailsModal({
 
   const formatCurrency = (amount: number | undefined) => {
     const numAmount = amount || 0;
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat('en-PK', {
       style: 'currency',
-      currency: 'USD',
+      currency: 'PKR',
       minimumFractionDigits: 0,
       maximumFractionDigits: 0
     }).format(numAmount);
@@ -186,21 +186,20 @@ export default function PatientDetailsModal({
             <div className="bg-white p-4 rounded-lg border shadow-sm">
               <div className="text-xs text-gray-600 mb-1">Total Paid</div>
               <div className="text-2xl font-bold text-green-700">
-                {formatCurrency(patient.totalPaid || 0)}
+                {formatCurrency(history.bills.reduce((sum, b) => sum + (Number(b.amountPaid) || 0), 0))}
               </div>
             </div>
 
             <div className="bg-white p-4 rounded-lg border shadow-sm">
               <div className="text-xs text-gray-600 mb-1">Pending Balance</div>
-              <div className={`text-2xl font-bold ${
-                (patient.pendingBalance || 0) > 0 ? 'text-red-600' :
+              <div className={`text-2xl font-bold ${(patient.pendingBalance || 0) > 0 ? 'text-red-600' :
                 (patient.pendingBalance || 0) < 0 ? 'text-blue-600' : 'text-gray-800'
-              }`}>
+                }`}>
                 {formatCurrency(Math.abs(patient.pendingBalance || 0))}
               </div>
               <div className="text-xs mt-0.5">
                 {(patient.pendingBalance || 0) > 0 ? 'Due' :
-                 (patient.pendingBalance || 0) < 0 ? 'Credit' : 'Settled'}
+                  (patient.pendingBalance || 0) < 0 ? 'Credit' : 'Settled'}
               </div>
             </div>
           </div>
@@ -213,31 +212,28 @@ export default function PatientDetailsModal({
         <div className="border-b px-4">
           <div className="flex space-x-4">
             <button
-              className={`py-2 px-1 font-medium text-xs border-b-2 transition-colors ${
-                activeTab === 'overview' 
-                  ? 'border-primary text-primary' 
-                  : 'border-transparent text-gray-600 hover:text-gray-900'
-              }`}
+              className={`py-2 px-1 font-medium text-xs border-b-2 transition-colors ${activeTab === 'overview'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-gray-600 hover:text-gray-900'
+                }`}
               onClick={() => setActiveTab('overview')}
             >
               Overview
             </button>
             <button
-              className={`py-2 px-1 font-medium text-xs border-b-2 transition-colors ${
-                activeTab === 'queue' 
-                  ? 'border-primary text-primary' 
-                  : 'border-transparent text-gray-600 hover:text-gray-900'
-              }`}
+              className={`py-2 px-1 font-medium text-xs border-b-2 transition-colors ${activeTab === 'queue'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-gray-600 hover:text-gray-900'
+                }`}
               onClick={() => setActiveTab('queue')}
             >
               Queue History ({history?.queueHistory?.length || 0})
             </button>
             <button
-              className={`py-2 px-1 font-medium text-xs border-b-2 transition-colors ${
-                activeTab === 'bills' 
-                  ? 'border-primary text-primary' 
-                  : 'border-transparent text-gray-600 hover:text-gray-900'
-              }`}
+              className={`py-2 px-1 font-medium text-xs border-b-2 transition-colors ${activeTab === 'bills'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-gray-600 hover:text-gray-900'
+                }`}
               onClick={() => setActiveTab('bills')}
             >
               Bills ({history?.bills?.length || 0})

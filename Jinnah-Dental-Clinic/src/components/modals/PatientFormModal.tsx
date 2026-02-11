@@ -13,7 +13,7 @@ interface Patient {
   id: string;           // Firebase document ID
   patientNumber?: string;   // Custom 4-digit number (0001, 0002...)
   name: string;
-  phone: string;
+  phone?: string;
   age?: string | number;
   gender?: string;
   address?: string;
@@ -179,7 +179,6 @@ export default function PatientFormModal({
 
     // Basic validation
     if (!formData.name.trim()) return toast.error('Patient name is required');
-    if (!formData.phone.trim()) return toast.error('Phone number is required');
     if (!formData.age) return toast.error('Patient age is required');
     if (!formData.gender) return toast.error('Patient gender is required');
     if (!formData.patientNumber || formData.patientNumber.length !== 4) {
@@ -411,14 +410,13 @@ export default function PatientFormModal({
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="phone">Phone Number <span className="text-red-500">*</span></Label>
+                  <Label htmlFor="phone">Phone Number</Label>
                   <Input
                     id="phone"
                     name="phone"
                     value={formData.phone}
                     onChange={handleChange}
                     placeholder="03001234567"
-                    required
                     disabled={loading}
                     className="h-11"
                   />

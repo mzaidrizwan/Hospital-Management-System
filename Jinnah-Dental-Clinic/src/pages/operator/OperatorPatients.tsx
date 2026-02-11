@@ -60,6 +60,7 @@ export default function OperatorPatients() {
     patients: contextPatients,
     queue: contextQueue,
     bills: contextBills,
+    sales: contextSales,
     loading: contextLoading,
     deleteLocal,
     updateLocal
@@ -191,12 +192,17 @@ export default function OperatorPatients() {
         };
       }
 
+      // Calculate Revenue from Bills and Sales for accuracy
+      const treatmentRevenue = (contextBills || []).reduce((sum, b) => sum + (Number(b.amountPaid) || 0), 0);
+      const salesRevenue = (contextSales || []).reduce((sum, s) => sum + (Number(s.total || s.amount || s.totalPrice || 0)), 0);
+      const totalRevenue = treatmentRevenue + salesRevenue;
+
       return {
         total: contextPatients.length,
         active: contextPatients.filter(p => p && p.isActive !== false).length,
         pendingBalance: contextPatients.reduce((sum, p) => sum + (p?.pendingBalance || 0), 0),
-        totalVisits: contextPatients.reduce((sum, p) => sum + (p?.totalVisits || 0), 0),
-        totalRevenue: contextPatients.reduce((sum, p) => sum + (p?.totalPaid || 0), 0),
+        totalVisits: (contextQueue || []).filter(q => q.status === 'completed').length,
+        totalRevenue: totalRevenue,
         creditPatients: contextPatients.filter(p => p && (p.pendingBalance || 0) < 0).length
       };
     } catch (error) {
@@ -210,7 +216,7 @@ export default function OperatorPatients() {
         creditPatients: 0
       };
     }
-  }, [contextPatients]);
+  }, [contextPatients, contextBills, contextQueue, contextSales]);
 
   // Handle search (controlled by searchTerm state)
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -445,9 +451,9 @@ export default function OperatorPatients() {
   // Format currency
   const formatCurrency = (amount: number | undefined): string => {
     const numAmount = amount || 0;
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat('en-PK', {
       style: 'currency',
-      currency: 'USD',
+      currency: 'PKR',
       minimumFractionDigits: 0,
       maximumFractionDigits: 0
     }).format(numAmount);
@@ -933,6 +939,8 @@ export default function OperatorPatients() {
           <PatientDetailsModal
             patient={selectedPatient}
             patientInfo={selectedPatient}
+            queueHistory={selectedPatientHistory.queueHistory}
+            bills={selectedPatientHistory.bills}
             onClose={() => {
               setShowPatientDetails(false);
               setSelectedPatient(null);
@@ -942,8 +950,6 @@ export default function OperatorPatients() {
               setShowPatientForm(true);
             }}
             onDelete={() => handleDeletePatient(selectedPatient)}
-            queueHistory={selectedPatientHistory.queueHistory}
-            bills={selectedPatientHistory.bills}
           />
         )
       }

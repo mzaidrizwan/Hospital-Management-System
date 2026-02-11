@@ -1,4 +1,3 @@
 check complete working of inventory tab.
 All financial calculations.
 there are many useless messages by app which are being rendered in console.
-login modal se Demo credentials wala box remove kry

@@ -120,58 +120,50 @@ const getDailyRevenueExpenseData = (
   if (!dateRange.from || !dateRange.to) return [];
 
   const result: { date: string; revenue: number; expenses: number; profit: number }[] = [];
+
   const current = new Date(dateRange.from);
+  current.setHours(0, 0, 0, 0);
   const to = new Date(dateRange.to);
+  to.setHours(23, 59, 59, 999);
 
   while (current <= to) {
-    const dateStr = current.toISOString().split('T')[0];
+    // USE LOCAL DATE FORMATTING TO AVOID TIMEZONE SHIFT
+    const targetDateStr = format(current, 'yyyy-MM-dd');
 
     // Calculate daily revenue
     const dayRevenue = combinedRevenue
       .filter(item => {
-        const itemDate = parseDate(item.date || item.createdDate || item.createdAt);
+        const itemDate = parseDate(item.createdDate || item.date || item.createdAt);
         if (!itemDate) return false;
-        return itemDate.toISOString().split('T')[0] === dateStr;
+        return format(itemDate, 'yyyy-MM-dd') === targetDateStr;
       })
-      .reduce((sum, item) => sum + (item.amount || 0), 0);
+      .reduce((sum, item) => sum + (Number(item.amount || item.total || item.totalPrice || 0)), 0);
 
-    // Calculate daily expenses (regular expenses + salaries)
+    // Calculate daily regular expenses
     const dayExpensesRegular = expenses
       .filter(expense => {
         const expenseDate = parseDate(expense.date);
         if (!expenseDate) return false;
-        return expenseDate.toISOString().split('T')[0] === dateStr;
+        return format(expenseDate, 'yyyy-MM-dd') === targetDateStr;
       })
-      .reduce((sum, expense) => sum + (expense.amount || 0), 0);
+      .reduce((sum, expense) => sum + (Number(expense.amount) || 0), 0);
 
+    // Calculate daily salaries
     const dayExpensesSalaries = salaryPayments
       .filter(salary => {
         const salaryDate = parseDate(salary.date);
         if (!salaryDate) return false;
-        return salaryDate.toISOString().split('T')[0] === dateStr;
+        return format(salaryDate, 'yyyy-MM-dd') === targetDateStr;
       })
-      .reduce((sum, salary) => sum + (salary.amount || 0), 0);
+      .reduce((sum, salary) => sum + (Number(salary.amount) || 0), 0);
 
     const dayExpenses = dayExpensesRegular + dayExpensesSalaries;
-
-    // Calculate daily profit accurately (Treatment Revenue + Inventory Profit - Overhead Expenses)
-    const dayProfit = combinedRevenue
-      .filter(item => {
-        const itemDate = parseDate(item.date || item.createdDate || item.createdAt);
-        if (!itemDate) return false;
-        return itemDate.toISOString().split('T')[0] === dateStr;
-      })
-      .reduce((sum, item) => {
-        if (item.type === 'sale') {
-          return sum + (item.itemProfit || 0);
-        }
-        return sum + (item.amount || 0);
-      }, 0) - dayExpenses;
+    const dayProfit = dayRevenue - dayExpenses;
 
     result.push({
       date: format(current, 'MMM dd'),
-      revenue: dayRevenue,
-      expenses: dayExpenses,
+      revenue: Math.max(0, dayRevenue),
+      expenses: Math.max(0, dayExpenses),
       profit: dayProfit
     });
 
@@ -684,43 +676,59 @@ export default function AdminDashboard() {
             {memoizedData.dailyData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={memoizedData.dailyData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
                   <XAxis
                     dataKey="date"
                     stroke="#6b7280"
                     fontSize={12}
+                    tickLine={false}
+                    axisLine={false}
                   />
                   <YAxis
                     stroke="#6b7280"
                     fontSize={12}
-                    tickFormatter={(value) => `PKR ${(value / 1000).toFixed(0)}K`}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(value) => value >= 1000 ? `${(value / 1000).toFixed(0)}K` : value}
                   />
                   <Tooltip
                     formatter={(value, name) => {
                       const formattedValue = formatCurrency(Number(value));
-                      const label = name === 'revenue' ? 'Revenue' :
-                        name === 'expenses' ? 'Expenses' : 'Profit';
+                      const label = name === 'Revenue' ? 'Revenue' :
+                        name === 'Expenses' ? 'Expenses' : 'Net Profit';
                       return [formattedValue, label];
                     }}
                     contentStyle={{
                       backgroundColor: 'white',
                       border: '1px solid #e5e7eb',
                       borderRadius: '8px',
-                      padding: '12px'
+                      padding: '12px',
+                      boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
                     }}
                   />
-                  <Legend />
+                  <Legend iconType="circle" />
                   <Bar
                     dataKey="revenue"
                     name="Revenue"
                     fill="#3b82f6"
                     radius={[4, 4, 0, 0]}
+                    barSize={20}
                   />
                   <Bar
                     dataKey="expenses"
                     name="Expenses"
                     fill="#f59e0b"
                     radius={[4, 4, 0, 0]}
+                    barSize={20}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="profit"
+                    name="Profit"
+                    stroke="#10b981"
+                    strokeWidth={3}
+                    dot={{ r: 4, fill: '#10b981' }}
+                    activeDot={{ r: 6 }}
                   />
                 </BarChart>
               </ResponsiveContainer>
