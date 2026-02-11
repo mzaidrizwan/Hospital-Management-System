@@ -201,7 +201,7 @@ export default function StaffFormModal({
                     value={formData.name}
                     onChange={handleChange}
                     required
-                    placeholder="John Smith"
+                    placeholder="Name"
                     disabled={isSubmitting}
                     className="h-10 focus-visible:ring-primary shadow-sm"
                   />

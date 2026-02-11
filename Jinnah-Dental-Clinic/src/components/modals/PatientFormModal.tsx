@@ -410,7 +410,7 @@ export default function PatientFormModal({
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="phone">Phone Number</Label>
+                  <Label htmlFor="phone">Phone Number (optional)</Label>
                   <Input
                     id="phone"
                     name="phone"
@@ -528,7 +528,7 @@ export default function PatientFormModal({
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="address">Address</Label>
+                  <Label htmlFor="address">Address (optional)</Label>
                   <Input
                     id="address"
                     name="address"
