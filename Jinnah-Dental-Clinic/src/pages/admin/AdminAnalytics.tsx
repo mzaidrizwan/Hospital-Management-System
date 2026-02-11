@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Loader2, RefreshCw, AlertCircle, TrendingUp, BarChart2 } from 'lucide-react';
 import { toast } from "sonner";
 import { useData } from '@/context/DataContext';
+import { calculateFinancialStats, formatCurrency, parseDate } from '@/utils/financialUtils';
 
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 
@@ -26,18 +27,8 @@ interface MonthlyData {
   patients: number;       // count of completed queue items
 }
 
-const formatCurrency = (amount: number) => {
-  if (isNaN(amount)) return 'PKR 0';
-  return new Intl.NumberFormat('en-PK', {
-    style: 'currency',
-    currency: 'PKR',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(amount);
-};
-
 export default function AdminAnalytics() {
-  const { queue, bills, loading: dataLoading } = useData();
+  const { queue, bills, sales, expenses, salaryPayments, loading: dataLoading } = useData();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,8 +57,8 @@ export default function AdminAnalytics() {
         if (!dateStr) return;
 
         try {
-          const date = new Date(dateStr);
-          if (isNaN(date.getTime()) || date.getFullYear() !== currentYear) return;
+          const date = parseDate(dateStr);
+          if (!date || date.getFullYear() !== currentYear) return;
 
           const monthIndex = date.getMonth();
           const monthName = months[monthIndex];
@@ -80,25 +71,21 @@ export default function AdminAnalytics() {
         }
       });
 
-      // Process bills (revenue)
-      (bills || []).forEach((bill) => {
-        if (!bill) return;
-        const dateStr = bill.createdDate || bill.date;
-        if (!dateStr) return;
+      // Process monthly financials
+      months.forEach((monthName, index) => {
+        const start = new Date(currentYear, index, 1);
+        const end = new Date(currentYear, index + 1, 0);
 
-        try {
-          const date = new Date(dateStr);
-          if (isNaN(date.getTime()) || date.getFullYear() !== currentYear) return;
+        const stats = calculateFinancialStats(
+          bills,
+          sales,
+          expenses,
+          salaryPayments,
+          { from: start, to: end }
+        );
 
-          const monthIndex = date.getMonth();
-          const monthName = months[monthIndex];
-
-          const amount = Number(bill.totalAmount || bill.amountPaid || 0);
-          if (monthlyMap[monthName]) {
-            monthlyMap[monthName].revenue += amount;
-          }
-        } catch (e) {
-          console.error('Error parsing bill date:', e);
+        if (monthlyMap[monthName]) {
+          monthlyMap[monthName].revenue = stats.totalRevenue;
         }
       });
 
@@ -108,7 +95,8 @@ export default function AdminAnalytics() {
       setError('Error processing analytics');
       return [];
     }
-  }, [queue, bills, dataLoading, months]);
+  }, [queue, bills, sales, expenses, salaryPayments, dataLoading, months]);
+
 
   const hasData = useMemo(() => {
     return monthlyData.some(d => d.revenue > 0 || d.patients > 0);

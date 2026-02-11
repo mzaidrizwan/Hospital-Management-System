@@ -9,9 +9,16 @@ import { StatCard } from '@/components/dashboard/StatCard'; // Assuming you have
 import { toast } from "@/hooks/use-toast";
 import { startOfMonth, endOfMonth, format } from 'date-fns';
 import { useData } from '@/context/DataContext';
+import { calculateFinancialStats, formatCurrency } from '@/utils/financialUtils';
 
 export default function AdminFinances() {
-  const { bills, expenses, patients, sales, loading: dataLoading, exportToCSV } = useData();
+  const { bills, expenses, patients, sales, salaryPayments, loading: dataLoading, exportToCSV } = useData();
+
+  const currentMonthRange = React.useMemo(() => ({
+    from: startOfMonth(new Date()),
+    to: endOfMonth(new Date())
+  }), []);
+
   const { stats, recentTransactions, loading, error } = React.useMemo(() => {
     if (dataLoading) return {
       stats: { totalRevenue: 0, totalExpenses: 0, netProfit: 0, outstanding: 0 },
@@ -21,84 +28,54 @@ export default function AdminFinances() {
     };
 
     try {
-      const currentMonthStart = startOfMonth(new Date());
-      const currentMonthEnd = endOfMonth(new Date());
+      const financialStats = calculateFinancialStats(
+        bills,
+        sales,
+        expenses,
+        salaryPayments,
+        currentMonthRange
+      );
 
-      // 1. Filter bills for current month
-      const currentMonthBills = bills.filter(bill => {
-        const date = bill.createdDate || bill.date;
-        if (!date) return false;
-        const billDate = new Date(date);
-        return billDate >= currentMonthStart && billDate <= currentMonthEnd;
-      });
-
-      let revenue = 0;
+      // Add transactions for display
       const transactions: any[] = [];
 
-      currentMonthBills.forEach((bill) => {
-        const amount = Number(bill.totalAmount || bill.amountPaid || 0);
-        revenue += amount;
-
+      financialStats.filteredBills.forEach((bill) => {
         transactions.push({
           id: bill.id,
           type: 'Bill',
-          amount,
+          amount: bill.amountPaid || 0,
           date: bill.createdDate || bill.date || new Date().toISOString(),
           patient: bill.patientName || 'Unknown',
           status: bill.paymentStatus || 'Pending',
         });
       });
 
-      // 2. Filter expenses for current month
-      const currentMonthExpenses = expenses.filter(exp => {
-        if (!exp.date) return false;
-        const expDate = new Date(exp.date);
-        return expDate >= currentMonthStart && expDate <= currentMonthEnd;
-      });
-
-      const totalExpenses = currentMonthExpenses.reduce((sum, exp) => sum + Number(exp.amount || 0), 0);
-
-      // 3. Filter sales for current month
-      const currentMonthSales = (sales || []).filter(sale => {
-        if (!sale.date) return false;
-        const saleDate = new Date(sale.date);
-        return saleDate >= currentMonthStart && saleDate <= currentMonthEnd;
-      });
-
-      const salesRevenue = currentMonthSales.reduce((sum, s) => sum + Number(s.total || 0), 0);
-      const salesProfit = currentMonthSales.reduce((sum, s) => {
-        const buyingPrice = Number(s.buyingPrice || 0);
-        const sellingPrice = Number(s.sellingPrice || s.price || 0);
-        const qty = Number(s.quantity || 0);
-        return sum + (sellingPrice - buyingPrice) * qty;
-      }, 0);
-
-      // Add sales to transactions list
-      currentMonthSales.forEach(sale => {
+      financialStats.filteredSales.forEach(sale => {
         transactions.push({
           id: sale.id,
           type: 'Sale',
-          amount: Number(sale.total || 0),
+          amount: Number(sale.total || sale.amount || sale.totalPrice || 0),
           date: sale.date || new Date().toISOString(),
-          patient: sale.itemName || 'Inventory Item',
+          patient: sale.itemName || sale.productName || 'Inventory Item',
           status: 'paid',
         });
       });
 
-      // 4. Outstanding from patients
+      // Outstanding from patients
       const outstanding = patients.reduce((sum, p) => sum + Number(p.pendingBalance || 0), 0);
 
-      // 5. Net Profit: (Treatment Revenue + Inventory Profit) - Overhead Expenses
-      const totalRevenue = revenue + salesRevenue;
-      const netProfit = revenue + salesProfit - totalExpenses;
-
-      // 5. Sort transactions
+      // Sort transactions
       const sortedTransactions = transactions
         .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-        .slice(0, 5);
+        .slice(0, 10);
 
       return {
-        stats: { totalRevenue, totalExpenses, netProfit, outstanding },
+        stats: {
+          totalRevenue: financialStats.totalRevenue,
+          totalExpenses: financialStats.totalExpenses,
+          netProfit: financialStats.netProfit,
+          outstanding
+        },
         recentTransactions: sortedTransactions,
         loading: false,
         error: null
@@ -112,16 +89,7 @@ export default function AdminFinances() {
         error: 'Error processing data'
       };
     }
-  }, [bills, expenses, patients, sales, dataLoading]);
-
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(value);
-  };
+  }, [bills, expenses, patients, sales, salaryPayments, dataLoading, currentMonthRange]);
 
   const calculateTrend = (current: number, previous: number = 0) => {
     if (previous === 0) return { value: 0, isPositive: true };
@@ -131,6 +99,7 @@ export default function AdminFinances() {
       isPositive: diff >= 0,
     };
   };
+
 
   // Placeholder previous values (you can fetch real previous month later)
   const prevRevenue = stats.totalRevenue * 0.88;

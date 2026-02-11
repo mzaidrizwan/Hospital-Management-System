@@ -37,6 +37,7 @@ import { cn } from '@/lib/utils';
 import { Calendar } from '@/components/ui/calendar';
 
 import { useData } from '@/context/DataContext';
+import { calculateFinancialStats, formatCurrency, parseDate } from '@/utils/financialUtils';
 
 // Interfaces
 interface Bill {
@@ -104,120 +105,11 @@ interface SalaryPayment {
   staffName: string;
 }
 
-const formatCurrency = (amount: number) => {
-  if (isNaN(amount)) return 'PKR 0';
+// Redundant local definitions removed
 
-  return new Intl.NumberFormat('en-PK', {
-    style: 'currency',
-    currency: 'PKR',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(amount);
-};
 
-const parseDate = (dateValue: any): Date | null => {
-  if (!dateValue) return null;
 
-  try {
-    if (dateValue.toDate && typeof dateValue.toDate === 'function') {
-      return dateValue.toDate();
-    }
-
-    if (typeof dateValue === 'string') {
-      const parsed = new Date(dateValue);
-      return isNaN(parsed.getTime()) ? null : parsed;
-    }
-
-    if (dateValue instanceof Date) {
-      return dateValue;
-    }
-
-    return null;
-  } catch (error) {
-    console.error('Error parsing date:', error);
-    return null;
-  }
-};
-
-const getDateRangeData = (
-  bills: Bill[],
-  sales: Sale[],
-  expenses: Expense[],
-  salaryPayments: SalaryPayment[],
-  dateRange: DateRange
-) => {
-  if (!dateRange.from || !dateRange.to) {
-    return {
-      bills: [],
-      sales: [],
-      expenses: [],
-      salaryPayments: [],
-      combinedRevenue: []
-    };
-  }
-
-  const from = new Date(dateRange.from);
-  const to = new Date(dateRange.to);
-  to.setHours(23, 59, 59, 999);
-
-  const isInDateRange = (itemDate: Date | null): boolean => {
-    if (!itemDate) return false;
-    return itemDate >= from && itemDate <= to;
-  };
-
-  // Filter bills (only paid ones count as revenue)
-  const filteredBills = bills.filter(bill => {
-    if (bill.paymentStatus !== 'paid') return false;
-
-    const billDate = parseDate(bill.createdDate || bill.date || bill.createdAt);
-    return isInDateRange(billDate);
-  });
-
-  // Filter sales (only paid ones count as revenue)
-  const filteredSales = sales.filter(sale => {
-    if (sale.paymentStatus !== 'paid') return false;
-
-    const saleDate = parseDate(sale.date || sale.createdAt);
-    return isInDateRange(saleDate);
-  });
-
-  // Filter expenses (only paid ones)
-  const filteredExpenses = expenses.filter(expense => {
-    if (expense.status !== 'paid') return false;
-
-    const expenseDate = parseDate(expense.date);
-    return isInDateRange(expenseDate);
-  });
-
-  // Filter salary payments
-  const filteredSalaries = salaryPayments.filter(salary => {
-    const salaryDate = parseDate(salary.date);
-    return isInDateRange(salaryDate);
-  });
-
-  // Combine all revenue sources
-  const combinedRevenue = [
-    ...filteredBills.map(bill => ({
-      ...bill,
-      amount: bill.amountPaid || 0,
-      type: 'bill'
-    })),
-    ...filteredSales.map(sale => ({
-      ...sale,
-      amount: sale.total || sale.amount || sale.totalPrice || 0,
-      itemProfit: (Number(sale.sellingPrice || sale.price || sale.amount || 0) - Number(sale.buyingPrice || 0)) * Number(sale.quantity || 1),
-      type: 'sale'
-    }))
-  ];
-
-  return {
-    bills: filteredBills,
-    sales: filteredSales,
-    expenses: filteredExpenses,
-    salaryPayments: filteredSalaries,
-    combinedRevenue
-  };
-};
+// Removed redundant getDateRangeData as it's now in financialUtils.ts
 
 const getDailyRevenueExpenseData = (
   combinedRevenue: any[],
@@ -382,14 +274,8 @@ export default function AdminDashboard() {
       };
     }
 
-    // Get filtered data for selected date range
-    const {
-      bills: filteredBills,
-      sales: filteredSales,
-      expenses: filteredExpenses,
-      salaryPayments: filteredSalaries,
-      combinedRevenue
-    } = getDateRangeData(
+    // Get filtered data for selected date range using central utility
+    const stats = calculateFinancialStats(
       bills as Bill[],
       sales as Sale[],
       contextExpenses as Expense[],
@@ -399,52 +285,29 @@ export default function AdminDashboard() {
 
     // Calculate daily data for chart
     const dailyData = getDailyRevenueExpenseData(
-      combinedRevenue,
-      filteredExpenses,
-      filteredSalaries,
+      stats.combinedRevenue,
+      stats.filteredExpenses,
+      stats.filteredSalaries,
       dateRange
     );
 
-    // Calculate totals
-    const treatmentRevenue = filteredBills.reduce((sum, item) => sum + (item.amountPaid || 0), 0);
-    const salesRevenue = filteredSales.reduce((sum, item) => sum + (item.total || item.amount || item.totalPrice || 0), 0);
-    const salesProfit = filteredSales.reduce((sum, sale) => {
-      const bPrice = Number(sale.buyingPrice || 0);
-      const sPrice = Number(sale.sellingPrice || sale.price || 0);
-      const qty = Number(sale.quantity || 0);
-      return sum + (sPrice - bPrice) * qty;
-    }, 0);
-
-    const totalRevenue = treatmentRevenue + salesRevenue;
-    const totalExpenses = filteredExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
-    const totalSalaries = filteredSalaries.reduce((sum, sal) => sum + (sal.amount || 0), 0);
-    const totalExpensesAll = totalExpenses + totalSalaries;
-    const netProfit = treatmentRevenue + salesProfit - totalExpensesAll;
-
     // Other calculations
     const totalPatients = patients.filter(p => p.isActive).length;
-    const totalTransactions = filteredBills.length + filteredSales.length;
+    const totalTransactions = stats.filteredBills.length + stats.filteredSales.length;
     const lowStockItems = getLowStock(inventory);
     const recentPatients = getRecentPatients(patients);
-    const recentTransactions = getRecentTransactions(filteredBills, filteredSales, 5);
+    const recentTransactions = getRecentTransactions(stats.filteredBills, stats.filteredSales as any, 5);
 
     return {
-      filteredBills,
-      filteredSales,
-      filteredExpenses,
-      filteredSalaries,
-      combinedRevenue,
+      ...stats,
       dailyData,
       recentTransactions,
-      totalRevenue,
-      totalExpenses: totalExpensesAll,
-      totalSalaries,
-      netProfit,
       totalPatients,
       totalTransactions,
       lowStockItems,
       recentPatients
     };
+
   }, [bills, sales, contextExpenses, salaryPayments, inventory, patients, dateRange, dataLoading]);
 
   // Calculate trends (previous period comparison)
@@ -460,7 +323,7 @@ export default function AdminDashboard() {
     prevFrom.setDate(prevFrom.getDate() - diffDays - 1);
     prevTo.setDate(prevTo.getDate() - diffDays - 1);
 
-    const prevData = getDateRangeData(
+    const prevStats = calculateFinancialStats(
       bills as Bill[],
       sales as Sale[],
       contextExpenses as Expense[],
@@ -468,14 +331,11 @@ export default function AdminDashboard() {
       { from: prevFrom, to: prevTo }
     );
 
-    const prevRevenue = prevData.combinedRevenue.reduce((sum, item) => sum + (item.amount || 0), 0);
-    const prevExpensesTotal = prevData.expenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
-    const prevSalariesTotal = prevData.salaryPayments.reduce((sum, sal) => sum + (sal.amount || 0), 0);
-
     return {
-      revenue: prevRevenue,
-      expenses: prevExpensesTotal + prevSalariesTotal
+      revenue: prevStats.totalRevenue,
+      expenses: prevStats.totalExpenses
     };
+
   };
 
   const prevPeriod = getPreviousPeriodData();
