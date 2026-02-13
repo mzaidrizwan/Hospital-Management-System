@@ -45,6 +45,7 @@ export default function QueueSection({
   onDoubleClick,
   showPending = false,
   showBackButton = false,
+  showPatientId = false,
   getPendingAmount = () => 0
 }: QueueSectionProps) {
 
@@ -308,8 +309,17 @@ export default function QueueSection({
             {/* Details */}
             <div className="space-y-2 mb-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">Id:</span>
-                {getPriorityBadge(item.priority)}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-600 font-medium">
+                    {showPatientId ? 'ID:' : 'Priority:'}
+                  </span>
+                  {showPatientId ? (
+                    <span className="text-sm font-bold text-blue-600">{item.patientNumber || '--'}</span>
+                  ) : (
+                    getPriorityBadge(item.priority)
+                  )}
+                </div>
+                {showPatientId && getPriorityBadge(item.priority)}
               </div>
 
               {item.treatment && (

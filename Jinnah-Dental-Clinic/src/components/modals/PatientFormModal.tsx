@@ -179,7 +179,6 @@ export default function PatientFormModal({
 
     // Basic validation
     if (!formData.name.trim()) return toast.error('Patient name is required');
-    if (!formData.age) return toast.error('Patient age is required');
     if (!formData.gender) return toast.error('Patient gender is required');
     if (!formData.patientNumber || formData.patientNumber.length !== 4) {
       return toast.error('Patient Number must be exactly 4 digits (0001-9999)');
@@ -494,7 +493,7 @@ export default function PatientFormModal({
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="age">Age <span className="text-red-500">*</span></Label>
+                    <Label htmlFor="age">Age (optional)</Label>
                     <Input
                       id="age"
                       name="age"

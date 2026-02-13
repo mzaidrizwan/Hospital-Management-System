@@ -254,21 +254,12 @@ export const syncPatientAfterTreatment = async (patientNumber: string) => {
     );
     console.log(`Total treatment fees: ${totalTreatmentFees}`);
 
-    // Calculate total paid from ALL sources
-    // First from queue items (amountPaid field)
-    const totalPaidFromQueue = queueItems.reduce(
-      (sum: number, item: any) => sum + (parseFloat(item.amountPaid) || 0),
-      0
-    );
-
-    // Then from bills
-    const totalPaidFromBills = bills.reduce(
+    // Calculate total paid from Bills (Source of truth for payments)
+    const totalPaid = bills.reduce(
       (sum: number, bill: any) => sum + (parseFloat(bill.amountPaid) || 0),
       0
     );
-
-    const totalPaid = totalPaidFromQueue + totalPaidFromBills;
-    console.log(`Total paid: ${totalPaid} (queue: ${totalPaidFromQueue}, bills: ${totalPaidFromBills})`);
+    console.log(`Total paid from bills: ${totalPaid}`);
 
     // Calculate total due and pending balance
     const totalDue = openingBalance + totalTreatmentFees;

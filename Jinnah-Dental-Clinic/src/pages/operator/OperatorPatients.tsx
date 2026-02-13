@@ -513,12 +513,12 @@ export default function OperatorPatients() {
 
   // Get visits badge
   const getVisitsBadge = (patient: Patient) => {
-    if (!patient) return <Badge variant="outline" className="bg-gray-50 text-xs">New</Badge>;
+    if (!patient) return <span className="text-gray-400">--</span>;
 
     const visits = patient.totalVisits || 0;
 
     if (visits === 0) {
-      return <Badge variant="outline" className="bg-gray-50 text-xs">New</Badge>;
+      return <span className="text-gray-400 text-sm">--</span>;
     }
 
     let variant: "secondary" | "default" | "outline" = "secondary";
@@ -551,29 +551,25 @@ export default function OperatorPatients() {
     return (
       <TableRow key={patient.id} className="hover:bg-gray-50 transition-colors">
         <TableCell className="font-medium text-blue-600">
-          {patient.patientNumber || 'N/A'}
+          {patient.patientNumber || '--'}
         </TableCell>
         <TableCell>
-          <div className="font-semibold">{patient.name || 'Unnamed'}</div>
-          <div className="text-xs text-gray-500">{patient.phone || 'No phone'}</div>
+          <div className="font-semibold">{patient.name || '--'}</div>
+        </TableCell>
+        <TableCell className="hidden sm:table-cell">
+          <div className="text-sm">{patient.phone || '--'}</div>
         </TableCell>
         <TableCell className="hidden md:table-cell text-sm">
           {patient.age ? `${patient.age}y` : '--'} / {patient.gender || '--'}
         </TableCell>
-        <TableCell className="hidden lg:table-cell text-xs text-gray-500 max-w-[150px] truncate">
-          {patient.address || '--'}
-        </TableCell>
-        <TableCell className="hidden md:table-cell">
-          <div className="text-sm">{safeFormatDate(patient.lastVisit)}</div>
-        </TableCell>
-        <TableCell>
+        <TableCell className="hidden lg:table-cell">
           {getVisitsBadge(patient)}
         </TableCell>
         <TableCell>
-          {getPendingDisplay(patient)}
-        </TableCell>
-        <TableCell>
-          {getStatusBadge(patient)}
+          <div className="flex flex-col gap-1">
+            {getPendingDisplay(patient)}
+            {getStatusBadge(patient)}
+          </div>
         </TableCell>
         <TableCell className="text-right">
           <div className="flex justify-end gap-1">
@@ -594,7 +590,6 @@ export default function OperatorPatients() {
               title="Add to Waiting"
             >
               <Clock className="w-3.5 h-3.5" />
-              <span className="text-[10px] font-bold uppercase tracking-wider"></span>
             </Button>
             <Button
               variant="ghost"
@@ -605,15 +600,6 @@ export default function OperatorPatients() {
             >
               <Edit className="w-4 h-4" />
             </Button>
-            {/* <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-gray-400 hover:text-blue-600 hover:bg-blue-50"
-              onClick={() => onRecalculate(patient)}
-              title="Recalculate Stats"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </Button> */}
             <Button
               variant="ghost"
               size="icon"
@@ -814,11 +800,11 @@ export default function OperatorPatients() {
                 <TableRow>
                   <TableHead className="font-semibold">Patient ID</TableHead>
                   <TableHead className="font-semibold">Name</TableHead>
-                  <TableHead className="font-semibold">Contact</TableHead>
-                  <TableHead className="font-semibold">Age/Gender</TableHead>
-                  <TableHead className="font-semibold">Visits</TableHead>
+                  <TableHead className="font-semibold hidden sm:table-cell">Contact</TableHead>
+                  <TableHead className="font-semibold hidden md:table-cell">Age/Gender</TableHead>
+                  <TableHead className="font-semibold hidden lg:table-cell">Visits</TableHead>
                   <TableHead className="font-semibold">Balance Status</TableHead>
-                  <TableHead className="font-semibold">Actions</TableHead>
+                  <TableHead className="font-semibold text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

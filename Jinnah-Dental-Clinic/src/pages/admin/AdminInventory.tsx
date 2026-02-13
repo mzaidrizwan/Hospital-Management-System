@@ -200,30 +200,24 @@ export default function AdminInventory() {
       quantity: currentItem.quantity - quantityToSell
     };
 
-    // 2. OPTIMISTIC UPDATE: Immediate UI cleanup
-    setIsSellDialogOpen(false);
-    setSelectedItemForSale(null);
-    setSaleQuantity(1);
-
-    // 3. Update local React states directly for instant feedback
-    setInventory(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
-    setSales(prev => [saleRecord, ...(prev || [])]);
-
-    // 4. Show success toast immediately
-    toast.success(`${quantityToSell} unit(s) of ${itemName} sold!`);
-
-    // 5. Background Synchronization (Non-blocking)
+    // 2. Persistence & Sync (Local-First)
+    // updateLocal already handles updating React state (setInventory/setSales)
     const performSync = async () => {
       try {
         await Promise.all([
+          updateLocal('inventory', updatedItem),
+          updateLocal('sales', saleRecord),
           smartSync('sales', saleRecord),
           smartSync('inventory', updatedItem)
         ]);
-        // Also update IndexedDB via updateLocal for persistence
-        await updateLocal('inventory', updatedItem);
-        await updateLocal('sales', saleRecord);
+
+        setIsSellDialogOpen(false);
+        setSelectedItemForSale(null);
+        setSaleQuantity(1);
+        toast.success(`${quantityToSell} unit(s) of ${itemName} sold!`);
       } catch (error) {
-        console.error('Background sale sync failed:', error);
+        console.error('Sale failed:', error);
+        toast.error("Failed to process sale.");
       }
     };
 

@@ -193,26 +193,37 @@ const getRecentPatients = (patients: Patient[]) => {
 };
 
 const getRecentTransactions = (bills: Bill[], sales: Sale[], limit: number = 5) => {
-  const allTransactions = [
-    ...bills.map(bill => ({
-      ...bill,
-      type: 'bill',
-      displayName: bill.patientName || 'Patient',
-      amount: bill.amountPaid || 0,
-      date: bill.createdDate || bill.createdAt,
-      color: '#3b82f6'
-    })),
-    ...sales.map(sale => ({
-      ...sale,
-      type: 'sale',
-      displayName: sale.customerName || sale.productName || 'Sale',
-      amount: sale.amount || sale.totalPrice || 0,
-      date: sale.date || sale.createdAt,
-      color: '#10b981'
-    }))
-  ];
+  const billTransactions = bills.map(bill => ({
+    ...bill,
+    type: 'bill',
+    displayName: bill.patientName || 'Patient',
+    amount: bill.amountPaid || 0,
+    date: bill.createdDate || bill.createdAt,
+    color: '#3b82f6'
+  }));
 
-  return allTransactions
+  const saleTransactions = sales.map(sale => ({
+    ...sale,
+    type: 'sale',
+    displayName: sale.customerName || sale.productName || 'Sale',
+    amount: sale.amount || sale.totalPrice || 0,
+    date: sale.date || sale.createdAt,
+    color: '#10b981'
+  }));
+
+  // Deduplicate by ID to prevent double display
+  const allTransactions = [...billTransactions, ...saleTransactions];
+  const uniqueTransactionsMap = new Map();
+
+  allTransactions.forEach(t => {
+    // Append type to ID just in case there are ID collisions between bills and sales
+    const uniqueId = `${t.type}-${t.id}`;
+    if (!uniqueTransactionsMap.has(uniqueId)) {
+      uniqueTransactionsMap.set(uniqueId, t);
+    }
+  });
+
+  return Array.from(uniqueTransactionsMap.values())
     .sort((a, b) => {
       const dateA = parseDate(a.date);
       const dateB = parseDate(b.date);

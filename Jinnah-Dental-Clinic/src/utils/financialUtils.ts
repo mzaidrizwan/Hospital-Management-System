@@ -92,9 +92,12 @@ export const calculateFinancialStats = (
         return d && d >= from && d <= to;
     };
 
-    // 1. Filter Data (Using inclusive logic for revenue - collector's view)
-    const filteredBills = (bills || []).filter(b => isInRange(b.createdDate || b.date || (b as any).createdAt));
-    const filteredSales = (sales || []).filter(s => isInRange(s.date || s.createdAt));
+    // 1. Filter and Deduplicate Data
+    const uniqueBills = Array.from(new Map((bills || []).filter(b => b && b.id).map(b => [b.id, b])).values());
+    const filteredBills = uniqueBills.filter(b => isInRange(b.createdDate || b.date || (b as any).createdAt));
+
+    const uniqueSales = Array.from(new Map((sales || []).filter(s => s && s.id).map(s => [s.id, s])).values());
+    const filteredSales = uniqueSales.filter(s => isInRange(s.date || s.createdAt));
 
     // Deduplicate salaries: they exist in both 'expenses' (category: salary) and 'salaryPayments'.
     const rawExpenses = (expenses || []).filter(e => e.status === 'paid' && isInRange(e.date));

@@ -126,12 +126,8 @@ export default function OperatorInventory() {
         };
 
         try {
-            // Optimistic Update
-            setInventory(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
-            setSales(prev => [saleRecord, ...(prev || [])]);
-            setIsSellDialogOpen(false);
-
             // Persistence & Sync
+            // updateLocal already handles updating React state (setInventory/setSales)
             await Promise.all([
                 updateLocal('inventory', updatedItem),
                 updateLocal('sales', saleRecord),
@@ -139,6 +135,7 @@ export default function OperatorInventory() {
                 smartSync('inventory', updatedItem)
             ]);
 
+            setIsSellDialogOpen(false);
             toast.success(`${quantityToSell} unit(s) of ${itemName} sold!`);
         } catch (error) {
             console.error('Sale failed:', error);

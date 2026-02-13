@@ -293,6 +293,7 @@ export default function OperatorDashboard() {
               items={waitingPatients}
               status="waiting"
               onAction={handleQueueAction}
+              showPatientId={true}
             />
             <QueueSection
               title="In Treatment"
@@ -300,6 +301,7 @@ export default function OperatorDashboard() {
               status="in_treatment"
               onAction={handleQueueAction}
               showBackButton={true}
+              showPatientId={true}
             />
             <QueueSection
               title="Completed"
@@ -307,6 +309,7 @@ export default function OperatorDashboard() {
               status="completed"
               onAction={handleQueueAction}
               showBackButton={true}
+              showPatientId={true}
             />
           </div>
         )}
