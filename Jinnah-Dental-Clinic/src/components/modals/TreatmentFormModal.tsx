@@ -145,7 +145,7 @@ export default function TreatmentFormModal({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="fee">Fee ($)</Label>
+            <Label htmlFor="fee">Fee (Rs.)</Label>
             <Input
               id="fee"
               type="number"

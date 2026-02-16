@@ -41,10 +41,9 @@ export default function AdminPurchasing() {
     }, [purchases]);
 
     const formatCurrency = (amount: number) => {
-        return new Intl.NumberFormat('en-PK', {
-            style: 'currency',
-            currency: 'PKR',
+        return 'Rs. ' + new Intl.NumberFormat('en-PK', {
             minimumFractionDigits: 0,
+            maximumFractionDigits: 0,
         }).format(amount);
     };
 

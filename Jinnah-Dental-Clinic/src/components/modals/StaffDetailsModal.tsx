@@ -1,9 +1,9 @@
 'use client';
 import React, { useState, useMemo } from 'react';
-import { 
-  X, Calendar, CheckCircle, XCircle, Clock, 
-  ChevronLeft, ChevronRight, User, Briefcase, 
-  DollarSign, CalendarClock 
+import {
+  X, Calendar, CheckCircle, XCircle, Clock,
+  ChevronLeft, ChevronRight, User, Briefcase,
+  DollarSign, CalendarClock
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -57,8 +57,8 @@ export default function StaffDetailsModal({
   // Status styles
   const statusStyles = {
     present: { bg: 'bg-green-100', text: 'text-green-800', dot: 'bg-green-500' },
-    absent:   { bg: 'bg-red-100',   text: 'text-red-800',   dot: 'bg-red-500'   },
-    leave:    { bg: 'bg-amber-100', text: 'text-amber-800', dot: 'bg-amber-500' },
+    absent: { bg: 'bg-red-100', text: 'text-red-800', dot: 'bg-red-500' },
+    leave: { bg: 'bg-amber-100', text: 'text-amber-800', dot: 'bg-amber-500' },
     unmarked_absent: { bg: 'bg-red-50', text: 'text-red-700', dot: 'bg-red-400' } // lighter for auto-absent
   };
 
@@ -95,7 +95,7 @@ export default function StaffDetailsModal({
         if (record.status === 'present') present++;
         else if (record.status === 'absent') markedAbsent++;
         else if (record.status === 'leave') leave++;
-      } 
+      }
       // Past unmarked days → considered absent
       else if (dateObj <= today) {
         autoAbsent++;
@@ -103,8 +103,8 @@ export default function StaffDetailsModal({
     }
 
     const totalAbsent = markedAbsent + autoAbsent;
-    const attendanceRate = totalWorkingDays > 0 
-      ? Math.round((present / totalWorkingDays) * 100) 
+    const attendanceRate = totalWorkingDays > 0
+      ? Math.round((present / totalWorkingDays) * 100)
       : 0;
 
     return {
@@ -154,11 +154,11 @@ export default function StaffDetailsModal({
           {/* Quick Stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
             <StatCard icon={<CalendarClock />} label="Join Date" value={new Date(staff.joinDate).toLocaleDateString('en-PK')} />
-            <StatCard icon={<DollarSign />} label="Pending Salary" value={`$${staff.pendingSalary.toLocaleString()}`} valueClass="text-red-600 font-bold" />
+            <StatCard icon={<DollarSign />} label="Pending Salary" value={`Rs. ${staff.pendingSalary.toLocaleString()}`} valueClass="text-red-600 font-bold" />
             <StatCard icon={<CheckCircle />} label="Attendance Rate" value={`${monthStats.attendanceRate}%`} valueClass="text-indigo-600 font-bold" />
-            <StatCard 
-              icon={staff.status === 'Active' ? <CheckCircle /> : <Clock />} 
-              label="Status" 
+            <StatCard
+              icon={staff.status === 'Active' ? <CheckCircle /> : <Clock />}
+              label="Status"
               custom={
                 <Badge className={staff.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}>
                   {staff.status}
@@ -200,8 +200,8 @@ export default function StaffDetailsModal({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {Array.from({length:12}, (_,i) => {
-                        const m = (i+1).toString().padStart(2,'0');
+                      {Array.from({ length: 12 }, (_, i) => {
+                        const m = (i + 1).toString().padStart(2, '0');
                         return <SelectItem key={m} value={m}>
                           {new Date(2000, i).toLocaleString('default', { month: 'long' })}
                         </SelectItem>;
@@ -232,7 +232,7 @@ export default function StaffDetailsModal({
             {viewMode === 'calendar' ? (
               <div className="bg-gray-50 p-5 rounded-xl border">
                 <div className="grid grid-cols-7 gap-2 text-center mb-4">
-                  {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
                     <div key={d} className="text-sm font-medium text-gray-500">{d}</div>
                   ))}
                 </div>
@@ -345,10 +345,10 @@ export default function StaffDetailsModal({
         {/* Footer */}
         <div className="border-t p-6 flex gap-4 bg-gray-50">
           <Button onClick={onEdit} className="flex-1">Edit Details</Button>
-          <Button 
-            onClick={onPaySalary} 
+          <Button
+            onClick={onPaySalary}
             disabled={staff.pendingSalary <= 0}
-            variant="outline" 
+            variant="outline"
             className="flex-1 border-green-600 text-green-700 hover:bg-green-50"
           >
             Pay Salary
@@ -363,12 +363,12 @@ export default function StaffDetailsModal({
 }
 
 // Helper Components (same as before)
-function StatCard({ icon, label, value, valueClass = "", custom }: { 
-  icon: React.ReactNode; 
-  label: string; 
-  value: string; 
-  valueClass?: string; 
-  custom?: React.ReactNode 
+function StatCard({ icon, label, value, valueClass = "", custom }: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  valueClass?: string;
+  custom?: React.ReactNode
 }) {
   return (
     <Card className="bg-white/80 backdrop-blur-sm">

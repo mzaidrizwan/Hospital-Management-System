@@ -323,7 +323,7 @@ export default function StaffFormModal({
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label htmlFor="salary" className="text-[10px] font-black uppercase tracking-widest text-gray-400">Amount (PKR)</Label>
+                    <Label htmlFor="salary" className="text-[10px] font-black uppercase tracking-widest text-gray-400">Amount (Rs.)</Label>
                     <div className="relative">
                       <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                       <Input
@@ -403,9 +403,7 @@ export default function StaffFormModal({
 }
 
 const formatCurrency = (amount: number) => {
-  return new Intl.NumberFormat('en-PK', {
-    style: 'currency',
-    currency: 'PKR',
+  return 'Rs. ' + new Intl.NumberFormat('en-PK', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(amount);

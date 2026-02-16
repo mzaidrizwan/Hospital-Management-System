@@ -469,6 +469,7 @@ export interface Staff {
   totalPaid: number;
   totalEarned: number;
   lastSalaryDate?: string;
+  updatedAt?: string;
   lastPaidDate: string;
   nextSalaryDate?: string;
   attendance?: Attendance[];

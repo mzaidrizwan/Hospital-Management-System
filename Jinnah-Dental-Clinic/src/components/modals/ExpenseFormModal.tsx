@@ -283,7 +283,7 @@ export default function ExpenseFormModal({
           {/* Amount and Category */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <Label htmlFor="amount">Amount (USD) *</Label>
+              <Label htmlFor="amount">Amount (Rs.) *</Label>
               <Input
                 id="amount"
                 name="amount"

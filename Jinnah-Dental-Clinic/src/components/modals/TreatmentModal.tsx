@@ -257,13 +257,13 @@ export default function TreatmentModal({
         <body>
           <div class="header"><h1>Treatment Invoice</h1><p>Date: ${currentDate}</p></div>
           <div class="section-title">Patient: ${queueItem.patientName} | Token: #${queueItem.tokenNumber} | Doctor: ${doctorName}</div>
-          <table><thead><tr><th>Treatment</th><th style="text-align: right;">Fee (PKR)</th></tr></thead>
-          <tbody>${selectedTreatments.map(t => `<tr><td>${t.name}</td><td style="text-align: right;">${t.fee.toLocaleString()}</td></tr>`).join('')}</tbody></table>
+          <table><thead><tr><th>Treatment</th><th style="text-align: right;">Fee (Rs.)</th></tr></thead>
+          <tbody>${selectedTreatments.map(t => `<tr><td>${t.name}</td><td style="text-align: right;">Rs. ${t.fee.toLocaleString()}</td></tr>`).join('')}</tbody></table>
           <div class="totals">
-            <div class="total-row"><span>Previous Pending:</span><span>PKR ${paymentBreakdown.currentPending.toLocaleString()}</span></div>
-            <div class="total-row"><span>Current Treatment:</span><span>PKR ${actualTotal.toLocaleString()}</span></div>
-            ${discount > 0 ? `<div class="total-row" style="color: #16a34a;"><span>Discount:</span><span>- PKR ${discount.toLocaleString()}</span></div>` : ''}
-            <div class="total-row grand"><span>Total Due:</span><span>PKR ${(parseFloat(manualTotal) || 0).toLocaleString()}</span></div>
+            <div class="total-row"><span>Previous Pending:</span><span>Rs. ${paymentBreakdown.currentPending.toLocaleString()}</span></div>
+            <div class="total-row"><span>Current Treatment:</span><span>Rs. ${actualTotal.toLocaleString()}</span></div>
+            ${discount > 0 ? `<div class="total-row" style="color: #16a34a;"><span>Discount:</span><span>- Rs. ${discount.toLocaleString()}</span></div>` : ''}
+            <div class="total-row grand"><span>Total Due:</span><span>Rs. ${(parseFloat(manualTotal) || 0).toLocaleString()}</span></div>
           </div>
           <div class="no-print" style="text-align: center; margin-top: 30px;">
             <button onclick="window.print()" style="background: #2563eb; color: white; border: none; padding: 12px 30px; border-radius: 6px; cursor: pointer; margin-right: 10px;">Print</button>
@@ -306,7 +306,7 @@ export default function TreatmentModal({
     const toastId = toast.loading('Saving treatment...');
 
     try {
-      const treatmentString = selectedTreatments.map(t => `${t.name} ($${t.fee})`).join(', ');
+      const treatmentString = selectedTreatments.map(t => `${t.name} (Rs. ${t.fee})`).join(', ');
       const manual = parseFloat(manualTotal);
       const effectiveFee = manual - paymentBreakdown.currentPending;
 
@@ -347,10 +347,9 @@ export default function TreatmentModal({
   };
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-PK', {
-      style: 'currency',
-      currency: 'PKR',
-      minimumFractionDigits: 0
+    return 'Rs. ' + new Intl.NumberFormat('en-PK', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
     }).format(amount);
   };
 
@@ -441,7 +440,7 @@ export default function TreatmentModal({
             </Label>
             <div className="flex flex-col sm:flex-row gap-3">
               <div className="flex-1">
-                <Select onValueChange={(val) => {
+                <Select value={undefined} onValueChange={(val) => {
                   const selected = treatments.find(t => t.id === val);
                   if (selected) {
                     setNewTreatmentName(selected.name);
@@ -454,7 +453,7 @@ export default function TreatmentModal({
                   <SelectContent>
                     {treatments.map(t => (
                       <SelectItem key={t.id} value={t.id}>
-                        {t.name} - Rs {t.fee}
+                        {t.name} - Rs. {t.fee}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -468,7 +467,7 @@ export default function TreatmentModal({
               />
               <Input
                 type="number"
-                placeholder="Fee ($)"
+                placeholder="Fee (Rs.)"
                 value={newTreatmentFee}
                 onChange={e => setNewTreatmentFee(e.target.value)}
                 className="w-32"
@@ -488,7 +487,7 @@ export default function TreatmentModal({
                 <TableHeader className="bg-gray-100">
                   <TableRow>
                     <TableHead>Treatment</TableHead>
-                    <TableHead className="text-right">Fee ($)</TableHead>
+                    <TableHead className="text-right">Fee (Rs.)</TableHead>
                     <TableHead className="w-16 text-center">Action</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -608,18 +607,14 @@ export default function TreatmentModal({
               </div>
             )}
 
-            <Select onValueChange={setSelectedDoctor} value={selectedDoctor} disabled={isSubmitting}>
-              <SelectTrigger>
-                <SelectValue>
-                  {selectedDoctor && staff.length > 0
-                    ? (staff.find(s => String(s.id) === String(selectedDoctor))?.name || "Select doctor...")
-                    : "Select doctor..."}
-                </SelectValue>
+            <Select onValueChange={setSelectedDoctor} value={selectedDoctor}>
+              <SelectTrigger disabled={isSubmitting}>
+                <SelectValue placeholder="Select doctor..." />
               </SelectTrigger>
               <SelectContent>
                 {effectiveDoctors.map(d => (
                   <SelectItem key={d.id} value={d.id}>
-                    {d.name} {d.role ? `(${d.role})` : ''}
+                    {d.name} {d.status === 'Absent' ? '(Absent)' : ''}
                   </SelectItem>
                 ))}
               </SelectContent>

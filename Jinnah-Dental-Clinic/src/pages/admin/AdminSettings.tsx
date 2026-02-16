@@ -188,7 +188,7 @@ export default function AdminSettings() {
                               <Badge variant="outline">{treatment.category || 'General'}</Badge>
                             </TableCell>
                             <TableCell>
-                              {new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', minimumFractionDigits: 0 }).format(treatment.fee)}
+                              {'Rs. ' + new Intl.NumberFormat('en-PK', { minimumFractionDigits: 0 }).format(treatment.fee)}
                             </TableCell>
                             <TableCell>{treatment.duration} mins</TableCell>
                             <TableCell className="text-right">

@@ -44,10 +44,8 @@ import { cn } from '@/lib/utils';
 import { useSalaryLogic } from '@/hooks/useSalaryLogic';
 
 const formatCurrency = (amount: number) => {
-  if (isNaN(amount)) return 'PKR 0';
-  return new Intl.NumberFormat('en-PK', {
-    style: 'currency',
-    currency: 'PKR',
+  if (isNaN(amount)) return 'Rs. 0';
+  return 'Rs. ' + new Intl.NumberFormat('en-PK', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(amount);

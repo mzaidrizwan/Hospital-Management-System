@@ -191,14 +191,7 @@ export default function QueueSection({
                   Back
                 </Button>
 
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onAction(item, 'edit')}
-                  className="gap-1"
-                >
-                  <Edit className="w-3 h-3" />
-                </Button>
+
 
                 {/* Optional: Direct Waiting mein bhejna */}
                 {/* <Button
@@ -213,15 +206,17 @@ export default function QueueSection({
               </>
             )}
 
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onPayment && onPayment(item)}
-              className="gap-1"
-            >
-              <DollarSign className="w-3 h-3" />
-              Payment
-            </Button>
+            {onPayment && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onPayment(item)}
+                className="gap-1"
+              >
+                <DollarSign className="w-3 h-3" />
+                Payment
+              </Button>
+            )}
 
             {onPrint && (
               <Button
@@ -282,7 +277,7 @@ export default function QueueSection({
         {items.map((item) => (
           <div
             key={item.id}
-            className={`bg-white border rounded-lg p-3 hover:shadow-sm transition-shadow cursor-pointer ${item.priority === 'emergency' ? 'border-red-300' : ''}`}
+            className={`bg-white border rounded-lg p-3 hover:shadow-sm transition-shadow cursor-pointer ${(item.priority as string) === 'emergency' ? 'border-red-300' : ''}`}
             onDoubleClick={() => onDoubleClick && onDoubleClick(item)}
           >
             {/* Header */}

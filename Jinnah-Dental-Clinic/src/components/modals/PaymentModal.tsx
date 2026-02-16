@@ -38,7 +38,7 @@ export default function PaymentModal({
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isPrinting, setIsPrinting] = useState(false);
+
   const [dbInitialized, setDbInitialized] = useState(false);
 
   // ────────────────────────────────────────────────
@@ -63,7 +63,7 @@ export default function PaymentModal({
     if (!queueItem.treatment) return [];
     try {
       return queueItem.treatment.split(',').map(t => {
-        const match = t.trim().match(/(.+?)\s*\(?\s*\$?(\d+(?:\.\d+)?)\s*\)?/);
+        const match = t.trim().match(/(.+?)\s*\(?\s*(?:Rs\.?|PKR|\$)?\s*(\d+(?:\.\d+)?)\s*\)?/);
         return {
           name: match ? match[1].trim() : t.trim(),
           fee: match ? parseFloat(match[2]) : 0
@@ -123,8 +123,8 @@ export default function PaymentModal({
     const disc = Number(paymentData.discount);
 
     if (payAmount <= 0) return toast.error('Enter valid amount');
-    if (payAmount > maxPayable) return toast.error(`Cannot pay more than $${maxPayable.toFixed(2)}`);
-    if (disc > maxDiscount) return toast.error(`Discount cannot exceed $${maxDiscount.toFixed(2)}`);
+    if (payAmount > maxPayable) return toast.error(`Cannot pay more than Rs. ${maxPayable.toFixed(2)}`);
+    if (disc > maxDiscount) return toast.error(`Discount cannot exceed Rs. ${maxDiscount.toFixed(2)}`);
 
     if (licenseDaysLeft <= 0) {
       toast.error("License Expired. Please renew to process payments.");
@@ -184,11 +184,14 @@ export default function PaymentModal({
         }
       }
 
-      // 2. Close modal first for better UX
+      // 2. Initiate Print
+      handlePrint();
+
+      // 3. Close modal
       onClose();
       toast.success('Payment processed!', { id: toastId });
 
-      // 3. Call parent handler (for queue updates)
+      // 4. Call parent handler (for queue updates)
       await onSubmit(queueItem, {
         ...paymentData,
         amount: payAmount,
@@ -228,8 +231,7 @@ export default function PaymentModal({
         toast.warning('Cloud sync failed, but local data is saved');
       }
 
-      // 5. Print receipt
-      handlePrint();
+
 
     } catch (err: any) {
       console.error('Payment error:', err);
@@ -244,7 +246,7 @@ export default function PaymentModal({
   // ────────────────────────────────────────────────
 
   const handlePrint = () => {
-    setIsPrinting(true);
+
 
     const now = new Date();
     const dateStr = now.toLocaleString('en-PK', {
@@ -256,7 +258,7 @@ export default function PaymentModal({
       <tr>
         <td style="border:1px solid #000;padding:3px;">${i + 1}</td>
         <td style="border:1px solid #000;padding:3px;">${t.name}</td>
-        <td style="border:1px solid #000;padding:3px;text-align:right;">PKR ${t.fee.toFixed(0)}</td>
+        <td style="border:1px solid #000;padding:3px;text-align:right;">Rs. ${t.fee.toFixed(0)}</td>
       </tr>
     `).join('');
 
@@ -282,20 +284,20 @@ TREATMENTS
     ${treatmentsRows}
     <tr style="font-weight:bold;">
       <td colspan="2" style="border:1px solid #000;padding:3px;">Total Treatments</td>
-      <td style="border:1px solid #000;padding:3px;text-align:right;">PKR ${treatmentFee.toFixed(0)}</td>
+      <td style="border:1px solid #000;padding:3px;text-align:right;">Rs. ${treatmentFee.toFixed(0)}</td>
     </tr>
   </tbody>
 </table>
 --------------------------------
 PAYMENT SUMMARY
 --------------------------------
-Previous Pending: PKR ${previousPending.toFixed(0)}
-Current Treatments: PKR ${treatmentFee.toFixed(0)}
-Discount: PKR ${paymentData.discount.toFixed(0)}
+Previous Pending: Rs. ${previousPending.toFixed(0)}
+Current Treatments: Rs. ${treatmentFee.toFixed(0)}
+Discount: Rs. ${paymentData.discount.toFixed(0)}
 --------------------------------
-Total Due: PKR ${totalDueAfterDiscount.toFixed(0)}
-Paid Now: PKR ${Number(paymentData.amount).toFixed(0)}
-Remaining: PKR ${remainingAfterThisPayment.toFixed(0)}
+Total Due: Rs. ${totalDueAfterDiscount.toFixed(0)}
+Paid Now: Rs. ${Number(paymentData.amount).toFixed(0)}
+Remaining: Rs. ${remainingAfterThisPayment.toFixed(0)}
 --------------------------------
 Method: ${paymentData.paymentMethod.toUpperCase()}
 Notes: ${paymentData.notes || 'None'}
@@ -352,7 +354,7 @@ Powered by Saynz Technologies
       printWindow.document.close();
     }
 
-    setTimeout(() => setIsPrinting(false), 1500);
+
   };
 
   // ────────────────────────────────────────────────
@@ -391,7 +393,7 @@ Powered by Saynz Technologies
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Already Paid</p>
-              <p className="font-medium text-green-600">${alreadyPaidThisVisit.toFixed(2)}</p>
+              <p className="font-medium text-green-600">Rs. {alreadyPaidThisVisit.toFixed(2)}</p>
             </div>
           </div>
 
@@ -409,7 +411,7 @@ Powered by Saynz Technologies
                   <TableRow className="bg-gray-100">
                     <TableHead className="border">S.No</TableHead>
                     <TableHead className="border">Treatment</TableHead>
-                    <TableHead className="border text-right">Fee ($)</TableHead>
+                    <TableHead className="border text-right">Fee (Rs.)</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -418,7 +420,7 @@ Powered by Saynz Technologies
                       <TableRow key={i}>
                         <TableCell className="border">{i + 1}</TableCell>
                         <TableCell className="border">{t.name}</TableCell>
-                        <TableCell className="border text-right font-medium">${t.fee.toFixed(2)}</TableCell>
+                        <TableCell className="border text-right font-medium">Rs. {t.fee.toFixed(2)}</TableCell>
                       </TableRow>
                     ))
                   ) : (
@@ -430,7 +432,7 @@ Powered by Saynz Technologies
                   )}
                   <TableRow className="bg-gray-50 font-bold">
                     <TableCell colSpan={2} className="border">Total Treatments</TableCell>
-                    <TableCell className="border text-right text-green-700">${treatmentFee.toFixed(2)}</TableCell>
+                    <TableCell className="border text-right text-green-700">Rs. {treatmentFee.toFixed(2)}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
@@ -447,15 +449,15 @@ Powered by Saynz Technologies
             <div className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span>Previous Pending Balance</span>
-                <span className="text-orange-700 font-medium">${previousPending.toFixed(2)}</span>
+                <span className="text-orange-700 font-medium">Rs. {previousPending.toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
                 <span>Current Treatment Fee</span>
-                <span>${treatmentFee.toFixed(2)}</span>
+                <span>Rs. {treatmentFee.toFixed(2)}</span>
               </div>
               <div className="flex justify-between pt-2 border-t font-medium">
                 <span>Total Due</span>
-                <span>${totalDueBeforeDiscount.toFixed(2)}</span>
+                <span>Rs. {totalDueBeforeDiscount.toFixed(2)}</span>
               </div>
 
               {/* Discount */}
@@ -504,11 +506,11 @@ Powered by Saynz Technologies
 
               <div className="flex justify-between pt-3 border-t font-bold text-base">
                 <span>Total After Discount</span>
-                <span className="text-green-700">${totalDueAfterDiscount.toFixed(2)}</span>
+                <span className="text-green-700">Rs. {totalDueAfterDiscount.toFixed(2)}</span>
               </div>
               <div className="flex justify-between text-red-600 font-semibold">
                 <span>Remaining to Pay</span>
-                <span>${maxPayable.toFixed(2)}</span>
+                <span>Rs. {maxPayable.toFixed(2)}</span>
               </div>
             </div>
           </div>
@@ -542,7 +544,7 @@ Powered by Saynz Technologies
                 </Button>
               </div>
               <p className="text-xs text-gray-500">
-                Maximum payable: ${maxPayable.toFixed(2)}
+                Maximum payable: Rs. {maxPayable.toFixed(2)}
               </p>
             </div>
 
@@ -591,25 +593,7 @@ Powered by Saynz Technologies
               >
                 Cancel
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handlePrint}
-                disabled={isPrinting || isSubmitting}
-                className="flex-1"
-              >
-                {isPrinting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Printing...
-                  </>
-                ) : (
-                  <>
-                    <Printer className="mr-2 h-4 w-4" />
-                    Print Bill
-                  </>
-                )}
-              </Button>
+
               <Button
                 type="submit"
                 disabled={isSubmitting || maxPayable <= 0 || licenseDaysLeft <= 0}

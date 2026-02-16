@@ -126,9 +126,6 @@ export default function PatientCard({
                     <Button size="sm" variant="outline" onClick={() => onPrint(patient)} className="gap-1 text-blue-600">
                         <Printer className="w-3 h-3" /> Print
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => onEdit(patient)} className="gap-1">
-                        <Edit className="w-3 h-3" />
-                    </Button>
                     <Button size="sm" variant="outline" onClick={() => onDelete(patient)} className="gap-1 text-red-600">
                         <Trash2 className="w-3 h-3" />
                     </Button>
@@ -185,7 +182,7 @@ export default function PatientCard({
                         <div className="flex items-center justify-between text-sm">
                             <span className="text-gray-600">Fee:</span>
                             <span className="font-bold text-green-600 flex items-center gap-1">
-                                <DollarSign className="w-3 h-3" />
+                                <span className="text-xs font-bold">Rs.</span>
                                 {patient.fee.toFixed(2)}
                             </span>
                         </div>

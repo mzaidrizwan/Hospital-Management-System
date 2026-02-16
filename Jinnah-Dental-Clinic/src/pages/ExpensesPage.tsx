@@ -31,40 +31,11 @@ import { useAuth } from '@/context/AuthContext';
 import { useData } from '@/context/DataContext';
 
 // Types
-export type ExpenseCategory =
-    | 'rent'
-    | 'salary'
-    | 'supplies'
-    | 'utilities'
-    | 'equipment'
-    | 'medication'
-    | 'maintenance'
-    | 'inventory'
-    | 'marketing'
-    | 'insurance'
-    | 'professional_fees'
-    | 'travel'
-    | 'office_supplies'
-    | 'software'
-    | 'other';
-export type PaymentMethod = 'cash' | 'card' | 'bank_transfer' | 'cheque' | 'online' | 'wallet';
-
-export interface Expense {
-    id: string;
-    title: string;
-    amount: number;
-    category: ExpenseCategory;
-    paymentMethod: PaymentMethod;
-    date: string;
-    description: string;
-    vendor?: string;
-    receiptNumber?: string;
-    status: 'paid' | 'pending' | 'cancelled';
-    createdAt: string;
-    updatedAt: string;
-    paidBy?: string;
-    attachment?: string;
-}
+import {
+    Expense,
+    ExpenseCategory,
+    PaymentMethod
+} from '@/types';
 
 // Category Labels
 const categoryLabels: Record<ExpenseCategory, { label: string; color: string }> = {
@@ -104,11 +75,10 @@ const statusLabels: Record<Expense['status'], { label: string; color: string }> 
 
 // Format currency function
 const formatCurrency = (amount: number): string => {
-    return new Intl.NumberFormat('en-PK', {
-        style: 'currency',
-        currency: 'PKR',
-        minimumFractionDigits: 0
-    }).format(amount).replace('PKR', 'Rs');
+    return 'Rs. ' + new Intl.NumberFormat('en-PK', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+    }).format(amount);
 };
 
 // Format date function

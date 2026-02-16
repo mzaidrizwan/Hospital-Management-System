@@ -176,7 +176,7 @@ export function InventoryFormModal({ open, onOpenChange, editingItem }: Inventor
 
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-1.5">
-                            <Label htmlFor="buyingPrice" className="text-xs font-bold uppercase text-muted-foreground">Buying Price (Per Unit)</Label>
+                            <Label htmlFor="buyingPrice" className="text-xs font-bold uppercase text-muted-foreground">Buying Price (Rs.)</Label>
                             <Input
                                 id="buyingPrice"
                                 type="number"
@@ -187,7 +187,7 @@ export function InventoryFormModal({ open, onOpenChange, editingItem }: Inventor
                         </div>
 
                         <div className="space-y-1.5">
-                            <Label htmlFor="sellingPrice" className="text-xs font-bold uppercase text-muted-foreground">Selling Price (Per Unit)</Label>
+                            <Label htmlFor="sellingPrice" className="text-xs font-bold uppercase text-muted-foreground">Selling Price (Rs.)</Label>
                             <Input
                                 id="sellingPrice"
                                 type="number"
