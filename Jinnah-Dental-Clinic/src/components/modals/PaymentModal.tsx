@@ -116,7 +116,7 @@ export default function PaymentModal({
     setPaymentData(prev => ({ ...prev, discount: Math.min(disc, maxDiscount) }));
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmitWithoutPrint = async (e: React.FormEvent, shouldPrint: boolean = true) => {
     e.preventDefault();
 
     const payAmount = Number(paymentData.amount);
@@ -184,12 +184,14 @@ export default function PaymentModal({
         }
       }
 
-      // 2. Initiate Print
-      handlePrint();
+      // 2. Initiate Print (only if requested)
+      if (shouldPrint) {
+        handlePrint();
+      }
 
       // 3. Close modal
       onClose();
-      toast.success('Payment processed!', { id: toastId });
+      toast.success(shouldPrint ? 'Payment processed & bill printed!' : 'Payment processed!', { id: toastId });
 
       // 4. Call parent handler (for queue updates)
       await onSubmit(queueItem, {
@@ -239,6 +241,14 @@ export default function PaymentModal({
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    await handleSubmitWithoutPrint(e, true);
+  };
+
+  const handleSubmitOnly = async (e: React.FormEvent) => {
+    await handleSubmitWithoutPrint(e, false);
   };
 
   // ────────────────────────────────────────────────
@@ -595,6 +605,22 @@ Powered by Saynz Technologies
               </Button>
 
               <Button
+                type="button"
+                onClick={handleSubmitOnly}
+                disabled={isSubmitting || maxPayable <= 0 || licenseDaysLeft <= 0}
+                className="flex-1 bg-blue-600 hover:bg-blue-700"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  'Process Payment'
+                )}
+              </Button>
+
+              <Button
                 type="submit"
                 disabled={isSubmitting || maxPayable <= 0 || licenseDaysLeft <= 0}
                 className="flex-1 bg-green-600 hover:bg-green-700"
@@ -605,7 +631,10 @@ Powered by Saynz Technologies
                     Processing...
                   </>
                 ) : (
-                  'Process Payment'
+                  <>
+                    <Printer className="mr-2 h-4 w-4" />
+                    Process & Print
+                  </>
                 )}
               </Button>
             </div>
