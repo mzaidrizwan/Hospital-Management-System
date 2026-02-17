@@ -25,6 +25,8 @@ import AdminReports from "@/pages/admin/AdminReports";
 import AdminAnalytics from "@/pages/admin/AdminAnalytics";
 import AdminSettings from "@/pages/admin/AdminSettings";
 
+import { useSecurity } from "@/hooks/useSecurity";
+
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -32,6 +34,8 @@ const queryClient = new QueryClient();
 function AuthenticatedApp() {
   const { isAuthenticated, user } = useAuth();
   const { isShutdown } = useData();
+
+  useSecurity();
 
   // console.log("🔍 AuthenticatedApp - isShutdown:", isShutdown);
   // console.log("🔍 localStorage force_shutdown:", localStorage.getItem('force_shutdown'));

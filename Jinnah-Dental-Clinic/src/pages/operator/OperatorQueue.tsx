@@ -326,13 +326,17 @@ Powered by Saynz Technologies
       }
 
       const newPayment = paymentData.amount || 0;
+      const discount = paymentData.discount || 0;
       const currentPaid = queueItem.amountPaid || 0;
       const totalPaid = currentPaid + newPayment;
-      const totalDue = (queueItem.fee || 0) + (queueItem.previousPending || 0);
+
+      // Total due is (Treatments Fee + Previous Pending)
+      const totalDueBeforeDiscount = (queueItem.fee || 0) + (queueItem.previousPending || 0);
+      const totalDueAfterDiscount = Math.max(0, totalDueBeforeDiscount - discount);
 
       let paymentStatus: 'pending' | 'partial' | 'paid';
 
-      if (totalPaid >= totalDue) {
+      if (totalPaid >= totalDueAfterDiscount) {
         paymentStatus = 'paid';
       } else if (totalPaid > 0) {
         paymentStatus = 'partial';
@@ -344,8 +348,8 @@ Powered by Saynz Technologies
         ...queueItem,
         amountPaid: totalPaid,
         paymentStatus,
-        discount: paymentData.discount || 0,
-        notes: (queueItem.notes || '') + `\nPayment: ${newPayment} (${paymentData.paymentMethod})`
+        discount: discount,
+        notes: (queueItem.notes || '') + `\nPayment: Rs. ${newPayment} (${paymentData.paymentMethod})`
       };
       await updateLocal('queue', updatedQueueItem);
 
@@ -356,9 +360,9 @@ Powered by Saynz Technologies
         patientNumber: patientData.patientNumber,
         patientName: queueItem.patientName,
         treatment: queueItem.treatment || '',
-        totalAmount: queueItem.fee || 0,
+        totalAmount: totalDueBeforeDiscount,
         amountPaid: newPayment,
-        discount: paymentData.discount || 0,
+        discount: discount,
         paymentMethod: paymentData.paymentMethod || 'cash',
         paymentStatus,
         createdDate: new Date().toISOString(),
@@ -367,7 +371,7 @@ Powered by Saynz Technologies
       };
       await updateLocal('bills', newBill);
 
-      const newPending = (patientData.pendingBalance || 0) - newPayment;
+      const newPending = Math.max(0, (patientData.pendingBalance || 0) - newPayment);
       const newTotalPaid = (patientData.totalPaid || 0) + newPayment;
       const updatedPatient = {
         ...patientData,
@@ -378,7 +382,7 @@ Powered by Saynz Technologies
 
       clearTimeout(timeoutId);
       toast.dismiss(toastId);
-      toast.success(`Payment of $${newPayment.toFixed(2)} processed successfully`);
+      toast.success(`Payment of Rs. ${newPayment.toFixed(2)} processed successfully`);
       setShowPaymentModal(null);
 
     } catch (error) {

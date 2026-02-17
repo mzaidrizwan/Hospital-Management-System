@@ -139,7 +139,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const [expenses, setExpenses] = useState<Expense[]>([]);
     const [bills, setBills] = useState<Bill[]>([]);
     const [treatments, setTreatments] = useState<Treatment[]>([]);
-    const [clinicSettings, setClinicSettings] = useState<any>(null);
+    const [clinicSettings, setClinicSettings] = useState<any>({});
     const [transactions, setTransactions] = useState<any[]>([]);
     const [purchases, setPurchases] = useState<any[]>([]);
     const [roles, setRoles] = useState<any[]>([]);
@@ -887,6 +887,21 @@ export function DataProvider({ children }: { children: ReactNode }) {
             return;
         }
 
+        if (collectionName === 'clinic_features_combined') {
+            const fullConfig = {
+                settings: clinicSettings,
+                treatments: treatments,
+                roles: roles
+            };
+            const blob = new Blob([JSON.stringify(fullConfig, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `Clinic_Features_Backup_${new Date().toISOString().split('T')[0]}.json`;
+            link.click();
+            return;
+        }
+
         let data = null;
         switch (collectionName) {
             case 'patients': data = patients; break;
@@ -907,7 +922,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
             default: return;
         }
 
-        if (!data) return;
+        if (data === null || data === undefined || (Array.isArray(data) && data.length === 0 && collectionName !== 'clinicSettings')) {
+            // We allow clinicSettings to be an empty object, but for arrays, we skip if truly empty to avoid confusing user with 0-byte files
+            // actually, let's just allow it all to be consistent.
+        }
+
+        if (data === null || data === undefined) return;
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
@@ -916,50 +936,78 @@ export function DataProvider({ children }: { children: ReactNode }) {
         link.click();
     }, [patients, queue, appointments, staff, salaryPayments, attendance, inventory, sales, expenses, bills, treatments, clinicSettings, transactions, purchases, roles]);
 
-    const importFromJSON = useCallback(async (file: File, collectionName: string) => {
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            try {
-                const data = JSON.parse(e.target?.result as string);
+    const importFromJSON = useCallback((file: File, collectionName: string) => {
+        return new Promise<void>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const data = JSON.parse(e.target?.result as string);
 
-                if (collectionName === 'inventory_full') {
-                    if (data.stock) {
-                        setInventory(data.stock);
-                        for (const item of data.stock) await updateLocal('inventory', item);
+                    if (collectionName === 'inventory_full') {
+                        if (data.stock) {
+                            setInventory(data.stock);
+                            for (const item of data.stock) await updateLocal('inventory', item);
+                        }
+                        if (data.sales) {
+                            setSales(data.sales);
+                            for (const item of data.sales) await updateLocal('sales', item);
+                        }
+                        if (data.purchases) {
+                            setPurchases(data.purchases);
+                            for (const item of data.purchases) await updateLocal('purchases', item);
+                        }
+                        if (typeof window !== 'undefined') {
+                            toast.success("Full Inventory (Stock, Sales, Purchases) Restored");
+                        }
+                        resolve();
+                        return;
                     }
-                    if (data.sales) {
-                        setSales(data.sales);
-                        for (const item of data.sales) await updateLocal('sales', item);
-                    }
-                    if (data.purchases) {
-                        setPurchases(data.purchases);
-                        for (const item of data.purchases) await updateLocal('purchases', item);
-                    }
-                    if (typeof window !== 'undefined') {
-                        toast.success("Full Inventory (Stock, Sales, Purchases) Restored");
-                    }
-                    return;
-                }
 
-                const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
-                if (setter) {
-                    setter(data);
-                    const items = Array.isArray(data) ? data : [data];
-                    for (const item of items) {
-                        await updateLocal(collectionName, item);
+                    if (collectionName === 'clinic_features_combined') {
+                        if (data.settings) {
+                            setClinicSettings(data.settings);
+                            await updateLocal('clinicSettings', data.settings);
+                        }
+                        if (data.treatments) {
+                            setTreatments(data.treatments);
+                            for (const item of data.treatments) await updateLocal('treatments', item);
+                        }
+                        if (data.roles) {
+                            setRoles(data.roles);
+                            for (const item of data.roles) await updateLocal('roles', item);
+                        }
+                        if (typeof window !== 'undefined') {
+                            toast.success("Clinic Features (Settings, Treatments, Roles) Restored");
+                        }
+                        resolve();
+                        return;
                     }
+
+                    const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
+                    if (setter) {
+                        setter(data);
+                        const items = Array.isArray(data) ? data : [data];
+                        for (const item of items) {
+                            await updateLocal(collectionName, item);
+                        }
+                        if (typeof window !== 'undefined') {
+                            toast.success(`${collectionName} restored from JSON`);
+                        }
+                        resolve();
+                    } else {
+                        reject(new Error(`No setter found for collection: ${collectionName}`));
+                    }
+                } catch (err) {
+                    console.error("Import JSON Error:", err);
                     if (typeof window !== 'undefined') {
-                        toast.success(`${collectionName} restored from JSON`);
+                        toast.error("Invalid JSON file");
                     }
+                    reject(err);
                 }
-            } catch (err) {
-                console.error("Import JSON Error:", err);
-                if (typeof window !== 'undefined') {
-                    toast.error("Invalid JSON file");
-                }
-            }
-        };
-        reader.readAsText(file);
+            };
+            reader.onerror = () => reject(new Error("Failed to read file"));
+            reader.readAsText(file);
+        });
     }, [stateSetterMap, updateLocal, setInventory, setSales, setPurchases]);
 
     const clearDataStore = useCallback(async (collectionName: string) => {

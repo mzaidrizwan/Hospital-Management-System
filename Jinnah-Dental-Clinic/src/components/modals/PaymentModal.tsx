@@ -135,105 +135,22 @@ export default function PaymentModal({
     const toastId = toast.loading('Processing payment...');
 
     try {
-      // Calculate payment status - FIXED TYPE ERROR
-      let paymentStatus: 'pending' | 'partial' | 'paid';
-      if (payAmount >= maxPayable) {
-        paymentStatus = 'paid';
-      } else if (payAmount > 0) {
-        paymentStatus = 'partial';
-      } else {
-        paymentStatus = 'pending';
-      }
-
-      // 1. Save locally to IndexedDB if available
-      if (dbInitialized) {
-        try {
-          const updatedQueue = {
-            ...queueItem,
-            amountPaid: alreadyPaidThisVisit + payAmount,
-            discount: disc,
-            paymentStatus: paymentStatus, // FIXED: Now correct type
-            updatedAt: new Date().toISOString()
-          };
-
-          await saveToLocal('queue', updatedQueue);
-
-          // Create bill record
-          const newBill = {
-            id: `bill-${Date.now()}`,
-            billNumber: `BILL-${Date.now()}`,
-            patientId: patientData.id || queueItem.patientNumber,
-            patientNumber: queueItem.patientNumber,
-            patientName: queueItem.patientName,
-            treatment: queueItem.treatment || '',
-            totalAmount: totalDueBeforeDiscount,
-            amountPaid: payAmount,
-            discount: disc,
-            paymentMethod: paymentData.paymentMethod,
-            paymentStatus: paymentStatus,
-            createdDate: new Date().toISOString(),
-            notes: paymentData.notes,
-            queueItemId: queueItem.id
-          };
-
-          await saveToLocal('bills', newBill);
-
-          console.log('Saved to IndexedDB successfully');
-        } catch (dbError) {
-          console.warn('IndexedDB save failed, continuing with cloud:', dbError);
-        }
-      }
-
-      // 2. Initiate Print (only if requested)
+      // 1. Initiate Print (only if requested)
       if (shouldPrint) {
         handlePrint();
       }
 
-      // 3. Close modal
-      onClose();
-      toast.success(shouldPrint ? 'Payment processed & bill printed!' : 'Payment processed!', { id: toastId });
-
-      // 4. Call parent handler (for queue updates)
+      // 2. Call parent handler (for queue updates)
+      // This is the SINGLE SOURCE OF TRUTH for database updates
       await onSubmit(queueItem, {
         ...paymentData,
         amount: payAmount,
         discount: disc
       });
 
-      // 4. Background Firebase sync (non-blocking)
-      try {
-        const updateData: Partial<QueueItem> = {
-          amountPaid: alreadyPaidThisVisit + payAmount,
-          discount: disc,
-          paymentStatus: paymentStatus // This should match the type
-        };
-
-        await updateQueueItem(queueItem.id, updateData);
-
-        const billData = {
-          billNumber: `BILL-${Date.now()}`,
-          patientId: patientData.id || queueItem.patientNumber,
-          patientNumber: queueItem.patientNumber,
-          patientName: queueItem.patientName,
-          treatment: queueItem.treatment || '',
-          totalAmount: totalDueBeforeDiscount,
-          amountPaid: payAmount,
-          discount: disc,
-          paymentMethod: paymentData.paymentMethod,
-          paymentStatus: paymentStatus,
-          createdDate: new Date().toISOString(),
-          notes: paymentData.notes,
-          queueItemId: queueItem.id
-        };
-
-        // await addBill(billData);
-        // console.log('Firebase sync completed');
-      } catch (firebaseError) {
-        console.error('Firebase sync failed:', firebaseError);
-        toast.warning('Cloud sync failed, but local data is saved');
-      }
-
-
+      // 3. Close modal
+      onClose();
+      toast.success(shouldPrint ? 'Payment processed & bill printed!' : 'Payment processed!', { id: toastId });
 
     } catch (err: any) {
       console.error('Payment error:', err);
