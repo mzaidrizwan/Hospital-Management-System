@@ -10,7 +10,7 @@ export function useSecurity() {
         // 2. Disable F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U
         const handleKeyDown = (e: KeyboardEvent) => {
             // F12
-            if (e.key === 'F13') {
+            if (e.key === 'F12') {
                 e.preventDefault();
             }
 
