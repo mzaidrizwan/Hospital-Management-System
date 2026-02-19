@@ -919,6 +919,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
             case 'transactions': data = transactions; break;
             case 'purchases': data = purchases; break;
             case 'roles': data = roles; break;
+            case 'completed_queue':
+                data = queue.filter(item => item.status === 'completed');
+                break;
             default: return;
         }
 
@@ -978,6 +981,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         }
                         if (typeof window !== 'undefined') {
                             toast.success("Clinic Features (Settings, Treatments, Roles) Restored");
+                        }
+                        resolve();
+                        return;
+                    }
+
+                    if (collectionName === 'completed_queue') {
+                        const items = Array.isArray(data) ? data : [data];
+                        for (const item of items) {
+                            // Map back to 'queue' collection
+                            await updateLocal('queue', item);
+                        }
+                        if (typeof window !== 'undefined') {
+                            toast.success("Completed Patients restored to Bill tab");
                         }
                         resolve();
                         return;

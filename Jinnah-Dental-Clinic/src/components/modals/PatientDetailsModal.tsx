@@ -45,6 +45,7 @@ export default function PatientDetailsModal({
   const [isPaymentMode, setIsPaymentMode] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
   const [paymentNotes, setPaymentNotes] = useState('');
   const [isPaymentSubmitting, setIsPaymentSubmitting] = useState(false);
 
@@ -65,7 +66,12 @@ export default function PatientDetailsModal({
 
     try {
       setIsPaymentSubmitting(true);
+
+      // Combine selected date with current time for a full timestamp
       const now = new Date();
+      const [year, month, day] = paymentDate.split('-').map(Number);
+      const selectedDate = new Date(year, month - 1, day, now.getHours(), now.getMinutes(), now.getSeconds());
+      const finalDateISO = selectedDate.toISOString();
 
       // 1. Create Bill Record
       const newBill: Bill = {
@@ -80,7 +86,7 @@ export default function PatientDetailsModal({
         discount: 0,
         paymentMethod: paymentMethod,
         paymentStatus: 'paid',
-        createdDate: now.toISOString(),
+        createdDate: finalDateISO,
         notes: paymentNotes || 'Manual balance update via Patient Details',
       };
 
@@ -96,7 +102,7 @@ export default function PatientDetailsModal({
         ...displayPatient,
         pendingBalance: newPendingBalance,
         totalPaid: newTotalPaid,
-        lastVisit: now.toISOString()
+        lastVisit: finalDateISO
       };
 
       // 4. Save Changes
@@ -115,6 +121,7 @@ export default function PatientDetailsModal({
       toast.success(`Payment of Rs. ${amount} recorded successfully`);
       setIsPaymentMode(false);
       setPaymentAmount('');
+      setPaymentDate(new Date().toISOString().split('T')[0]);
       setPaymentNotes('');
     } catch (error) {
       console.error("Payment error:", error);
@@ -281,6 +288,14 @@ export default function PatientDetailsModal({
                   />
                 </div>
                 <div className="space-y-2">
+                  <Label>Payment Date</Label>
+                  <Input
+                    type="date"
+                    value={paymentDate}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
                   <Label>Payment Method</Label>
                   <Select value={paymentMethod} onValueChange={setPaymentMethod}>
                     <SelectTrigger>
@@ -289,13 +304,11 @@ export default function PatientDetailsModal({
                     <SelectContent>
                       <SelectItem value="cash">Cash</SelectItem>
                       <SelectItem value="online">Online Transfer</SelectItem>
-                      <SelectItem value="card">Card</SelectItem>
-                      <SelectItem value="other">Other</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2 md:col-span-2">
-                  <Label>Notes</Label>
+                  <Label>Notes (optional)</Label>
                   <Input
                     value={paymentNotes}
                     onChange={(e) => setPaymentNotes(e.target.value)}

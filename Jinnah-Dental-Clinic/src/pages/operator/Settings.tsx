@@ -31,14 +31,7 @@ import OperatorChangePassword from '@/components/settings/OperatorChangePassword
 import DataSyncSection from '@/components/settings/DataSyncSection';
 import LicenseSection from '@/components/settings/LicenseSection';
 import { useData } from '@/context/DataContext';
-
-// Format currency function
-const formatCurrency = (amount: number) => {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'PKR'
-  }).format(amount);
-};
+import { formatCurrency } from '@/utils/financialUtils';
 
 export default function OperatorSettings() {
   const { changePassword } = useAuth();

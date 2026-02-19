@@ -77,6 +77,7 @@ export default function DataSyncSection() {
         { label: 'Expenses', store: 'expenses' },
         { label: 'Inventory', store: 'inventory_full' },
         { label: 'Clinic Features', store: 'clinic_features_combined' },
+        { label: 'Completed Patients (Bill Tab)', store: 'completed_queue' },
     ];
 
     const handleCreateAllBackups = () => {
@@ -114,6 +115,7 @@ export default function DataSyncSection() {
             else if (name.includes('full_inventory_backup')) collection = 'inventory_full';
             else if (name.includes('clinic_features_backup')) collection = 'clinic_features_combined';
             else if (name.includes('clinicsettings_backup')) collection = 'clinicSettings';
+            else if (name.includes('completed_queue_backup')) collection = 'completed_queue';
 
             if (collection) {
                 try {
