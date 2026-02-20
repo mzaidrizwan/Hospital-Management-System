@@ -115,9 +115,6 @@ export const openDB = (): Promise<IDBDatabase> => {
 function handleDatabaseMigration(db: IDBDatabase, oldVersion: number, transaction: IDBTransaction) {
     console.log(`Migrating from version ${oldVersion} to ${DB_VERSION}`);
 
-    // Migration from version 1 to 2, etc.
-    // Add specific migration logic here if needed
-
     // Example migration:
     if (oldVersion < 3) {
         // Create any new stores added in version 3
@@ -424,7 +421,7 @@ export async function initializeDatabase(): Promise<void> {
 }
 
 // Export constants for use in other modules
-export { DB_NAME, DB_VERSION, ALL_STORES as STORES };
+export { DB_NAME, DB_VERSION, ALL_STORES as STORES, STORE_CONFIGS };
 
 export async function cleanupCorruptEntries(): Promise<void> {
     const db = await openDB();

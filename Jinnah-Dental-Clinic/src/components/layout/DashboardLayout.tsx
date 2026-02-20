@@ -28,14 +28,14 @@ export function DashboardLayout() {
           <header className="sticky top-0 z-40 h-16 flex items-center justify-between gap-4 border-b border-border bg-card/80 backdrop-blur-sm px-6">
             <div className="flex items-center gap-4">
               <SidebarTrigger className="-ml-2" />
-              <div className="hidden md:flex relative">
+              {/* <div className="hidden md:flex relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
                   type="search"
                   placeholder="Search patients, appointments..."
                   className="w-72 pl-9 h-9 bg-muted/50 border-0 focus-visible:ring-1"
                 />
-              </div>
+              </div> */}
               <SyncIndicator />
             </div>
 

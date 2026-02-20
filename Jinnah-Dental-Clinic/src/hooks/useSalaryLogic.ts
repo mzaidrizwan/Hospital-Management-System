@@ -30,36 +30,34 @@ export const getSalaryStatus = (staff: Staff) => {
     const salaryType = staff.salaryType || staff.salaryDuration || "monthly";
     const salaryAmount = staff.salary || 0;
 
-    let status: "Paid" | "Pending" = "Paid";
-    let amountDue = 0;
+    let cyclesDue = 0;
 
     switch (salaryType) {
         case "daily":
             if (!isSameDay(lastPaid, today)) {
-                status = "Pending";
-                const days = Math.max(0, differenceInDays(today, lastPaid));
-                amountDue = days * salaryAmount;
+                cyclesDue = Math.max(0, differenceInDays(today, lastPaid));
             }
             break;
 
         case "weekly":
             const daysSinceWeekly = differenceInDays(today, lastPaid);
             if (daysSinceWeekly >= 7) {
-                status = "Pending";
-                const weeks = Math.floor(daysSinceWeekly / 7);
-                amountDue = weeks * salaryAmount;
+                cyclesDue = Math.floor(daysSinceWeekly / 7);
             }
             break;
 
         case "monthly":
             if (!isSameMonth(lastPaid, today)) {
-                status = "Pending";
-                // Calculate month difference
                 const months = (today.getFullYear() - lastPaid.getFullYear()) * 12 + (today.getMonth() - lastPaid.getMonth());
-                amountDue = Math.max(0, months) * salaryAmount;
+                cyclesDue = Math.max(0, months);
             }
             break;
     }
+
+    // Clamp persisted pendingSalary to 0 in case it was stored as negative due to a historical bug
+    const persistedPending = Math.max(0, staff.pendingSalary || 0);
+    const amountDue = Math.max(0, (cyclesDue * salaryAmount) + persistedPending);
+    const status: "Paid" | "Pending" = amountDue > 0 ? "Pending" : "Paid";
 
     return { status, amountDue };
 };

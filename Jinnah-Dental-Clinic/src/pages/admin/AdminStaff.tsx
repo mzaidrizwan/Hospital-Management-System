@@ -109,6 +109,12 @@ export default function AdminStaff() {
   const [selectedStaffForHistory, setSelectedStaffForHistory] = useState<Staff | null>(null);
 
   const isPaymentDue = (staff: Staff): boolean => {
+    // 1. Always allow payment if there is a pending balance (Partial payments)
+    // IMPORTANT: staff.pendingSalary here is the PERSISTED one, 
+    // but we can also use getSalaryStatus to be sure.
+    const { amountDue } = getSalaryStatus(staff);
+    if (amountDue > 0) return true;
+
     // Enable payment on joining day (when totalPaid is 0)
     if (staff.totalPaid === 0) return true;
     if (!staff.lastPaidDate) return true;
@@ -123,15 +129,10 @@ export default function AdminStaff() {
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
     if (staff.salaryDuration === 'daily') {
-      // Due if LAST PAID DATE IS NOT TODAY
-      // If last paid date IS today, then payment IS NOT due.
       return lastPaid.getTime() !== today.getTime();
     } else if (staff.salaryDuration === 'weekly') {
-      // Due if last payment was > 7 days ago
       return diffDays >= 7;
     } else {
-      // Monthly: rely on the standard amountDue logic or a similar check
-      // For now, let's say monthly is due if it's been > 30 days or pendingSalary > 0
       return diffDays >= 30;
     }
   };
@@ -178,8 +179,15 @@ export default function AdminStaff() {
   const stats = useMemo(() => {
     const totalStaff = processedStaff.length;
     const activeStaff = processedStaff.filter(s => s.status === 'Active').length;
-    const totalPendingSalary = processedStaff.reduce((sum, s) => sum + (s.pendingSalary || 0), 0);
-    const totalPaidSalary = (contextPayments || []).reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+
+    // Sum only non-negative pending amounts (getSalaryStatus already clamps, but extra safety)
+    const totalPendingSalary = processedStaff.reduce((sum, s) => sum + Math.max(0, s.pendingSalary || 0), 0);
+
+    // Total Disbursements = sum of all salary payment records (source of truth)
+    const totalPaidSalary = (contextPayments || []).reduce((sum, p) => {
+      const amount = parseFloat(String(p.amount));
+      return sum + (isNaN(amount) || amount < 0 ? 0 : amount);
+    }, 0);
 
     return { totalStaff, activeStaff, totalPendingSalary, totalPaidSalary };
   }, [processedStaff, contextPayments]);
@@ -327,14 +335,21 @@ export default function AdminStaff() {
         month: paymentData.month || new Date().toLocaleString('default', { month: 'long', year: 'numeric' })
       };
 
+      // pendingSalary on staffMember here is already the COMPUTED value from getSalaryStatus (amountDue).
+      // Subtracting the payment from it gives the leftover. Clamp at 0 so it never goes negative.
+      const rawPending = (staffMember.pendingSalary || 0);
+      const newPendingBalance = Math.max(0, rawPending - paymentData.amount);
+
       const updatedStaff: Staff = {
         ...staffMember,
         totalPaid: (staffMember.totalPaid || 0) + paymentData.amount,
         totalEarned: (staffMember.totalEarned || 0) + paymentData.amount,
+        // Store 0 if fully paid; positive remainder if partial
+        pendingSalary: newPendingBalance,
         lastSalaryDate: timestamp.split('T')[0],
         lastPaidDate: timestamp,
         updatedAt: timestamp,
-        salaryStatus: 'Paid'
+        salaryStatus: newPendingBalance > 0 ? 'Pending' : 'Paid'
       };
 
       // 1. OPTIMISTIC UI: Close modal immediately

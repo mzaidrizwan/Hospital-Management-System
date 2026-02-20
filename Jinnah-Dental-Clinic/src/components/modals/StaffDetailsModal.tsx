@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Staff, SalaryPayment, Attendance } from '@/types';
+import { useSalaryLogic } from '@/hooks/useSalaryLogic';
 
 interface StaffDetailsModalProps {
   open: boolean;
@@ -120,6 +121,9 @@ export default function StaffDetailsModal({
 
   const monthName = new Date(currentYearNum, currentMonthNum - 1).toLocaleString('default', { month: 'long' });
 
+  const { getSalaryStatus } = useSalaryLogic();
+  const { amountDue, status: salStatus } = getSalaryStatus(staff);
+
   return (
     <div
       className="fixed inset-0 bg-black/65 flex items-center justify-center z-50 p-4"
@@ -154,15 +158,20 @@ export default function StaffDetailsModal({
           {/* Quick Stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
             <StatCard icon={<CalendarClock />} label="Join Date" value={new Date(staff.joinDate).toLocaleDateString('en-PK')} />
-            <StatCard icon={<DollarSign />} label="Pending Salary" value={`Rs. ${staff.pendingSalary.toLocaleString()}`} valueClass="text-red-600 font-bold" />
+            <StatCard icon={<DollarSign />} label="Pending Salary" value={`Rs. ${amountDue.toLocaleString()}`} valueClass="text-red-600 font-bold" />
             <StatCard icon={<CheckCircle />} label="Attendance Rate" value={`${monthStats.attendanceRate}%`} valueClass="text-indigo-600 font-bold" />
             <StatCard
               icon={staff.status === 'Active' ? <CheckCircle /> : <Clock />}
               label="Status"
               custom={
-                <Badge className={staff.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}>
-                  {staff.status}
-                </Badge>
+                <div className="flex flex-col items-center gap-1">
+                  <Badge className={staff.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}>
+                    {staff.status}
+                  </Badge>
+                  <Badge variant="outline" className={amountDue > 0 ? "border-amber-200 bg-amber-50 text-amber-700" : "border-green-200 bg-green-50 text-green-700"}>
+                    Salary: {salStatus}
+                  </Badge>
+                </div>
               }
             />
           </div>

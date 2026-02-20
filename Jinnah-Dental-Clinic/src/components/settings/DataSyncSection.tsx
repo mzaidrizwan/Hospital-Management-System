@@ -18,11 +18,6 @@ export default function DataSyncSection() {
     } = useData();
     const { user } = useAuth();
 
-    const handleImportClick = (collectionName: string) => {
-        const input = document.getElementById(`import-${collectionName}`) as HTMLInputElement;
-        if (input) input.click();
-    };
-
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>, collectionName: string) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -71,83 +66,13 @@ export default function DataSyncSection() {
         setAutoSyncEnabled(!autoSyncEnabled);
     };
 
-    const rows = [
-        { label: 'Patient Details', store: 'patients' },
-        { label: 'Staff', store: 'staff' },
-        { label: 'Expenses', store: 'expenses' },
-        { label: 'Inventory', store: 'inventory_full' },
-        { label: 'Clinic Features', store: 'clinic_features_combined' },
-        { label: 'Completed Patients (Bill Tab)', store: 'completed_queue' },
-    ];
-
-    const handleCreateAllBackups = () => {
-        rows.forEach((row, index) => {
-            // Increased timeout to 800ms for browser reliability when downloading multiple files
-            setTimeout(() => {
-                exportToJSON(row.store);
-            }, index * 800);
-        });
-        toast.info("Creating multiple backup files...");
-    };
-
-    const handleImportAllClick = () => {
-        const input = document.getElementById('import-all-backups') as HTMLInputElement;
-        if (input) input.click();
-    };
-
-    const handleImportAllChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const files = e.target.files;
-        if (!files || files.length === 0) return;
-
-        toast.loading("Importing all files...", { id: 'import-all' });
-
-        let importedCount = 0;
-        let errors = 0;
-
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
-            const name = file.name.toLowerCase();
-
-            let collection = '';
-            if (name.includes('patients_backup')) collection = 'patients';
-            else if (name.includes('staff_backup')) collection = 'staff';
-            else if (name.includes('expenses_backup')) collection = 'expenses';
-            else if (name.includes('full_inventory_backup')) collection = 'inventory_full';
-            else if (name.includes('clinic_features_backup')) collection = 'clinic_features_combined';
-            else if (name.includes('clinicsettings_backup')) collection = 'clinicSettings';
-            else if (name.includes('completed_queue_backup')) collection = 'completed_queue';
-
-            if (collection) {
-                try {
-                    await importFromJSON(file, collection);
-                    importedCount++;
-                } catch (err) {
-                    console.error(`Failed to import ${file.name}:`, err);
-                    errors++;
-                }
-            } else {
-                console.warn(`Could not determine collection for file: ${file.name}`);
-            }
-        }
-
-        if (errors > 0) {
-            toast.error(`Imported ${importedCount} files. ${errors} failed.`, { id: 'import-all' });
-        } else if (importedCount > 0) {
-            toast.success(`Successfully imported ${importedCount} backup files!`, { id: 'import-all' });
-        } else {
-            toast.error("No valid backup files found in selection.", { id: 'import-all' });
-        }
-
-        e.target.value = ''; // Reset
-    };
-
     return (
         <div className="space-y-6">
             <Card>
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <Database className="w-5 h-5" />
-                        Backup & Restore
+                        Backup &amp; Restore
                     </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -175,78 +100,38 @@ export default function DataSyncSection() {
                         </div>
                     </div>
 
-                    {/* Unified Backup/Restore Buttons */}
-                    <div className="flex flex-col md:flex-row items-center justify-between p-4 bg-muted/30 rounded-lg mb-6 gap-4">
+                    {/* Full System Backup / Restore */}
+                    <div className="flex flex-col md:flex-row items-center justify-between p-4 bg-muted/30 rounded-lg gap-4">
                         <div>
-                            <p className="font-medium text-blue-800">Unified Actions</p>
-                            <p className="text-xs text-muted-foreground">Manage all category data at once</p>
+                            <p className="font-medium text-blue-800">Full System Backup</p>
+                            <p className="text-xs text-muted-foreground">Export or restore all data as a single file</p>
                         </div>
-                        <div className="flex flex-wrap gap-2 w-full md:w-auto">
+                        <div className="flex gap-2 w-full md:w-auto">
                             <Button
                                 variant="default"
-                                onClick={handleCreateAllBackups}
-                                className="flex-1 md:flex-none gap-2 bg-blue-600 hover:bg-blue-700 text-white"
+                                onClick={() => exportToJSON('complete_db_backup')}
+                                className="flex-1 md:flex-none gap-2 bg-indigo-600 hover:bg-indigo-700 text-white"
                             >
                                 <Download className="w-4 h-4" />
-                                Create All Backup Files
+                                Download Backup
                             </Button>
-                            <Button
-                                variant="default"
-                                onClick={handleImportAllClick}
-                                className="flex-1 md:flex-none gap-2 bg-green-600 hover:bg-green-700 text-white"
-                            >
-                                <Upload className="w-4 h-4" />
-                                Import All Backup Files
-                            </Button>
+
                             <input
                                 type="file"
-                                id="import-all-backups"
+                                id="import-complete-backup"
                                 className="hidden"
                                 accept=".json"
-                                multiple
-                                onChange={handleImportAllChange}
+                                onChange={(e) => handleFileChange(e, 'complete_db_backup')}
                             />
+                            <Button
+                                variant="default"
+                                onClick={() => (document.getElementById('import-complete-backup') as HTMLInputElement)?.click()}
+                                className="flex-1 md:flex-none gap-2 bg-purple-600 hover:bg-purple-700 text-white"
+                            >
+                                <Upload className="w-4 h-4" />
+                                Restore Backup
+                            </Button>
                         </div>
-                    </div>
-
-                    <div className="space-y-4">
-                        {rows.map((row) => (
-                            <div key={row.store} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 border rounded-xl bg-card hover:bg-muted/10 transition-colors gap-4">
-                                <span className="font-bold text-sm uppercase tracking-wide text-muted-foreground sm:w-1/3">
-                                    {row.label}
-                                </span>
-                                <div className="flex gap-2 w-full sm:w-auto">
-                                    {(user?.role === 'admin' || user?.role === 'operator') && (
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => exportToJSON(row.store)}
-                                            className="flex-1 sm:flex-none gap-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 border-blue-100"
-                                        >
-                                            <Download className="w-4 h-4" />
-                                            Create Backup
-                                        </Button>
-                                    )}
-
-                                    <input
-                                        type="file"
-                                        id={`import-${row.store}`}
-                                        className="hidden"
-                                        accept=".json"
-                                        onChange={(e) => handleFileChange(e, row.store)}
-                                    />
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => handleImportClick(row.store)}
-                                        className="flex-1 sm:flex-none gap-2 text-green-600 hover:text-green-700 hover:bg-green-50 border-green-100"
-                                    >
-                                        <Upload className="w-4 h-4" />
-                                        Import File
-                                    </Button>
-                                </div>
-                            </div>
-                        ))}
                     </div>
                 </CardContent>
             </Card>

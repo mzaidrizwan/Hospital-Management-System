@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useMemo, useRef } from 'react';
 import { db } from '@/lib/firebase';
 import { collection, onSnapshot, query, setDoc, doc, getDocs, getDoc, deleteDoc } from 'firebase/firestore';
-import { getFromLocal, saveToLocal, openDB, getAllStores, saveMultipleToLocal, deleteFromLocal, clearStore } from '@/services/indexedDbUtils';
+import { getFromLocal, saveToLocal, openDB, getAllStores, saveMultipleToLocal, deleteFromLocal, clearStore, STORE_CONFIGS } from '@/services/indexedDbUtils';
 import { processSyncQueue, smartSync, smartDelete } from '@/services/syncService';
 import { useConnectionStatus } from '@/hooks/useConnectionStatus';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -872,72 +872,151 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }, [addItem, initializeData]);
 
     const exportToJSON = useCallback((collectionName: string) => {
-        if (collectionName === 'inventory_full') {
-            const fullInventory = {
-                stock: inventory,
-                sales: sales,
-                purchases: purchases
-            };
-            const blob = new Blob([JSON.stringify(fullInventory, null, 2)], { type: 'application/json' });
+        try {
+            console.log(`[exportToJSON] Requested export for: ${collectionName}`);
+
+            if (collectionName === 'inventory_full') {
+                const fullInventory = {
+                    stock: inventory,
+                    sales: sales,
+                    purchases: purchases
+                };
+                const blob = new Blob([JSON.stringify(fullInventory, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `Full_Inventory_Backup_${new Date().toISOString().split('T')[0]}.json`;
+                link.click();
+                return;
+            }
+
+            if (collectionName === 'clinic_features_combined') {
+                const fullConfig = {
+                    settings: clinicSettings,
+                    treatments: treatments,
+                    roles: roles
+                };
+                const blob = new Blob([JSON.stringify(fullConfig, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `Clinic_Features_Backup_${new Date().toISOString().split('T')[0]}.json`;
+                link.click();
+                return;
+            }
+
+            if (collectionName === 'complete_db_backup') {
+                toast.loading("Preparing full system backup...", { id: 'backup-status' });
+
+                // Use a small timeout to let the toast show up
+                setTimeout(() => {
+                    try {
+                        const fullBackup: any = {
+                            meta: {
+                                type: 'complete_backup',
+                                version: '1.0',
+                                timestamp: new Date().toISOString(),
+                                exportedBy: 'settings_backup'
+                            },
+                            data: {}
+                        };
+
+                        fullBackup.data = {
+                            patients,
+                            queue,
+                            appointments,
+                            staff,
+                            salaryPayments,
+                            attendance,
+                            inventory,
+                            sales,
+                            expenses,
+                            bills,
+                            treatments,
+                            // Filter out empty/invalid clinicSettings objects (those missing an id)
+                            clinicSettings: (Array.isArray(clinicSettings) ? clinicSettings : [clinicSettings]).filter(
+                                (s: any) => s && s.id
+                            ),
+                            transactions,
+                            purchases,
+                            roles,
+                            users: [] // Users skipped for security
+                        };
+
+                        const jsonString = JSON.stringify(fullBackup, null, 2);
+                        const blob = new Blob([jsonString], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = `COMPLETE_CLINIC_BACKUP_${new Date().toISOString().split('T')[0]}.json`;
+                        link.click();
+
+                        toast.success("Full system backup downloaded!", { id: 'backup-status' });
+                    } catch (err) {
+                        console.error("Error creating full backup:", err);
+                        toast.error("Failed to create backup file", { id: 'backup-status' });
+                    }
+                }, 100);
+                return;
+            }
+
+            let data = null;
+            switch (collectionName) {
+                case 'patients': data = patients; break;
+                case 'queue': data = queue; break;
+                case 'appointments': data = appointments; break;
+                case 'staff_combined':
+                    data = {
+                        staff,
+                        roles,
+                        attendance,
+                        salaryPayments,
+                        transactions: transactions.filter(t => t.type === 'Salary')
+                    };
+                    break;
+                case 'salaryPayments': data = salaryPayments; break;
+                case 'attendance': data = attendance; break;
+                case 'inventory': data = inventory; break;
+                case 'sales': data = sales; break;
+                case 'expenses': data = expenses; break;
+                case 'bills': data = bills; break;
+                case 'treatments': data = treatments; break;
+                case 'clinicSettings': data = clinicSettings; break;
+                case 'transactions': data = transactions; break;
+                case 'purchases': data = purchases; break;
+                case 'roles': data = roles; break;
+                case 'completed_queue': {
+                    const completedItems = queue.filter(item => item.status === 'completed');
+                    const completedItemIds = new Set(completedItems.map(i => i.id));
+                    const patientIds = new Set(completedItems.map(i => i.patientId));
+
+                    const associatedBills = bills.filter(b => b.queueItemId && completedItemIds.has(b.queueItemId));
+                    const linkedPatients = patients.filter(p => patientIds.has(p.id));
+
+                    data = {
+                        queue: completedItems,
+                        bills: associatedBills,
+                        patients: linkedPatients
+                    };
+                    break;
+                }
+                default:
+                    console.warn(`Unknown collection name for export: ${collectionName}`);
+                    return;
+            }
+
+            if (data === null || data === undefined) return;
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
-            link.download = `Full_Inventory_Backup_${new Date().toISOString().split('T')[0]}.json`;
+            link.download = `${collectionName}_backup_${new Date().toISOString().split('T')[0]}.json`;
             link.click();
-            return;
+        } catch (error) {
+            console.error("Export failure:", error);
+            toast.error("Export failed");
         }
-
-        if (collectionName === 'clinic_features_combined') {
-            const fullConfig = {
-                settings: clinicSettings,
-                treatments: treatments,
-                roles: roles
-            };
-            const blob = new Blob([JSON.stringify(fullConfig, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `Clinic_Features_Backup_${new Date().toISOString().split('T')[0]}.json`;
-            link.click();
-            return;
-        }
-
-        let data = null;
-        switch (collectionName) {
-            case 'patients': data = patients; break;
-            case 'queue': data = queue; break;
-            case 'appointments': data = appointments; break;
-            case 'staff': data = staff; break;
-            case 'salaryPayments': data = salaryPayments; break;
-            case 'attendance': data = attendance; break;
-            case 'inventory': data = inventory; break;
-            case 'sales': data = sales; break;
-            case 'expenses': data = expenses; break;
-            case 'bills': data = bills; break;
-            case 'treatments': data = treatments; break;
-            case 'clinicSettings': data = clinicSettings; break;
-            case 'transactions': data = transactions; break;
-            case 'purchases': data = purchases; break;
-            case 'roles': data = roles; break;
-            case 'completed_queue':
-                data = queue.filter(item => item.status === 'completed');
-                break;
-            default: return;
-        }
-
-        if (data === null || data === undefined || (Array.isArray(data) && data.length === 0 && collectionName !== 'clinicSettings')) {
-            // We allow clinicSettings to be an empty object, but for arrays, we skip if truly empty to avoid confusing user with 0-byte files
-            // actually, let's just allow it all to be consistent.
-        }
-
-        if (data === null || data === undefined) return;
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `${collectionName}_backup_${new Date().toISOString().split('T')[0]}.json`;
-        link.click();
-    }, [patients, queue, appointments, staff, salaryPayments, attendance, inventory, sales, expenses, bills, treatments, clinicSettings, transactions, purchases, roles]);
+    }, [patients, queue, appointments, staff, salaryPayments, attendance, inventory, sales, expenses, bills, treatments, clinicSettings, transactions, purchases, roles, toast]);
 
     const importFromJSON = useCallback((file: File, collectionName: string) => {
         return new Promise<void>((resolve, reject) => {
@@ -945,6 +1024,111 @@ export function DataProvider({ children }: { children: ReactNode }) {
             reader.onload = async (e) => {
                 try {
                     const data = JSON.parse(e.target?.result as string);
+
+                    if (collectionName === 'complete_db_backup') {
+                        // Validate format
+                        if (!data.meta || data.meta.type !== 'complete_backup' || !data.data) {
+                            if (typeof window !== 'undefined') toast.error("Invalid Complete Backup File");
+                            reject(new Error("Invalid backup format"));
+                            return;
+                        }
+
+                        if (!window.confirm("WARNING: COMPLETE RESTORE\n\nThis will DELETE ALL current local data and replace it with the backup content.\n\nAre you sure you want to proceed?")) {
+                            resolve(); // User cancelled
+                            return;
+                        }
+
+                        // Disable auto-sync during restore
+                        const previousAutoSync = autoSyncEnabled;
+                        if (previousAutoSync) setAutoSyncEnabled(false);
+
+                        try {
+                            // Clear everything first
+                            for (const col of COLLECTIONS) {
+                                if (col === 'users') continue;
+                                await clearStore(col);
+                            }
+
+                            // Restore each collection
+                            const backupData = data.data;
+                            const storesToRestore = Object.keys(backupData);
+
+                            let restoreCount = 0;
+                            const errors: string[] = [];
+
+                            for (const store of storesToRestore) {
+                                try {
+                                    /*
+                                     * Check if store is valid (in COLLECTIONS or STORE_CONFIGS)
+                                     */
+                                    const isKnownCollection = COLLECTIONS.includes(store);
+                                    let keyPath = 'id';
+                                    if (STORE_CONFIGS[store]) keyPath = STORE_CONFIGS[store].keyPath;
+                                    const hasConfig = !!STORE_CONFIGS[store];
+
+                                    if (isKnownCollection || hasConfig) {
+                                        const items = backupData[store];
+
+                                        if (Array.isArray(items) && items.length > 0) {
+                                            // FIX: Filter out items missing the keyPath to avoid entire batch failure
+                                            // Filter out items missing the keyPath AND completely empty objects
+                                            const validItems = items.filter(item => item && item[keyPath] !== undefined && Object.keys(item).length > 0);
+                                            const invalidCount = items.length - validItems.length;
+
+                                            if (invalidCount > 0) {
+                                                console.warn(`[Restore] Skipping ${invalidCount} invalid items in ${store} (missing ${keyPath})`);
+                                            }
+
+                                            if (validItems.length > 0) {
+                                                await saveMultipleToLocal(store, validItems);
+                                                restoreCount += validItems.length;
+                                            }
+                                        } else if (store === 'clinicSettings' && items && !Array.isArray(items)) {
+                                            // Handle single object clinicSettings
+                                            if (items[keyPath]) {
+                                                await saveToLocal(store, items);
+                                                restoreCount++;
+                                            } else {
+                                                console.warn(`[Restore] Skipping invalid clinicSettings (missing ${keyPath})`);
+                                            }
+                                        }
+                                    }
+                                } catch (innerErr: any) {
+                                    console.error(`Failed to restore store: ${store}`, innerErr);
+                                    errors.push(`${store}: ${innerErr.message || 'Unknown error'}`);
+                                    // Continue to next store! Don't abort entire restore.
+                                }
+                            }
+
+                            if (typeof window !== 'undefined') {
+                                if (errors.length > 0) {
+                                    // Show the first error message to help debug
+                                    toast.warning(`Restore completed with ${errors.length} errors. (${restoreCount} items restored). First error: ${errors[0]}`);
+                                    console.error("Restore Errors:", errors);
+                                } else {
+                                    toast.success(`Complete Restore Successful! (${restoreCount} items)`);
+                                }
+                            }
+
+                            // Reload data
+                            await initializeData();
+
+                            if (previousAutoSync) {
+                                setAutoSyncEnabled(true);
+                                toast.info("Auto-sync re-enabled. Cloud will be updated shortly.");
+                            }
+
+                            // Force reload eventually to ensure all states catch up perfectly
+                            setTimeout(() => window.location.reload(), 3000);
+
+                            resolve();
+                        } catch (err) {
+                            console.error("Complete restore failed fatally:", err);
+                            toast.error("Restore failed fatally. Data may be inconsistent.");
+                            reject(err);
+                        }
+                        return;
+                    }
 
                     if (collectionName === 'inventory_full') {
                         if (data.stock) {
@@ -961,6 +1145,34 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         }
                         if (typeof window !== 'undefined') {
                             toast.success("Full Inventory (Stock, Sales, Purchases) Restored");
+                        }
+                        resolve();
+                        return;
+                    }
+
+                    if (collectionName === 'staff_combined') {
+                        if (data && typeof data === 'object' && !Array.isArray(data)) {
+                            if (Array.isArray(data.staff)) {
+                                for (const s of data.staff) await updateLocal('staff', s);
+                            }
+                            if (Array.isArray(data.roles)) {
+                                for (const r of data.roles) await updateLocal('roles', r);
+                            }
+                            if (Array.isArray(data.attendance)) {
+                                for (const a of data.attendance) await updateLocal('attendance', a);
+                            }
+                            if (Array.isArray(data.salaryPayments)) {
+                                for (const sp of data.salaryPayments) await updateLocal('salaryPayments', sp);
+                            }
+                            if (Array.isArray(data.transactions)) {
+                                for (const t of data.transactions) await updateLocal('transactions', t);
+                            }
+                        } else if (Array.isArray(data)) {
+                            // Backwards compatibility
+                            for (const s of data) await updateLocal('staff', s);
+                        }
+                        if (typeof window !== 'undefined') {
+                            toast.success("Staff details, attendance, and salary history restored");
                         }
                         resolve();
                         return;
@@ -987,13 +1199,24 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     }
 
                     if (collectionName === 'completed_queue') {
-                        const items = Array.isArray(data) ? data : [data];
-                        for (const item of items) {
-                            // Map back to 'queue' collection
-                            await updateLocal('queue', item);
+                        // Handle new object format { queue: [], bills: [], patients: [] }
+                        if (data && typeof data === 'object' && !Array.isArray(data)) {
+                            if (Array.isArray(data.queue)) {
+                                for (const item of data.queue) await updateLocal('queue', item);
+                            }
+                            if (Array.isArray(data.bills)) {
+                                for (const bill of data.bills) await updateLocal('bills', bill);
+                            }
+                            if (Array.isArray(data.patients)) {
+                                for (const patient of data.patients) await updateLocal('patients', patient);
+                            }
+                        } else if (Array.isArray(data)) {
+                            // Backward compatibility for old simple array format
+                            for (const item of data) await updateLocal('queue', item);
                         }
+
                         if (typeof window !== 'undefined') {
-                            toast.success("Completed Patients restored to Bill tab");
+                            toast.success("Completed Patients, Bills and Patient records restored");
                         }
                         resolve();
                         return;
@@ -1024,7 +1247,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             reader.onerror = () => reject(new Error("Failed to read file"));
             reader.readAsText(file);
         });
-    }, [stateSetterMap, updateLocal, setInventory, setSales, setPurchases]);
+    }, [stateSetterMap, updateLocal, setInventory, setSales, setPurchases, setClinicSettings, setTreatments, setRoles]);
 
     const clearDataStore = useCallback(async (collectionName: string) => {
         try {
