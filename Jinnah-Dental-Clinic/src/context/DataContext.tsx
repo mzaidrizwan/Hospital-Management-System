@@ -300,11 +300,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 // BUG FIX: Only sync if autoSyncEnabled is TRUE
                 if (isOnline && autoSyncEnabled) {
                     if (data._deleted) {
-                        console.log(`[Background Sync] Deleting ${collectionName} from Firebase:`, data.id);
+                        console.log(`[Background Sync] Deleting ${collectionName} from Cloud:`, data.id);
                         await smartDelete(collectionName, data.id);
                         console.log(`[Background Sync] Successfully deleted ${collectionName}:`, data.id);
                     } else {
-                        console.log(`[Background Sync] Syncing ${collectionName} to Firebase:`, data.id);
+                        console.log(`[Background Sync] Syncing ${collectionName} to Cloud:`, data.id);
                         await smartSync(collectionName, data);
                         console.log(`[Background Sync] Successfully synced ${collectionName}:`, data.id);
                     }
@@ -1070,7 +1070,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
                                         const items = backupData[store];
 
                                         if (Array.isArray(items) && items.length > 0) {
-                                            // FIX: Filter out items missing the keyPath to avoid entire batch failure
                                             // Filter out items missing the keyPath AND completely empty objects
                                             const validItems = items.filter(item => item && item[keyPath] !== undefined && Object.keys(item).length > 0);
                                             const invalidCount = items.length - validItems.length;
@@ -1080,13 +1079,44 @@ export function DataProvider({ children }: { children: ReactNode }) {
                                             }
 
                                             if (validItems.length > 0) {
-                                                await saveMultipleToLocal(store, validItems);
+                                                // Mark every item as needing sync, then save to IndexedDB
+                                                const syncableItems = validItems.map(item => ({
+                                                    ...item,
+                                                    needsSync: true,
+                                                    lastUpdated: item.lastUpdated || Date.now()
+                                                }));
+                                                await saveMultipleToLocal(store, syncableItems);
+
+                                                // Enqueue each item in syncQueue so processSyncQueue can push to Firebase
+                                                if (previousAutoSync) {
+                                                    for (const item of syncableItems) {
+                                                        const docId = item[keyPath];
+                                                        await saveToLocal('syncQueue', {
+                                                            id: `${store}_${docId}`,
+                                                            type: 'PATCH',
+                                                            collectionName: store,
+                                                            docId,
+                                                            timestamp: Date.now()
+                                                        });
+                                                    }
+                                                }
+
                                                 restoreCount += validItems.length;
                                             }
                                         } else if (store === 'clinicSettings' && items && !Array.isArray(items)) {
                                             // Handle single object clinicSettings
                                             if (items[keyPath]) {
-                                                await saveToLocal(store, items);
+                                                const syncableItem = { ...items, needsSync: true, lastUpdated: items.lastUpdated || Date.now() };
+                                                await saveToLocal(store, syncableItem);
+                                                if (previousAutoSync) {
+                                                    await saveToLocal('syncQueue', {
+                                                        id: `${store}_${items[keyPath]}`,
+                                                        type: 'PATCH',
+                                                        collectionName: store,
+                                                        docId: items[keyPath],
+                                                        timestamp: Date.now()
+                                                    });
+                                                }
                                                 restoreCount++;
                                             } else {
                                                 console.warn(`[Restore] Skipping invalid clinicSettings (missing ${keyPath})`);
@@ -1115,10 +1145,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
                             if (previousAutoSync) {
                                 setAutoSyncEnabled(true);
-                                toast.info("Auto-sync re-enabled. Cloud will be updated shortly.");
+                                // Immediately push all restored items to Firebase via the sync queue
+                                toast.loading("Syncing restored data to cloud...", { id: 'restore-sync' });
+                                try {
+                                    await processSyncQueue();
+                                    toast.success("Cloud updated with restored data!", { id: 'restore-sync' });
+                                } catch (syncErr) {
+                                    console.warn("[Restore] Cloud sync after restore failed:", syncErr);
+                                    toast.warning("Restored locally. Cloud sync will happen on next connection.", { id: 'restore-sync' });
+                                }
+                            } else {
+                                toast.info("Data restored locally. Enable Auto-Sync to push to cloud.");
                             }
 
-                            // Force reload eventually to ensure all states catch up perfectly
+                            // Force reload to ensure all states catch up perfectly
                             setTimeout(() => window.location.reload(), 3000);
 
                             resolve();
@@ -1499,14 +1539,26 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
             if (remoteData.length === 0) {
                 if (localData.length > 0) {
-                    console.log(`[Sync] Collection ${collectionName} is empty in cloud. Syncing local...`);
-                    // Check if local items are pending sync
-                    const pendingSync = localData.some(i => i.needsSync);
-                    if (!pendingSync) {
-                        await clearStore(collectionName);
-                        const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
-                        if (setter) setter([]);
+                    // Cloud is empty but we have local data — push everything up.
+                    // This listener only fires when online, so no stale isOnline check needed.
+                    console.log(`[Sync] Cloud empty for ${collectionName}. Pushing ${localData.length} local items to cloud...`);
+                    let pushed = 0;
+                    for (const item of localData) {
+                        try {
+                            const keyPath = STORE_CONFIGS[collectionName]?.keyPath || 'id';
+                            const docId = item[keyPath];
+                            if (!docId) continue;
+                            const sanitized: any = { ...item, needsSync: false, lastUpdated: item.lastUpdated || Date.now() };
+                            // Remove undefined values (Firestore rejects them)
+                            Object.keys(sanitized).forEach(k => sanitized[k] === undefined && delete sanitized[k]);
+                            await setDoc(doc(db, collectionName, String(docId)), sanitized);
+                            await saveToLocal(collectionName, sanitized);
+                            pushed++;
+                        } catch (pushErr) {
+                            console.error(`[Sync] Failed to push ${collectionName} item to cloud:`, pushErr);
+                        }
                     }
+                    console.log(`[Sync] ✅ Pushed ${pushed}/${localData.length} items of ${collectionName} to cloud.`);
                 }
                 return;
             }
