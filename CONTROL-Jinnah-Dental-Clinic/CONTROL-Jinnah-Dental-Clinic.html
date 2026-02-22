@@ -175,6 +175,25 @@
         <div id="result"></div>
     </div>
 
+    <!-- License Extension Card -->
+    <div class="card" style="border-left: 5px solid #10b981;">
+        <h2 style="color: #059669;">Extend License Expiry</h2>
+        <div class="instructions" style="margin-bottom: 15px;">Use this to manually set a new expiry date for an
+            existing license.</div>
+
+        <label>New Expiry Date:</label>
+        <input type="date" id="newExpiryDate">
+
+        <label>License Key (Optional):</label>
+        <input type="text" id="extendLicenseKey" placeholder="Leave blank to keep current key">
+
+        <button style="background: #10b981;" onclick="extendLicense()">Update License & Extend Expiry</button>
+        <button style="background: #6b7280; margin-top: 5px;" onclick="fetchCurrentLicense()">Check Current
+            Expiry</button>
+
+        <div id="extendStatus" class="status"></div>
+    </div>
+
     <!-- Firebase Admin Card -->
     <div class="card warning-card">
         <h2 style="color: #856404;">Firebase Admin</h2>
@@ -513,6 +532,120 @@
                     display.style.background = "#e0f2fe";
                     display.style.color = "inherit";
                 }, 3000);
+            }
+        }
+
+        // New function to fetch current license info from Firebase
+        async function fetchCurrentLicense() {
+            const statusDiv = document.getElementById('extendStatus');
+
+            if (!isFirebaseInitialized || !db) {
+                alert("Firebase not initialized");
+                return;
+            }
+
+            statusDiv.style.display = 'block';
+            statusDiv.className = 'status info';
+            statusDiv.textContent = "Fetching current license data...";
+
+            try {
+                // Fetch from settings/license
+                const licenseDoc = await db.collection("settings").doc("license").get();
+                // Fetch from clinicSettings/clinic-settings
+                const clinicDoc = await db.collection("clinicSettings").doc("clinic-settings").get();
+
+                let message = "<strong>Current Data:</strong><br>";
+
+                if (licenseDoc.exists) {
+                    const data = licenseDoc.data();
+                    message += `Settings/License: Exp: ${new Date(data.expiryDate).toLocaleDateString()}, Key: ${data.key}<br>`;
+
+                    // Pre-fill fields
+                    if (data.expiryDate) {
+                        document.getElementById('newExpiryDate').value = data.expiryDate.split('T')[0];
+                    }
+                    if (data.key) {
+                        document.getElementById('extendLicenseKey').value = data.key;
+                    }
+                } else {
+                    message += `Settings/License: Not found<br>`;
+                }
+
+                if (clinicDoc.exists) {
+                    const data = clinicDoc.data();
+                    message += `ClinicSettings: Exp: ${new Date(data.licenseExpiry).toLocaleDateString()}, Key: ${data.licenseKey}`;
+                } else {
+                    message += `ClinicSettings: Not found`;
+                }
+
+                statusDiv.className = 'status info';
+                statusDiv.innerHTML = message;
+
+            } catch (error) {
+                console.error("Error fetching license:", error);
+                statusDiv.className = 'status error';
+                statusDiv.textContent = `❌ Error: ${error.message}`;
+            }
+        }
+
+        // New function to extend/update license
+        async function extendLicense() {
+            const newExpiryInput = document.getElementById('newExpiryDate');
+            const licenseKeyInput = document.getElementById('extendLicenseKey');
+            const statusDiv = document.getElementById('extendStatus');
+
+            if (!newExpiryInput.value) {
+                alert("Please select a new expiry date");
+                return;
+            }
+
+            if (!isFirebaseInitialized || !db) {
+                alert("Firebase not initialized");
+                return;
+            }
+
+            const expiryDate = new Date(newExpiryInput.value);
+            // Set to end of day
+            expiryDate.setHours(23, 59, 59, 999);
+            const isoExpiry = expiryDate.toISOString();
+            const timestamp = Date.now();
+            const key = licenseKeyInput.value.trim();
+
+            statusDiv.style.display = 'block';
+            statusDiv.className = 'status info';
+            statusDiv.textContent = "Updating license across both collections...";
+
+            try {
+                // 1. Update settings/license
+                const licenseRef = db.collection("settings").doc("license");
+                const licenseUpdate = {
+                    expiryDate: isoExpiry,
+                    updatedAt: new Date().toISOString()
+                };
+                if (key) licenseUpdate.key = key;
+
+                await licenseRef.set(licenseUpdate, { merge: true });
+
+                // 2. Update clinicSettings/clinic-settings
+                const clinicRef = db.collection("clinicSettings").doc("clinic-settings");
+                const clinicUpdate = {
+                    licenseExpiry: isoExpiry,
+                    updatedAt: new Date().toISOString(),
+                    lastUpdated: timestamp,
+                    needsSync: false
+                };
+                if (key) clinicUpdate.licenseKey = key;
+
+                await clinicRef.set(clinicUpdate, { merge: true });
+
+                statusDiv.className = 'status success';
+                statusDiv.innerHTML = `✅ License updated successfully!<br>New Expiry: ${expiryDate.toLocaleDateString()}`;
+
+                console.log("License updated successfully in both collections.");
+            } catch (error) {
+                console.error("Error extending license:", error);
+                statusDiv.className = 'status error';
+                statusDiv.textContent = `❌ Error: ${error.message}`;
             }
         }
 
