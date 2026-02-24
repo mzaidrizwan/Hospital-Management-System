@@ -1462,32 +1462,121 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
     }, [fetchFullCloudBackup, stateSetterMap, initializeData]);
 
+    // const activateLicense = useCallback(async (inputKey: string) => {
+    //     try {
+    //         const clinicName = clinicSettings?.name || 'Jinnah Dental';
+    //         const isValid = await validateLicense(inputKey, clinicName);
+    //         if (!isValid) {
+    //             toast.error("Invalid License Key");
+    //             return false;
+    //         }
+
+    //         const currentExpiryISO = licenseExpiryDate || clinicSettings?.licenseExpiry || new Date().toISOString();
+    //         const currentExpiry = new Date(currentExpiryISO);
+    //         const newExpiry = new Date(currentExpiry.getTime() + (30 * 24 * 60 * 60 * 1000));
+    //         const newExpiryISO = newExpiry.toISOString();
+
+    //         // 1. Update React State
+    //         setLicenseKey(inputKey);
+    //         setLicenseExpiryDate(newExpiryISO);
+
+    //         const days = Math.ceil((newExpiry.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+    //         setLicenseDaysLeft(Math.max(0, days));
+    //         setLicenseStatus(days > 0 ? 'valid' : 'expired');
+
+    //         // 2. Update clinicSettings (Local + Firebase via updateLocal)
+    //         const updatedSettings = {
+    //             ...(clinicSettings || {}),
+    //             id: (clinicSettings?.id) || 'clinic-settings',
+    //             licenseExpiry: newExpiryISO,
+    //             licenseKey: inputKey,
+    //             updatedAt: new Date().toISOString()
+    //         };
+
+    //         await updateLocal('clinicSettings', updatedSettings);
+
+    //         // 3. Update dedicated license doc if needed
+    //         const licenseDocData = {
+    //             id: 'clinic_license',
+    //             key: inputKey,
+    //             expiryDate: newExpiryISO,
+    //             updatedAt: new Date().toISOString()
+    //         };
+
+    //         await saveToLocal('settings', licenseDocData);
+
+    //         if (isOnline) {
+    //             try {
+    //                 await setDoc(doc(db, 'settings', 'license'), {
+    //                     key: inputKey,
+    //                     expiryDate: newExpiryISO,
+    //                     updatedAt: new Date().toISOString()
+    //                 }, { merge: true });
+    //             } catch (e) {
+    //                 console.warn("Could not sync dedicated license doc:", e);
+    //             }
+    //         }
+
+    //         toast.success(`License Extended! New expiry: ${newExpiry.toLocaleDateString()}`);
+    //         return true;
+    //     } catch (error) {
+    //         console.error("License activation failed:", error);
+    //         toast.error("Failed to activate license");
+    //         return false;
+    //     }
+    // }, [licenseExpiryDate, clinicSettings, updateLocal, isOnline]);
+
+
     const activateLicense = useCallback(async (inputKey: string) => {
         try {
             const clinicName = clinicSettings?.name || 'Jinnah Dental Clinic';
+
+            // 🔹 1. Get already used license keys from IndexedDB
+            const existingKeysDoc = await getFromLocal('settings', 'used_license_keys');
+            const usedLicenseKeys: string[] = existingKeysDoc?.keys || [];
+            console.log(usedLicenseKeys)
+
+            // 🔹 2. Check if license already used
+            if (usedLicenseKeys.includes(inputKey)) {
+                toast.error("This License Key has already been used.");
+                return false;
+            }
+
+            // 🔹 3. Validate license normally
             const isValid = await validateLicense(inputKey, clinicName);
             if (!isValid) {
                 toast.error("Invalid License Key");
                 return false;
             }
 
-            const currentExpiryISO = licenseExpiryDate || clinicSettings?.licenseExpiry || new Date().toISOString();
+            // 🔹 4. Calculate new expiry
+            const currentExpiryISO =
+                licenseExpiryDate ||
+                clinicSettings?.licenseExpiry ||
+                new Date().toISOString();
+
             const currentExpiry = new Date(currentExpiryISO);
-            const newExpiry = new Date(currentExpiry.getTime() + (30 * 24 * 60 * 60 * 1000));
+            const newExpiry = new Date(
+                currentExpiry.getTime() + (30 * 24 * 60 * 60 * 1000)
+            );
             const newExpiryISO = newExpiry.toISOString();
 
-            // 1. Update React State
+            // 🔹 5. Update React State
             setLicenseKey(inputKey);
             setLicenseExpiryDate(newExpiryISO);
 
-            const days = Math.ceil((newExpiry.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+            const days = Math.ceil(
+                (newExpiry.getTime() - new Date().getTime()) /
+                (1000 * 60 * 60 * 24)
+            );
+
             setLicenseDaysLeft(Math.max(0, days));
             setLicenseStatus(days > 0 ? 'valid' : 'expired');
 
-            // 2. Update clinicSettings (Local + Firebase via updateLocal)
+            // 🔹 6. Update clinicSettings
             const updatedSettings = {
                 ...(clinicSettings || {}),
-                id: (clinicSettings?.id) || 'clinic-settings',
+                id: clinicSettings?.id || 'clinic-settings',
                 licenseExpiry: newExpiryISO,
                 licenseKey: inputKey,
                 updatedAt: new Date().toISOString()
@@ -1495,7 +1584,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
             await updateLocal('clinicSettings', updatedSettings);
 
-            // 3. Update dedicated license doc if needed
+            // 🔹 7. Save dedicated license doc
             const licenseDocData = {
                 id: 'clinic_license',
                 key: inputKey,
@@ -1505,26 +1594,51 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
             await saveToLocal('settings', licenseDocData);
 
+            // 🔹 8. Add this key to used keys array
+            const updatedUsedKeys = [...usedLicenseKeys, inputKey];
+
+            await saveToLocal('settings', {
+                id: 'used_license_keys',
+                keys: updatedUsedKeys,
+                updatedAt: new Date().toISOString()
+            });
+
+            // 🔹 9. Optional Firebase Sync
             if (isOnline) {
                 try {
-                    await setDoc(doc(db, 'settings', 'license'), {
-                        key: inputKey,
-                        expiryDate: newExpiryISO,
-                        updatedAt: new Date().toISOString()
-                    }, { merge: true });
+                    await setDoc(
+                        doc(db, 'settings', 'license'),
+                        {
+                            key: inputKey,
+                            expiryDate: newExpiryISO,
+                            updatedAt: new Date().toISOString()
+                        },
+                        { merge: true }
+                    );
                 } catch (e) {
                     console.warn("Could not sync dedicated license doc:", e);
                 }
             }
 
-            toast.success(`License Extended! New expiry: ${newExpiry.toLocaleDateString()}`);
+            toast.success(
+                `License Extended! New expiry: ${newExpiry.toLocaleDateString()}`
+            );
+
             return true;
+
         } catch (error) {
             console.error("License activation failed:", error);
             toast.error("Failed to activate license");
             return false;
         }
-    }, [licenseExpiryDate, clinicSettings, updateLocal, isOnline]);
+    }, [
+        licenseExpiryDate,
+        clinicSettings,
+        updateLocal,
+        isOnline
+    ]);
+
+
 
     const handleFirebaseUpdate = useCallback(async (collectionName: string, remoteData: any[]) => {
         // Reduced strict lock to prevent missing sync updates
