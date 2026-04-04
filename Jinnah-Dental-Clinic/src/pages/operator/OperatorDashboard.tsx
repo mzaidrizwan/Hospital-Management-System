@@ -258,7 +258,7 @@ export default function OperatorDashboard() {
       />
 
       {/* Queue Management (Read-only, no actions) */}
-      <div>
+      {/* <div>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-3">
           <h2 className="text-lg font-semibold">Today's Queue</h2>
           <div className="flex items-center gap-4">
@@ -313,7 +313,7 @@ export default function OperatorDashboard() {
             />
           </div>
         )}
-      </div>
+      </div> */}
 
       {showTreatmentModal && selectedQueueItemForTreatment && (
         <TreatmentModal

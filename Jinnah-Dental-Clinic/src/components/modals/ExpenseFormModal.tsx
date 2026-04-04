@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 
+
 // Types
 type ExpenseCategory =
   | 'rent' | 'salary' | 'supplies' | 'utilities' | 'equipment'
@@ -34,7 +35,8 @@ interface Expense {
 }
 
 // IndexedDB Utilities
-import { saveToLocal, openDB } from '@/services/indexedDbUtils';
+// import { saveToLocal, openDB } from '@/services/expireindexedDbUtils_OLDs';
+import { dbManager, STORE_CONFIGS, getKeyPath } from '@/lib/indexedDB';
 
 // Category options
 const categoryOptions: { value: ExpenseCategory; label: string }[] = [
@@ -99,7 +101,7 @@ export default function ExpenseFormModal({
   useEffect(() => {
     const init = async () => {
       try {
-        await openDB();
+        // await openDB();
         setDbInitialized(true);
       } catch (error) {
         console.error('Database initialization failed:', error);
@@ -190,7 +192,7 @@ export default function ExpenseFormModal({
 
       // Try to save to IndexedDB
       try {
-        await saveToLocal('expenses', expenseData);
+        await dbManager.putItem('expenses', expenseData);
         console.log('Expense saved successfully to IndexedDB');
         toast.success('Expense saved successfully');
 
@@ -220,19 +222,19 @@ export default function ExpenseFormModal({
 
   // Quick database reset function for emergency
   const handleResetDatabase = async () => {
-    if (confirm('This will delete all local data and create fresh database. Continue?')) {
-      setIsSubmitting(true);
-      try {
-        const deleteRequest = indexedDB.deleteDatabase('ClinicDB');
-        deleteRequest.onsuccess = () => {
-          window.location.reload();
-        };
-      } catch (error) {
-        toast.error('Failed to reset database');
-      } finally {
-        setIsSubmitting(false);
-      }
-    }
+    // if (confirm('This will delete all local data and create fresh database. Continue?')) {
+    //   setIsSubmitting(true);
+    //   try {
+    //     const deleteRequest = indexedDB.deleteDatabase('ClinicDB');
+    //     deleteRequest.onsuccess = () => {
+    //       window.location.reload();
+    //     };
+    //   } catch (error) {
+    //     toast.error('Failed to reset database');
+    //   } finally {
+    //     setIsSubmitting(false);
+    //   }
+    // }
   };
 
   if (!open) return null;
@@ -248,13 +250,13 @@ export default function ExpenseFormModal({
             )}
           </h2>
           <div className="flex items-center gap-2">
-            <button
+            {/* <button
               onClick={handleResetDatabase}
               className="text-xs px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200"
               title="Reset Database"
             >
-              Reset DB
-            </button>
+              
+            </button> */}
             <button
               onClick={onClose}
               className="p-1 hover:bg-gray-100 rounded"

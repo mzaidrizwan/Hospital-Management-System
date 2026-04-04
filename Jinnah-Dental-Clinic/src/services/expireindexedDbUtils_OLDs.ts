@@ -1,5 +1,5 @@
 const DB_NAME = 'ClinicDB';
-const DB_VERSION = 12; // Bumped to 12 for roles store
+const DB_VERSION = 13; // Bumped to 12 for roles store
 const ALL_STORES = [
     // Existing stores
     'bills',

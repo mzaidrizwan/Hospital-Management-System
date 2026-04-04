@@ -14,14 +14,16 @@ import TreatmentModal from '@/components/modals/TreatmentModal';
 import { startOfDay, endOfDay, parseISO, format } from 'date-fns';
 import { useData } from '@/context/DataContext';
 import { useAvailableDoctors } from '@/hooks/useAvailableDoctors';
-
-// const doctors = ['Dr. Smith', 'Dr. Johnson', 'Dr. Wilson', 'Dr. Brown', 'Dr. Taylor'];
+import { formatCurrency } from '@/lib/utils';
+import { addToSyncQueue } from '@/services/offlineSync';
+import { CustomPrompt } from '@/components/ui/CustomPrompt';
 
 export default function OperatorQueue() {
   const {
     queue: contextQueue,
     patients: contextPatients,
     bills: contextBills,
+    transactions: contextTransactions,
     updateLocal,
     deleteLocal,
     loading: contextLoading,
@@ -52,18 +54,57 @@ export default function OperatorQueue() {
   const [selectedQueueItemForTreatment, setSelectedQueueItemForTreatment] = useState<any>(null);
   const [selectedPatientForPrint, setSelectedPatientForPrint] = useState<QueueItem | null>(null);
 
+  const [showCancelPrompt, setShowCancelPrompt] = useState(false);
+  const [cancelItem, setCancelItem] = useState<QueueItem | null>(null);
+
+  // Filter queue data by treatmentDate or checkInTime
   const queueData = React.useMemo(() => {
     if (!contextQueue) return [];
     try {
       const start = startOfDay(parseISO(dateRange.startDate));
       const end = endOfDay(parseISO(dateRange.endDate));
+
       return contextQueue.filter(item => {
-        if (!item.checkInTime) return false;
-        const itemDate = parseISO(item.checkInTime);
-        return itemDate >= start && itemDate <= end;
+        if (item.status === 'completed' && item.treatmentDate) {
+          // try {
+          //   const treatmentDate = parseISO(item.treatmentDate);
+          //   return treatmentDate >= start && treatmentDate <= end;
+          // } catch (err) {
+          //   return false;
+          // }
+
+          // ✅ Best & Clean Fix
+          const treatmentDateStr = item.treatmentDate?.toString().trim();
+
+          if (!treatmentDateStr) {
+            return false;
+          }
+
+          try {
+            const treatmentDate = parseISO(treatmentDateStr);
+
+            if (isNaN(treatmentDate.getTime())) {
+              return false;
+            }
+
+            return treatmentDate >= start && treatmentDate <= end;
+          } catch (err) {
+            return false;
+          }
+        }
+
+        if (item.status !== 'completed' && item.checkInTime) {
+          try {
+            const checkInDate = parseISO(item.checkInTime);
+            return checkInDate >= start && checkInDate <= end;
+          } catch (err) {
+            return false;
+          }
+        }
+
+        return false;
       });
     } catch (err) {
-      console.warn('Date parsing error', err);
       return [];
     }
   }, [contextQueue, dateRange]);
@@ -78,7 +119,6 @@ export default function OperatorQueue() {
         p.id === queueItem.patientId
       ) || null;
     } catch (error) {
-      console.error('Error fetching patient data:', error);
       return null;
     }
   }, [patients]);
@@ -87,6 +127,15 @@ export default function OperatorQueue() {
     if (!patientId || !contextBills) return [];
     return contextBills.filter(b => b.patientId === patientId);
   };
+
+  // Get pre-receive total for a patient
+  const getPatientPreReceiveTotal = useCallback((patientId: string, patientNumber: string, patientName: string) => {
+    const preReceiveTransactions = (contextTransactions || []).filter(t =>
+      t.type === 'pre_receive' &&
+      (t.patientId === patientId || t.patientNumber === patientNumber || t.patientName === patientName)
+    );
+    return preReceiveTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+  }, [contextTransactions]);
 
   const filteredQueueData = queueData.filter(item => {
     const matchesSearch =
@@ -124,11 +173,9 @@ export default function OperatorQueue() {
 
   const handleDirectPrint = (item: QueueItem) => {
     try {
-      // 1. Parse treatments
       const treatmentItems: { name: string; fee: number }[] = [];
       let treatmentString = item.treatment || '';
 
-      // Try to parse "Treatment (Rs. 500), Treatment 2 (Rs. 1000)" format
       const parts = treatmentString.split(/,\s*(?![^(]*\))/);
       parts.forEach(part => {
         const match = part.match(/^(.*?)\s*\(Rs\.\s*([\d,]+)\)$/i);
@@ -145,7 +192,6 @@ export default function OperatorQueue() {
         }
       });
 
-      // Fix fees if parsing missed them but total exists
       const parsedTotal = treatmentItems.reduce((sum, t) => sum + t.fee, 0);
       const itemFee = item.fee || 0;
       if (parsedTotal !== itemFee) {
@@ -156,7 +202,6 @@ export default function OperatorQueue() {
         }
       }
 
-      // 2. Calculate Financials
       const patientData = getPatientDataForQueueItem(item);
       const currentPendingBalance = patientData?.pendingBalance || 0;
 
@@ -164,9 +209,6 @@ export default function OperatorQueue() {
       const amountPaid = item.amountPaid || 0;
       const treatmentFee = itemFee;
 
-      // Reverse calculate Previous Pending
-      // Final Balance = Previous + Fee - Discount - Paid
-      // Previous = Final Balance - Fee + Discount + Paid
       let previousPending = currentPendingBalance - treatmentFee + discount + amountPaid;
       if (previousPending < 0) previousPending = 0;
 
@@ -174,64 +216,69 @@ export default function OperatorQueue() {
       const totalDueAfterDiscount = Math.max(0, totalDueBeforeDiscount - discount);
       const remainingAfterPayment = Math.max(0, totalDueAfterDiscount - amountPaid);
 
-      // 3. Prepare Print Content
       const doctorName = staff.find(s => s.id === item.doctorId)?.name || item.doctor || '—';
-      const now = new Date(); // Use current date for reprint
-      const dateStr = now.toLocaleString('en-PK', {
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', hour12: true
-      });
+
+      const displayDate = item.treatmentDate
+        // ? 
+        ? format(parseISO(String(item.treatmentDate)), 'dd/MM/yyyy')
+        : format(new Date(), 'dd/MM/yyyy');
+
+      const displayTime = item.treatmentTime || format(new Date(), 'hh:mm a');
 
       const treatmentsRows = treatmentItems.map((t, i) => `
         <tr>
-          <td style="border:1px solid #000;padding:3px;">${i + 1}</td>
-          <td style="border:1px solid #000;padding:3px;">${t.name}</td>
-          <td style="border:1px solid #000;padding:3px;text-align:right;">Rs. ${t.fee.toFixed(0)}</td>
+          <td style="border:1px solid #000;padding:4px;">${i + 1}</td>
+          <td style="border:1px solid #000;padding:4px;">${t.name}</td>
+          <td style="border:1px solid #000;padding:4px;text-align:right;">Rs. ${t.fee.toFixed(0)}</td>
         </tr>
       `).join('');
 
       const printContent = `
-JINNAH DENTAL CLINIC
+================================
 Token: #${item.tokenNumber || '—'}
 Patient: ${item.patientName}
 Phone: ${item.patientPhone || 'N/A'}
-Date: ${dateStr}
+Date: ${displayDate}
+Time: ${displayTime}
 Doctor: ${doctorName}
---------------------------------
+================================
+
 TREATMENTS
 --------------------------------
-<table style="width:100%;border-collapse:collapse;font-size:12px;">
+<table style="width:100%;border-collapse:collapse;font-size:13px;">
   <thead>
     <tr style="background:#f0f0f0;">
-      <th style="border:1px solid #000;padding:3px;">S.No</th>
-      <th style="border:1px solid #000;padding:3px;">Treatment</th>
-      <th style="border:1px solid #000;padding:3px;">Fee</th>
+      <th style="border:1px solid #000;padding:5px;">S.No</th>
+      <th style="border:1px solid #000;padding:5px;">Treatment</th>
+      <th style="border:1px solid #000;padding:5px;text-align:right;">Fee</th>
     </tr>
   </thead>
   <tbody>
     ${treatmentsRows}
-    <tr style="font-weight:bold;">
-      <td colspan="2" style="border:1px solid #000;padding:3px;">Total Treatments</td>
-      <td style="border:1px solid #000;padding:3px;text-align:right;">Rs. ${treatmentFee.toFixed(0)}</td>
+    <tr style="font-weight:bold;background:#f9f9f9;">
+      <td colspan="2" style="border:1px solid #000;padding:5px;">Total Treatments</td>
+      <td style="border:1px solid #000;padding:5px;text-align:right;">Rs. ${treatmentFee.toFixed(0)}</td>
     </tr>
   </tbody>
 </table>
+
 --------------------------------
 PAYMENT SUMMARY
 --------------------------------
-Previous Pending: Rs. ${previousPending.toFixed(0)}
+Previous Pending : Rs. ${previousPending.toFixed(0)}
 Current Treatments: Rs. ${treatmentFee.toFixed(0)}
-Discount: Rs. ${discount.toFixed(0)}
+Discount          : Rs. ${discount.toFixed(0)}
 --------------------------------
-Total Due: Rs. ${totalDueAfterDiscount.toFixed(0)}
-Paid: Rs. ${amountPaid.toFixed(0)}
-Remaining: Rs. ${remainingAfterPayment.toFixed(0)}
+Total Due         : Rs. ${totalDueAfterDiscount.toFixed(0)}
+Paid              : Rs. ${amountPaid.toFixed(0)}
+**Remaining**     : Rs. ${remainingAfterPayment.toFixed(0)}
 --------------------------------
 Status: ${item.paymentStatus ? item.paymentStatus.toUpperCase() : 'PENDING'}
 Notes: ${item.notes || 'None'}
---------------------------------
+================================
 Thank You! Visit Again
 Powered by Saynz Technologies
+Contact Us: 0347 1887181
 `.trim();
 
       const printWindow = window.open('', '_blank');
@@ -241,48 +288,65 @@ Powered by Saynz Technologies
       }
 
       printWindow.document.write(`
-        <html>
-          <head>
-            <title>Receipt - ${item.patientName}</title>
-            <style>
-              @page { size: 80mm auto; margin: 0; }
-              body { 
-                margin: 0; 
-                padding: 4mm; 
-                font-family: 'Courier New', Courier, monospace; 
-                font-size: 12px; 
-                line-height: 1.2; 
-                width: 72mm; 
-              }
-              table { 
-                width: 100%; 
-                border-collapse: collapse; 
-                margin: 4px 0; 
-              }
-              th, td { 
-                border: 1px solid #000; 
-                padding: 3px; 
-                text-align: left;
-              }
-              .bold { font-weight: bold; }
-              pre { white-space: pre-wrap; word-wrap: break-word; }
-            </style>
-          </head>
-          <body>
-            <pre>${printContent}</pre>
-            <script>
-              window.onload = function() {
+      <html>
+        <head>
+          <title>Receipt - ${item.patientName}</title>
+          <style>
+            @page { size: 80mm auto; margin: 0; }
+            body { 
+              margin: 0; 
+              padding: 5mm; 
+              font-family: 'Courier New', Courier, monospace; 
+              font-size: 12px; 
+              line-height: 1.3; 
+              width: 72mm; 
+            }
+            .clinic-title {
+              font-size: 18px;
+              font-weight: bold;
+              text-align: center;
+              margin-bottom: 8px;
+              letter-spacing: 1px;
+            }
+            .divider {
+              border-top: 1px dashed #000;
+              margin: 8px 0;
+            }
+            table { 
+              width: 100%; 
+              border-collapse: collapse; 
+              margin: 6px 0; 
+            }
+            th, td { 
+              border: 1px solid #000; 
+              padding: 5px; 
+              text-align: left;
+            }
+            th { background:#f0f0f0; }
+            .bold { font-weight: bold; }
+            .highlight { font-weight: bold; font-size: 13px; }
+          </style>
+        </head>
+        <body>
+          <div class="clinic-title">JINNAH DENTAL CLINIC🦷</div>
+          <div class="divider"></div>
+          
+          <pre style="margin:0; font-size:12px;">${printContent}</pre>
+
+          <script>
+            window.onload = function() {
+              setTimeout(function() {
+                window.print();
                 setTimeout(function() {
-                  window.print();
-                  setTimeout(function() {
-                    window.close();
-                  }, 1000);
-                }, 300);
-              }
-            </script>
-          </body>
-        </html>
-      `);
+                  window.close();
+                }, 800);
+              }, 400);
+            }
+          </script>
+        </body>
+      </html>
+    `);
+
       printWindow.document.close();
 
     } catch (error) {
@@ -310,10 +374,8 @@ Powered by Saynz Technologies
 
   const handleAddPayment = async (queueItem: QueueItem, paymentData: any) => {
     const toastId = toast.loading('Processing payment...');
-    // GLOBAL TOAST GUARD
     const timeoutId = setTimeout(() => {
       toast.dismiss(toastId);
-      console.warn('TOAST GUARD: Forced payment toast dismissal after 4 seconds');
     }, 4000);
 
     try {
@@ -330,13 +392,16 @@ Powered by Saynz Technologies
       const currentPaid = queueItem.amountPaid || 0;
       const totalPaid = currentPaid + newPayment;
 
-      // Total due is (Treatments Fee + Previous Pending)
-      const totalDueBeforeDiscount = (queueItem.fee || 0) + (queueItem.previousPending || 0);
-      const totalDueAfterDiscount = Math.max(0, totalDueBeforeDiscount - discount);
+      // ============================================================
+      // CRITICAL FIX: Sirf is treatment ka fee consider karo
+      // ============================================================
+      const treatmentFee = queueItem.fee || 0;
+      const preReceiveAmount = queueItem.preReceiveAmount || 0;
+      const totalDueForThisTreatment = Math.max(0, treatmentFee - preReceiveAmount);
 
       let paymentStatus: 'pending' | 'partial' | 'paid';
 
-      if (totalPaid >= totalDueAfterDiscount) {
+      if (totalPaid >= totalDueForThisTreatment) {
         paymentStatus = 'paid';
       } else if (totalPaid > 0) {
         paymentStatus = 'partial';
@@ -360,7 +425,7 @@ Powered by Saynz Technologies
         patientNumber: patientData.patientNumber,
         patientName: queueItem.patientName,
         treatment: queueItem.treatment || '',
-        totalAmount: totalDueBeforeDiscount,
+        totalAmount: totalDueForThisTreatment,
         amountPaid: newPayment,
         discount: discount,
         paymentMethod: paymentData.paymentMethod || 'cash',
@@ -371,14 +436,55 @@ Powered by Saynz Technologies
       };
       await updateLocal('bills', newBill);
 
-      const newPending = Math.max(0, (patientData.pendingBalance || 0) - newPayment);
+      // ============================================================
+      // CRITICAL FIX: Patient update - Sirf totalPaid update karo
+      // Pending balance = (old pending + fee) - totalPaid
+      // ============================================================
+      const oldPending = patientData.pendingBalance || 0;
+      const newPendingBalance = oldPending + totalDueForThisTreatment - totalPaid;
       const newTotalPaid = (patientData.totalPaid || 0) + newPayment;
+
       const updatedPatient = {
         ...patientData,
-        pendingBalance: newPending,
-        totalPaid: newTotalPaid
+        pendingBalance: Math.max(0, newPendingBalance),
+        totalPaid: newTotalPaid,
+        lastVisit: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       };
+
+      console.log('[Payment] Debug:', {
+        oldPending,
+        treatmentFee,
+        preReceiveAmount,
+        totalDueForThisTreatment,
+        totalPaid,
+        newPendingBalance,
+        oldTotalPaid: patientData.totalPaid,
+        newTotalPaid
+      });
+
       await updateLocal('patients', updatedPatient);
+
+      // 4. Create Transaction record for the payment (for history tracking)
+      const nowISO = new Date().toISOString();
+      const transaction: any = {
+        id: `TXN-${Date.now()}`,
+        patientNumber: patientData.patientNumber,
+        patientName: patientData.name,
+        amount: newPayment,
+        date: nowISO,
+        type: 'treatment_payment',
+        method: paymentData.paymentMethod || 'cash',
+        notes: paymentData.notes || `Payment for treatment: ${updatedQueueItem.treatment}`,
+        paymentDate: nowISO.split('T')[0],
+        paymentTime: nowISO.split('T')[1].split('.')[0],
+        fullPaymentDateTime: nowISO,
+        createdAt: nowISO,
+        updatedAt: nowISO,
+        queueItemId: queueItem.id,
+        billId: newBill.id
+      };
+      await updateLocal('transactions', transaction);
 
       clearTimeout(timeoutId);
       toast.dismiss(toastId);
@@ -390,20 +496,13 @@ Powered by Saynz Technologies
       clearTimeout(timeoutId);
       toast.dismiss(toastId);
       toast.error('Failed to process payment');
-
-      // Show alert for database errors
-      if (typeof window !== 'undefined' && error instanceof Error) {
-        window.alert(`Database Error: ${error.message}`);
-      }
     }
   };
 
   const handleWalkInPatient = async (patientData: any) => {
     const toastId = toast.loading('Adding to queue...');
-    // GLOBAL TOAST GUARD
     const timeoutId = setTimeout(() => {
       toast.dismiss(toastId);
-      console.warn('TOAST GUARD: Forced walk-in toast dismissal after 4 seconds');
     }, 4000);
 
     try {
@@ -464,16 +563,10 @@ Powered by Saynz Technologies
       clearTimeout(timeoutId);
       toast.dismiss(toastId);
       toast.error('Failed to add to queue');
-
-      // Show alert for database errors
-      if (typeof window !== 'undefined' && error instanceof Error) {
-        window.alert(`Database Error: ${error.message}`);
-      }
     }
   };
 
   const handleSavePatient = (patientData: any) => {
-    // PatientFormModal handles updateLocal internally
     setShowPatientModal(false);
     setSelectedPatient(null);
   };
@@ -482,6 +575,8 @@ Powered by Saynz Technologies
     if (!('speechSynthesis' in window)) return;
 
     const synth = window.speechSynthesis;
+    // const tokenStr = tokenNumber.toString();
+    const tokenStr = String(tokenNumber);
 
     const speak = () => {
       const voices = synth.getVoices();
@@ -489,11 +584,10 @@ Powered by Saynz Technologies
         voices.find(v => v.name === 'Google UK English Female') ||
         voices.find(v => v.name.toLowerCase().includes('female')) ||
         voices.find(v => v.name.toLowerCase().includes('zira')) ||
-        voices.find(v => v.name.toLowerCase().includes('susan')) ||
         voices.find(v => v.lang === 'en-GB') ||
         voices.find(v => v.lang === 'en-US');
 
-      const text = `Token number ${tokenNumber}. please proceed to the treatment room.`;
+      const text = `Token number ${tokenStr}. please proceed to the treatment room.`;
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.voice = femaleVoice || null;
       utterance.lang = 'en-GB';
@@ -512,6 +606,32 @@ Powered by Saynz Technologies
     }
   };
 
+  // Handle cancel confirmation
+  const handleCancelConfirm = async (reason: string) => {
+    if (!cancelItem) return;
+
+    if (cancelItem.status === 'completed') {
+      toast.error('Cannot cancel completed treatment. Use delete instead.');
+      setShowCancelPrompt(false);
+      setCancelItem(null);
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const updateData = {
+      status: 'cancelled' as const,
+      cancelledAt: now,
+      notes: `${cancelItem.notes || ''}\nCancelled: ${reason}`
+    };
+
+    // Your update logic here...
+    await updateLocal('queue', { ...cancelItem, ...updateData });
+
+    setShowCancelPrompt(false);
+    setCancelItem(null);
+    toast.success('Treatment cancelled');
+  };
+
   const handleQueueAction = async (item: QueueItem, action: string) => {
     try {
       const now = new Date().toISOString();
@@ -523,7 +643,8 @@ Powered by Saynz Technologies
           treatmentStartTime: now
         };
         speakAnnouncement(item.tokenNumber);
-      } else if (action === 'complete') {
+      }
+      else if (action === 'complete') {
         const patientData = getPatientDataForQueueItem(item);
         if (patientData) {
           setSelectedPatientData(patientData);
@@ -531,27 +652,259 @@ Powered by Saynz Technologies
           setShowTreatmentModal(true);
           return;
         }
-      } else if (action === 'back-to-waiting') {
+      }
+      else if (action === 'back-to-waiting') {
         updateData = {
           status: 'waiting' as const,
           treatmentStartTime: null,
           treatment: '',
           fee: 0,
-          doctor: ''
+          doctor: '',
+          doctorId: '',
+          treatmentDate: '',
+          treatmentTime: '',
+          treatmentDateTime: ''
         };
-      } else if (action === 'back-to-treatment') {
-        updateData = {
-          status: 'in_treatment' as const,
-          treatmentEndTime: null
-        };
-      } else if (action === 'cancel') {
-        const reason = prompt('Cancellation reason:') || 'Patient request';
-        updateData = {
-          status: 'cancelled' as const,
-          cancelledAt: now,
-          notes: `${item.notes || ''}\nCancelled: ${reason}`
-        };
-      } else if (action === 'edit') {
+      }
+
+      // else if (action === 'back-to-treatment') {
+      //   const toastId = toast.loading('Reverting treatment...');
+      //   let updateData: Partial<QueueItem> = {};
+
+      //   try {
+      //     // Get the queue item's pre-receive amount
+      //     const preReceiveAmount = item.preReceiveAmount || 0;
+
+      //     // ============================================================
+      //     // STEP 1: Delete ALL bills for this queue item (Local + Firebase)
+      //     // ============================================================
+      //     const queueBills = contextBills.filter(b => b.queueItemId === item.id);
+      //     for (const bill of queueBills) {
+      //       // Local delete
+      //       await deleteLocal('bills', bill.id);
+      //       console.log(`[BackToTreatment] Deleted bill locally: ${bill.id}`);
+
+      //       // Direct Firebase delete
+      //       try {
+      //         const { db } = await import('@/lib/firebase');
+      //         const { deleteDoc, doc } = await import('firebase/firestore');
+      //         await deleteDoc(doc(db, 'bills', bill.id));
+      //         console.log(`[BackToTreatment] Deleted bill from Firebase: ${bill.id}`);
+      //       } catch (firebaseErr) {
+      //         console.log(`[BackToTreatment] Firebase bill delete failed: ${bill.id}`, firebaseErr);
+      //       }
+      //     }
+
+      //     // ============================================================
+      //     // STEP 2: Delete ALL payment transactions (Local + Firebase)
+      //     // ============================================================
+      //     const queueTransactions = (contextTransactions || []).filter(t => t.queueItemId === item.id);
+      //     for (const txn of queueTransactions) {
+      //       // Local delete
+      //       await deleteLocal('transactions', txn.id);
+      //       console.log(`[BackToTreatment] Deleted transaction locally: ${txn.id}`);
+
+      //       // Direct Firebase delete
+      //       try {
+      //         const { db } = await import('@/lib/firebase');
+      //         const { deleteDoc, doc } = await import('firebase/firestore');
+      //         await deleteDoc(doc(db, 'transactions', txn.id));
+      //         console.log(`[BackToTreatment] Deleted transaction from Firebase: ${txn.id}`);
+      //       } catch (firebaseErr) {
+      //         console.log(`[BackToTreatment] Firebase transaction delete failed: ${txn.id}`, firebaseErr);
+      //       }
+      //     }
+
+      //     // Reverse patient changes
+      //     const patientData = getPatientDataForQueueItem(item);
+      //     if (patientData) {
+      //       const fee = item.fee || 0;
+      //       const amountPaid = item.amountPaid || 0;
+      //       const effectiveFee = Math.max(0, fee - preReceiveAmount);
+      //       const pendingAdded = effectiveFee - amountPaid;
+
+      //       const updatedPatient = {
+      //         ...patientData,
+      //         pendingBalance: Math.max(0, (patientData.pendingBalance || 0) - pendingAdded),
+      //         totalPaid: Math.max(0, (patientData.totalPaid || 0) - amountPaid),
+      //         totalVisits: Math.max(0, (patientData.totalVisits || 0) - 1),
+      //         updatedAt: new Date().toISOString()
+      //       };
+      //       await updateLocal('patients', updatedPatient);
+
+      //       // Also update patient in Firebase directly
+      //       try {
+      //         const { db } = await import('@/lib/firebase');
+      //         const { doc, setDoc } = await import('firebase/firestore');
+      //         await setDoc(doc(db, 'patients', patientData.id), updatedPatient, { merge: true });
+      //         console.log(`[BackToTreatment] Updated patient in Firebase: ${patientData.id}`);
+      //       } catch (firebaseErr) {
+      //         console.log(`[BackToTreatment] Firebase patient update failed:`, firebaseErr);
+      //       }
+      //     }
+
+      //     // Reset queue item (clear pre-receive for next time)
+      //     updateData = {
+      //       status: 'in_treatment' as const,
+      //       treatmentEndTime: null,
+      //       amountPaid: 0,
+      //       discount: 0,
+      //       paymentStatus: 'pending' as const,
+      //       preReceiveAmount: 0, // CLEAR pre-receive for next treatment
+      //       treatment: '',
+      //       fee: 0,
+      //       doctor: '',
+      //       doctorId: '',
+      //       treatmentDate: '',
+      //       treatmentTime: '',
+      //       treatmentDateTime: '',
+      //       notes: `${item.notes || ''}\n[${new Date().toLocaleString()}] Treatment reopened`
+      //     };
+
+      //     // Update queue item locally
+      //     await updateQueueItemOptimistic(item.id, updateData);
+
+      //     // Also update queue item in Firebase directly
+      //     try {
+      //       const { db } = await import('@/lib/firebase');
+      //       const { doc, setDoc } = await import('firebase/firestore');
+      //       const updatedQueueItem = { ...item, ...updateData, updatedAt: new Date().toISOString() };
+      //       await setDoc(doc(db, 'queue', item.id), updatedQueueItem, { merge: true });
+      //       console.log(`[BackToTreatment] Updated queue item in Firebase: ${item.id}`);
+      //     } catch (firebaseErr) {
+      //       console.log(`[BackToTreatment] Firebase queue update failed:`, firebaseErr);
+      //     }
+
+      //     toast.dismiss(toastId);
+      //     toast.success('Treatment reopened and payment reversed');
+
+      //   } catch (error) {
+      //     toast.dismiss(toastId);
+      //     console.error('[BackToTreatment] Error:', error);
+      //     toast.error('Failed to revert treatment', { id: toastId });
+      //   }
+
+      // }
+
+      else if (action === 'back-to-treatment') {
+        const toastId = toast.loading('Reverting treatment...');
+        let updateData: Partial<QueueItem> = {};
+
+        try {
+          const preReceiveAmount = item.preReceiveAmount || 0;
+
+          // ============================================================
+          // STEP 1: Delete bills (Local only - Firebase will sync later)
+          // ============================================================
+          const queueBills = contextBills.filter(b => b.queueItemId === item.id);
+          for (const bill of queueBills) {
+            await deleteLocal('bills', bill.id);
+            console.log(`[BackToTreatment] Deleted bill locally: ${bill.id}`);
+
+            // Add to sync queue for offline sync
+            await addToSyncQueue('bills', 'delete', { id: bill.id });
+          }
+
+          // ============================================================
+          // STEP 2: Delete transactions (Local only - Firebase will sync later)
+          // ============================================================
+          const queueTransactions = (contextTransactions || []).filter(t => t.queueItemId === item.id);
+          for (const txn of queueTransactions) {
+            await deleteLocal('transactions', txn.id);
+            console.log(`[BackToTreatment] Deleted transaction locally: ${txn.id}`);
+
+            // Add to sync queue
+            await addToSyncQueue('transactions', 'delete', { id: txn.id });
+          }
+
+          // ============================================================
+          // STEP 3: Reverse patient changes (Local only)
+          // ============================================================
+          const patientData = getPatientDataForQueueItem(item);
+          if (patientData) {
+            const fee = item.fee || 0;
+            const amountPaid = item.amountPaid || 0;
+            const effectiveFee = Math.max(0, fee - preReceiveAmount);
+            const pendingAdded = effectiveFee - amountPaid;
+
+            const updatedPatient = {
+              ...patientData,
+              pendingBalance: Math.max(0, (patientData.pendingBalance || 0) - pendingAdded),
+              totalPaid: Math.max(0, (patientData.totalPaid || 0) - amountPaid),
+              totalVisits: Math.max(0, (patientData.totalVisits || 0) - 1),
+              updatedAt: new Date().toISOString()
+            };
+
+            await updateLocal('patients', updatedPatient);
+            console.log(`[BackToTreatment] Patient updated locally`);
+
+            // Add to sync queue
+            await addToSyncQueue('patients', 'update', updatedPatient);
+          }
+
+          // ============================================================
+          // STEP 4: Reset queue item (Local only)
+          // ============================================================
+          updateData = {
+            status: 'in_treatment' as const,
+            treatmentEndTime: null,
+            amountPaid: 0,
+            discount: 0,
+            paymentStatus: 'pending' as const,
+            preReceiveAmount: 0,
+            treatment: '',
+            fee: 0,
+            doctor: '',
+            doctorId: '',
+            treatmentDate: '',
+            treatmentTime: '',
+            treatmentDateTime: '',
+            notes: `${item.notes || ''}\n[${new Date().toLocaleString()}] Treatment reopened`
+          };
+
+          await updateQueueItemOptimistic(item.id, updateData);
+
+          // Add to sync queue
+          const updatedQueueItem = { ...item, ...updateData, updatedAt: new Date().toISOString() };
+          await addToSyncQueue('queue', 'update', updatedQueueItem);
+
+          toast.dismiss(toastId);
+
+          // Check if online, otherwise show offline message
+          if (navigator.onLine) {
+            toast.success('Treatment reopened and payment reversed');
+          } else {
+            toast.warning('Treatment reopened (Offline mode - will sync when online)');
+          }
+
+        } catch (error) {
+          toast.dismiss(toastId);
+          console.error('[BackToTreatment] Error:', error);
+          toast.error('Failed to revert treatment');
+        }
+      }
+      // else if (action === 'cancel') {
+      //   const reason = prompt('Cancellation reason:') || 'Patient request';
+
+      //   if (item.status === 'completed') {
+      //     toast.error('Cannot cancel completed treatment. Use delete instead.');
+      //     return;
+      //   }
+
+      //   updateData = {
+      //     status: 'cancelled' as const,
+      //     cancelledAt: now,
+      //     notes: `${item.notes || ''}\nCancelled: ${reason}`
+      //   };
+      // }
+
+      else if (action === 'cancel') {
+        // Show custom modal instead of prompt
+        setCancelItem(item);
+        setShowCancelPrompt(true);
+      }
+
+      else if (action === 'edit') {
         const patient = patients.find(pt =>
           (item.patientNumber && pt.patientNumber === item.patientNumber) ||
           pt.id === item.patientId
@@ -564,28 +917,80 @@ Powered by Saynz Technologies
           toast.error('Patient record not found');
         }
         return;
-      } else if (action === 'delete') {
-        if (confirm(`Remove ${item.patientName} from queue?`)) {
+      }
+      else if (action === 'delete') {
+        if (!confirm(`Remove ${item.patientName} from queue?`)) return;
+
+        const wasCompleted = item.status === 'completed';
+        const wasInTreatment = item.status === 'in_treatment';
+
+        if (wasCompleted) {
+          const confirmMsg = `WARNING: This treatment was COMPLETED.\n\nDeleting will:\n- Remove all payment records\n- Adjust patient balance\n- Decrease visit count\n\nAre you sure?`;
+
+          if (!confirm(confirmMsg)) return;
+
+          try {
+            const queueBills = contextBills.filter(b => b.queueItemId === item.id);
+            for (const bill of queueBills) {
+              await deleteLocal('bills', bill.id);
+            }
+
+            const queueTransactions = (contextTransactions || []).filter(t => t.queueItemId === item.id);
+            for (const txn of queueTransactions) {
+              await deleteLocal('transactions', txn.id);
+            }
+
+            const patientData = getPatientDataForQueueItem(item);
+            if (patientData) {
+              const fee = item.fee || 0;
+              const amountPaid = item.amountPaid || 0;
+              const preReceiveTotal = getPatientPreReceiveTotal(patientData.id, patientData.patientNumber, patientData.name);
+
+              const effectiveFee = Math.max(0, fee - preReceiveTotal);
+              const pendingAdded = effectiveFee - amountPaid;
+
+              const updatedPatient = {
+                ...patientData,
+                pendingBalance: Math.max(0, (patientData.pendingBalance || 0) - pendingAdded),
+                totalPaid: Math.max(0, (patientData.totalPaid || 0) - amountPaid),
+                totalVisits: Math.max(0, (patientData.totalVisits || 0) - 1),
+                updatedAt: new Date().toISOString()
+              };
+              await updateLocal('patients', updatedPatient);
+            }
+
+            await deleteLocal('queue', item.id);
+            toast.success(`Removed ${item.patientName} and reversed all records`);
+
+          } catch (error) {
+            console.error('Error deleting completed treatment:', error);
+            toast.error('Failed to delete record');
+          }
+
+        } else if (wasInTreatment) {
+          if (confirm(`Remove ${item.patientName} from treatment? No visit will be recorded.`)) {
+            await deleteLocal('queue', item.id);
+            toast.success(`Removed ${item.patientName} from treatment`);
+          }
+
+        } else {
           await deleteLocal('queue', item.id);
           toast.success(`Removed ${item.patientName} from queue`);
         }
+
         return;
       }
 
       if (Object.keys(updateData).length > 0) {
-        // FIX: Use optimistic update function for immediate UI feedback
-        // IMPORTANT: Don't await - let it run in background
-        updateQueueItemOptimistic(item.id, updateData);
+        await updateQueueItemOptimistic(item.id, updateData);
+        if (action === 'back-to-treatment') {
+          toast.success('Treatment reopened');
+        }
       }
 
     } catch (error) {
       console.error('Queue action error:', error);
       toast.error('Failed to update queue');
-
-      // Show alert for database errors
-      if (typeof window !== 'undefined' && error instanceof Error) {
-        window.alert(`Database Error: ${error.message}`);
-      }
     }
   };
 
@@ -606,12 +1011,107 @@ Powered by Saynz Technologies
     setDateRange({ startDate: dateStr, endDate: dateStr });
   };
 
-  const handleTreatmentSubmit = async (data: {
-    treatment: string;
-    fee: number;
-    doctor: string;
-    doctorId?: string;
-  }) => {
+  // const handleTreatmentSubmit = async (data: any) => {
+  //   if (!selectedQueueItemForTreatment || !selectedPatientData) return;
+
+  //   if (isLicenseExpired) {
+  //     toast.error("License Expired. Please renew to complete treatments.");
+  //     return;
+  //   }
+
+  //   try {
+  //     const now = new Date().toISOString();
+  //     const treatmentDate = data.treatmentDate || format(new Date(), 'yyyy-MM-dd');
+  //     const treatmentTime = data.treatmentTime || format(new Date(), 'HH:mm:ss');
+
+  //     // Get pre-receive amount from the data
+  //     const preReceiveAmount = data.preReceiveAmount || selectedQueueItemForTreatment.preReceiveAmount || 0;
+
+  //     // IMPORTANT: Don't set amountPaid here - let payment modal handle it
+  //     // Only store the fee and pre-receive amount
+  //     const fee = data.fee;
+
+  //     console.log('[TreatmentSubmit] Saving treatment:', {
+  //       preReceive: preReceiveAmount,
+  //       fee: fee,
+  //       treatment: data.treatment
+  //     });
+
+  //     // Prepare update data for queue item - WITHOUT amountPaid
+  //     const updateData = {
+  //       status: 'completed' as const,
+  //       treatmentEndTime: now,
+  //       treatment: data.treatment,
+  //       fee: fee,
+  //       doctor: data.doctor,
+  //       doctorId: data.doctorId,
+  //       treatmentDate: treatmentDate,
+  //       treatmentTime: treatmentTime,
+  //       treatmentDateTime: `${treatmentDate}T${treatmentTime}`,
+  //       preReceiveAmount: preReceiveAmount,
+  //       // IMPORTANT: Don't set amountPaid here - leave as 0 or existing
+  //       amountPaid: 0,  // Reset to 0, payment modal will handle payment
+  //       discount: 0,
+  //       paymentStatus: 'pending' as const,
+  //       checkInTime: selectedQueueItemForTreatment.checkInTime,
+  //       tokenNumber: selectedQueueItemForTreatment.tokenNumber,
+  //       patientId: selectedQueueItemForTreatment.patientId,
+  //       patientNumber: selectedQueueItemForTreatment.patientNumber,
+  //       patientName: selectedQueueItemForTreatment.patientName,
+  //       patientPhone: selectedQueueItemForTreatment.patientPhone,
+  //       updatedAt: now
+  //     };
+
+  //     // Update queue item
+  //     await updateLocal('queue', {
+  //       ...selectedQueueItemForTreatment,
+  //       ...updateData
+  //     });
+
+  //     // Don't update patient's totalPaid or pendingBalance here
+  //     // Let payment modal handle all financial transactions
+
+  //     // Only increment visit count
+  //     const updatedPatient = {
+  //       ...selectedPatientData,
+  //       totalVisits: (selectedPatientData.totalVisits || 0) + 1,
+  //       lastVisit: now,
+  //       updatedAt: now
+  //     };
+
+  //     await updateLocal('patients', updatedPatient);
+
+  //     toast.success('Treatment saved! Please process payment.');
+
+  //     // Close treatment modal
+  //     setShowTreatmentModal(false);
+
+  //     // Store the completed queue item
+  //     const completedQueueItem = { ...selectedQueueItemForTreatment, ...updateData };
+
+  //     // Clear selection
+  //     setSelectedQueueItemForTreatment(null);
+
+  //     // Show payment modal
+  //     setTimeout(() => {
+  //       const patientBills = contextBills.filter(b =>
+  //         b.patientId === updatedPatient.id || b.patientNumber === updatedPatient.patientNumber
+  //       );
+
+  //       setShowPaymentModal({
+  //         queueItem: completedQueueItem,
+  //         patientData: updatedPatient,
+  //         patientBills: patientBills
+  //       });
+  //     }, 500);
+
+  //   } catch (error) {
+  //     console.error('Error completing treatment:', error);
+  //     toast.error('Failed to save treatment');
+  //   }
+  // };
+
+  const handleTreatmentSubmit = async (data: any) => {
     if (!selectedQueueItemForTreatment || !selectedPatientData) return;
 
     if (isLicenseExpired) {
@@ -621,55 +1121,80 @@ Powered by Saynz Technologies
 
     try {
       const now = new Date().toISOString();
+      const treatmentDate = data.treatmentDate || format(new Date(), 'yyyy-MM-dd');
+      const treatmentTime = data.treatmentTime || format(new Date(), 'HH:mm:ss');
+
+      const preReceiveAmount = data.preReceiveAmount || selectedQueueItemForTreatment.preReceiveAmount || 0;
+      const fee = data.fee;
+
+      console.log('[TreatmentSubmit] Saving treatment:', {
+        preReceive: preReceiveAmount,
+        fee: fee,
+        treatment: data.treatment
+      });
 
       const updateData = {
         status: 'completed' as const,
         treatmentEndTime: now,
         treatment: data.treatment,
-        fee: data.fee,
+        fee: fee,
         doctor: data.doctor,
-        doctorId: data.doctorId
+        doctorId: data.doctorId,
+        treatmentDate: treatmentDate,
+        treatmentTime: treatmentTime,
+        treatmentDateTime: `${treatmentDate}T${treatmentTime}`,
+        preReceiveAmount: preReceiveAmount,
+        amountPaid: 0,
+        discount: 0,
+        paymentStatus: 'pending' as const,
+        checkInTime: selectedQueueItemForTreatment.checkInTime,
+        tokenNumber: selectedQueueItemForTreatment.tokenNumber,
+        patientId: selectedQueueItemForTreatment.patientId,
+        patientNumber: selectedQueueItemForTreatment.patientNumber,
+        patientName: selectedQueueItemForTreatment.patientName,
+        patientPhone: selectedQueueItemForTreatment.patientPhone,
+        updatedAt: now
       };
 
-      // FIX: Use optimistic update for immediate UI feedback
-      // Don't await - just trigger it
-      updateQueueItemOptimistic(selectedQueueItemForTreatment.id, updateData);
+      await updateLocal('queue', {
+        ...selectedQueueItemForTreatment,
+        ...updateData
+      });
 
-      const newPendingBalance = (selectedPatientData.pendingBalance || 0) + data.fee;
-      const newTotalVisits = (selectedPatientData.totalVisits || 0) + 1;
-
+      // ============================================================
+      // CRITICAL FIX: Sirf totalVisits increase karo, pending balance MAT change karo
+      // Pending balance payment modal mein handle hoga
+      // ============================================================
       const updatedPatient = {
         ...selectedPatientData,
-        pendingBalance: newPendingBalance,
-        totalVisits: newTotalVisits,
-        lastVisit: now
+        totalVisits: (selectedPatientData.totalVisits || 0) + 1,
+        lastVisit: now,
+        updatedAt: now
       };
 
-      // Update patient data - also don't await
-      updateLocal('patients', updatedPatient);
+      await updateLocal('patients', updatedPatient);
 
-      // Trigger payment modal for receipt generation
-      setTimeout(() => {
-        const patientBills = contextBills.filter(b => b.patientId === updatedPatient.id);
-        setShowPaymentModal({
-          queueItem: { ...selectedQueueItemForTreatment, ...updateData },
-          patientData: updatedPatient,
-          patientBills
-        });
-      }, 800);
+      toast.success('Treatment saved! Please process payment.');
 
       setShowTreatmentModal(false);
+      const completedQueueItem = { ...selectedQueueItemForTreatment, ...updateData };
       setSelectedQueueItemForTreatment(null);
-      setSelectedPatientData(null);
+
+      setTimeout(() => {
+        const patientBills = contextBills.filter(b =>
+          b.patientId === updatedPatient.id || b.patientNumber === updatedPatient.patientNumber
+        );
+
+        setShowPaymentModal({
+          queueItem: completedQueueItem,
+          patientData: updatedPatient,
+          patientBills: patientBills
+        });
+      }, 500);
 
     } catch (error) {
       console.error('Error completing treatment:', error);
-      toast.error('Failed to complete treatment');
-
-      // Show alert for database errors
-      if (typeof window !== 'undefined' && error instanceof Error) {
-        window.alert(`Database Error: ${error.message}`);
-      }
+      toast.error('Failed to save treatment');
     }
   };
 
@@ -704,6 +1229,33 @@ Powered by Saynz Technologies
     }
   };
 
+  const handlePaymentModalClose = async () => {
+    if (showPaymentModal && showPaymentModal.queueItem) {
+      const queueItem = showPaymentModal.queueItem;
+      const patientData = showPaymentModal.patientData;
+      const amountPaid = queueItem.amountPaid || 0;
+
+      // Only add to pending if no payment was made (Skipped)
+      if (amountPaid === 0) {
+        const treatmentFee = queueItem.fee || 0;
+        const preReceiveAmount = queueItem.preReceiveAmount || 0;
+        const totalDue = Math.max(0, treatmentFee - preReceiveAmount);
+
+        if (totalDue > 0) {
+          const updatedPatient = {
+            ...patientData,
+            pendingBalance: (patientData.pendingBalance || 0) + totalDue,
+            updatedAt: new Date().toISOString()
+          };
+          await updateLocal('patients', updatedPatient);
+          console.log('[PaymentModalClose] Added to pending:', totalDue);
+          toast.info(`Rs. ${totalDue} added to patient's pending balance`);
+        }
+      }
+    }
+    setShowPaymentModal(null);
+  };
+
   return (
     <div className="space-y-6 p-4">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -724,15 +1276,19 @@ Powered by Saynz Technologies
             disabled={loading.queue || loading.patients || isLicenseExpired}
           >
             <Users className="w-4 h-4" />
-            Walk-in Patient
+            Add Patient
           </Button>
         </div>
       </div>
 
+      {/* Date Filter Section */}
       <div className="bg-white border rounded-lg p-4">
         <div className="flex items-center gap-2 mb-3">
           <Calendar className="w-5 h-5 text-gray-600" />
           <h3 className="font-semibold">Date Range Filter</h3>
+          <span className="text-xs text-gray-500 ml-auto">
+            {selectedDoctor !== 'all' ? `Filtered by: ${availableDoctors.find(d => d.id === selectedDoctor)?.name || selectedDoctor}` : ''}
+          </span>
         </div>
 
         <div className="flex flex-col sm:flex-row gap-3">
@@ -770,6 +1326,9 @@ Powered by Saynz Technologies
 
         <div className="text-sm text-gray-500 mt-2">
           Showing data from {format(parseISO(dateRange.startDate), 'MMM dd, yyyy')} to {format(parseISO(dateRange.endDate), 'MMM dd, yyyy')}
+          <span className="ml-2 text-blue-600">
+            (Completed treatments by treatment date, others by check-in date)
+          </span>
         </div>
       </div>
 
@@ -874,6 +1433,18 @@ Powered by Saynz Technologies
             showBackButton={true}
             showPatientId={true}
           />
+
+          <CustomPrompt
+            open={showCancelPrompt}
+            title="Cancel Treatment"
+            message="Please enter cancellation reason:"
+            defaultValue="Patient request"
+            onConfirm={handleCancelConfirm}
+            onCancel={() => {
+              setShowCancelPrompt(false);
+              setCancelItem(null);
+            }}
+          />
         </div>
       )}
 
@@ -883,7 +1454,6 @@ Powered by Saynz Technologies
         onSubmit={modalMode === 'walk-in' ? handleWalkInPatient : handleSavePatient}
         patient={selectedPatient}
         isEditing={!!selectedPatient}
-        // doctors={availableDoctors} // Prop not supported in PatientFormModal
         mode={modalMode}
         existingPatients={patients}
         title={modalMode === 'walk-in'
@@ -897,7 +1467,8 @@ Powered by Saynz Technologies
           queueItem={showPaymentModal.queueItem}
           bills={showPaymentModal.patientBills}
           patientData={showPaymentModal.patientData}
-          onClose={() => setShowPaymentModal(null)}
+          // onClose={() => setShowPaymentModal(null)}
+          onClose={handlePaymentModalClose}
           onSubmit={handleAddPayment}
         />
       )}

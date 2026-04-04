@@ -8,12 +8,12 @@ import {
   User as FirebaseUser
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
-import { auth, db } from '@/lib/firebase';
+import { auth , db } from '@/lib/firebase';
 import { User, UserRole } from '@/types';
 
 const USERS_COLLECTION = 'users';
 
-// Register new user (Admin के लिए)
+// Register new user (Admin)
 export const registerUser = async (
   email: string, 
   password: string, 

@@ -4,7 +4,8 @@ import React, { createContext, useContext, useState, useCallback, ReactNode, use
 import { User, UserRole, AuthState } from '@/types';
 
 // IndexedDB Utilities
-import { saveToLocal, getFromLocal } from '@/services/indexedDbUtils';
+// import { saveToLocal, getFromLocal } from '@/services/expireindexedDbUtils_OLDs';
+import { dbManager, STORE_CONFIGS, getKeyPath } from '@/lib/indexedDB';
 import { toast } from 'sonner';
 
 interface AuthContextType extends AuthState {
@@ -49,7 +50,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log("Searching for user ID:", loginId);
 
       // Fetch all users to search by ID (since keyPath is role)
-      const usersRaw = await getFromLocal('users');
+      const usersRaw = await dbManager.getFromLocal('users');
       const users = (Array.isArray(usersRaw) ? usersRaw : []) as User[];
 
       const foundUser = users.find(u => u.id === loginId && u.password === password);

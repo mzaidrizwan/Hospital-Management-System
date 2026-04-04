@@ -6,7 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Lock, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { getFromLocal } from '@/services/indexedDbUtils';
+// import { getFromLocal } from '@/services/expireindexedDbUtils_OLDs';
+import { dbManager, STORE_CONFIGS, getKeyPath } from '@/lib/indexedDB';
 import { updateUserPasswordLocally } from '@/services/authService';
 
 interface OperatorChangePasswordProps {
@@ -36,7 +37,7 @@ export default function OperatorChangePassword({ userId }: OperatorChangePasswor
 
         try {
             // 2. Local-First Verification
-            const userRecord = await getFromLocal('users', userId) as any;
+            const userRecord = await dbManager.getFromLocal('users', userId) as any;
             if (!userRecord || userRecord.password !== currentPassword) {
                 toast.error('Verification Failed: Incorrect current password');
                 setIsSubmitting(false);

@@ -1,18 +1,19 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
     X,
     Trash2,
     Edit2,
-    Download,
     Calendar,
     DollarSign,
     Clock,
-    CheckCircle2,
-    AlertCircle,
     Save,
-    Undo2
+    UserCheck,
+    UserX,
+    CalendarOff,
+    RefreshCw,
+    Wallet
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -43,7 +44,6 @@ import { useData } from '@/context/DataContext';
 import { useAuth } from '@/context/AuthContext';
 import { toast } from 'sonner';
 import { formatCurrency, cn } from '@/lib/utils';
-import { smartSync, smartDelete } from '@/services/syncService';
 
 interface StaffActivityModalProps {
     open: boolean;
@@ -52,57 +52,115 @@ interface StaffActivityModalProps {
 }
 
 export default function StaffActivityModal({ open, onClose, staff }: StaffActivityModalProps) {
+    // ========== ALL HOOKS MUST BE CALLED FIRST (BEFORE ANY CONDITIONAL RETURN) ==========
     const {
         transactions,
         expenses,
         attendance: allAttendance,
         updateLocal,
-        deleteLocal
+        deleteLocal,
+        staff: staffList,
+        setStaff
     } = useData();
     const { user } = useAuth();
 
     const [editingTxn, setEditingTxn] = useState<Transaction | null>(null);
+    const [editingAttendance, setEditingAttendance] = useState<Attendance | null>(null);
     const [editFormData, setEditFormData] = useState({
         amount: 0,
-        date: ''
+        date: '',
+        time: '',
+        status: 'present' as 'present' | 'absent' | 'leave',
+        notes: ''
     });
-
-    if (!staff) return null;
+    const [isUpdating, setIsUpdating] = useState(false);
 
     const isAdmin = user?.role === 'admin';
-    const staffTransactions = (transactions || [])
-        .filter(t => t.staffId === staff.id)
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-    const staffAttendance = (allAttendance || [])
-        .filter(a => a.staffId === staff.id)
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    // ========== ALL useMemo HOOKS ==========
+    const staffTransactions = useMemo(() => {
+        if (!staff) return [];
+        return (transactions || [])
+            .filter(t => t.staffId === staff.id && t.type === 'Salary')
+            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    }, [transactions, staff?.id]);
 
-    const handleEditClick = (txn: Transaction) => {
+    const staffAttendance = useMemo(() => {
+        if (!staff) return [];
+        return (allAttendance || [])
+            .filter(a => a.staffId === staff.id)
+            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+            .map(att => ({
+                ...att,
+                time: (att as any).time || '--:--:--',
+                timestamp: (att as any).timestamp || ''
+            }));
+    }, [allAttendance, staff?.id]);
+
+    const groupedAttendance = useMemo(() => {
+        const grouped = new Map<string, Attendance>();
+        staffAttendance.forEach(att => {
+            const existing = grouped.get(att.date);
+            if (!existing || new Date(att.updatedAt || '').getTime() > new Date(existing.updatedAt || '').getTime()) {
+                grouped.set(att.date, att);
+            }
+        });
+        return Array.from(grouped.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    }, [staffAttendance]);
+
+    const totalPaid = useMemo(() => {
+        return staffTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+    }, [staffTransactions]);
+
+    // ========== ALL useEffect HOOKS (MUST BE BEFORE CONDITIONAL RETURN) ==========
+    useEffect(() => {
+        if (open && staff) {
+            const stillExists = staffList.some(s => s.id === staff.id);
+            if (!stillExists) {
+                toast.warning("This staff member has been deleted");
+                onClose();
+            }
+        }
+    }, [open, staff, staffList, onClose]);
+
+    // ========== NOW WE CAN HAVE CONDITIONAL RETURN ==========
+    if (!staff) return null;
+
+    // ========== Handlers (These can be after conditional return) ==========
+    const handleEditPayment = (txn: Transaction) => {
         setEditingTxn(txn);
         setEditFormData({
             amount: txn.amount,
-            date: txn.date.split('T')[0]
+            date: txn.date.split('T')[0],
+            time: (txn as any).paymentTime || '00:00:00',
+            status: 'present',
+            notes: txn.notes || ''
         });
     };
 
-    const handleSaveEdit = async () => {
+    const handleSaveEditPayment = async () => {
         if (!editingTxn) return;
+        setIsUpdating(true);
 
         try {
-            const timestamp = new Date(editFormData.date).toISOString();
+            const paymentDate = editFormData.date;
+            const paymentTime = editFormData.time || new Date().toLocaleTimeString('en-US', { hour12: false });
+            const fullDateTime = `${paymentDate}T${paymentTime}`;
+            const timestamp = new Date(fullDateTime).toISOString();
+
+            const amountDifference = Number(editFormData.amount) - editingTxn.amount;
 
             const updatedTxn: Transaction = {
                 ...editingTxn,
                 amount: Number(editFormData.amount),
                 date: timestamp,
+                paymentDate: paymentDate,
+                paymentTime: paymentTime,
+                fullPaymentDateTime: fullDateTime,
                 updatedAt: new Date().toISOString()
             };
-
-            // 1. Update Transaction
             await updateLocal('transactions', updatedTxn);
 
-            // 2. Sync with Expenses if linked
             if (updatedTxn.expenseId) {
                 const linkedExpense = expenses.find(e => e.id === updatedTxn.expenseId);
                 if (linkedExpense) {
@@ -110,40 +168,124 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                         ...linkedExpense,
                         amount: updatedTxn.amount,
                         date: timestamp,
+                        paymentDate: paymentDate,
+                        paymentTime: paymentTime,
+                        fullPaymentDateTime: fullDateTime,
                         updatedAt: new Date().toISOString()
                     };
                     await updateLocal('expenses', updatedExpense);
                 }
             }
 
-            toast.success("Payment record updated");
+            const currentStaff = staffList.find(s => s.id === staff.id);
+            if (currentStaff) {
+                const updatedStaff = {
+                    ...currentStaff,
+                    totalPaid: (currentStaff.totalPaid || 0) + amountDifference,
+                    totalEarned: (currentStaff.totalEarned || 0) + amountDifference,
+                    pendingSalary: Math.max(0, (currentStaff.pendingSalary || 0) - amountDifference),
+                    lastPaidDate: fullDateTime,
+                    updatedAt: new Date().toISOString()
+                };
+                await updateLocal('staff', updatedStaff);
+                setStaff(prev => prev.map(s => s.id === staff.id ? updatedStaff : s));
+            }
+
+            toast.success("Payment record updated successfully");
             setEditingTxn(null);
         } catch (error) {
             console.error("Failed to edit transaction:", error);
             toast.error("Failed to save changes");
+        } finally {
+            setIsUpdating(false);
         }
     };
 
-    const handleDeleteTxn = async (txn: Transaction) => {
-        if (!confirm("Are you sure you want to void this payment record? This will not undo the actual cash transfer but will remove it from logs and expenses.")) return;
+    const handleDeletePayment = async (txn: Transaction) => {
+        if (!confirm(`Are you sure you want to delete this payment record of ${formatCurrency(txn.amount)}? This will permanently remove it from both local and cloud storage.`)) return;
+
+        setIsUpdating(true);
 
         try {
             await deleteLocal('transactions', txn.id);
             if (txn.expenseId) {
                 await deleteLocal('expenses', txn.expenseId);
             }
-            toast.success("Payment record voided");
+
+            const currentStaff = staffList.find(s => s.id === staff.id);
+            if (currentStaff) {
+                const updatedStaff = {
+                    ...currentStaff,
+                    totalPaid: Math.max(0, (currentStaff.totalPaid || 0) - txn.amount),
+                    totalEarned: Math.max(0, (currentStaff.totalEarned || 0) - txn.amount),
+                    pendingSalary: (currentStaff.pendingSalary || 0) + txn.amount,
+                    updatedAt: new Date().toISOString()
+                };
+                await updateLocal('staff', updatedStaff);
+                setStaff(prev => prev.map(s => s.id === staff.id ? updatedStaff : s));
+            }
+
+            toast.success("Payment record deleted successfully");
         } catch (error) {
             console.error("Failed to delete transaction:", error);
             toast.error("Failed to delete record");
+        } finally {
+            setIsUpdating(false);
         }
     };
 
-    const handleUpdateAttendance = async (att: Attendance, newStatus: string) => {
+    const handleEditAttendance = (att: Attendance) => {
+        setEditingAttendance(att);
+        setEditFormData({
+            amount: 0,
+            date: att.date,
+            time: (att as any).time || new Date().toLocaleTimeString('en-US', { hour12: false }),
+            status: att.status,
+            notes: att.notes || ''
+        });
+    };
+
+    const handleSaveEditAttendance = async () => {
+        if (!editingAttendance) return;
+        setIsUpdating(true);
+
         try {
+            const attendanceDate = editFormData.date;
+            const attendanceTime = editFormData.time;
+            const fullTimestamp = `${attendanceDate}T${attendanceTime}`;
+
+            const updatedAttendance: Attendance = {
+                ...editingAttendance,
+                status: editFormData.status,
+                notes: editFormData.notes,
+                time: attendanceTime,
+                timestamp: fullTimestamp,
+                updatedAt: new Date().toISOString()
+            };
+
+            await updateLocal('attendance', updatedAttendance);
+            toast.success(`Attendance updated to ${editFormData.status}`);
+            setEditingAttendance(null);
+        } catch (error) {
+            console.error("Failed to update attendance:", error);
+            toast.error("Failed to update attendance");
+        } finally {
+            setIsUpdating(false);
+        }
+    };
+
+    const handleUpdateAttendanceStatus = async (att: Attendance, newStatus: string) => {
+        setIsUpdating(true);
+
+        try {
+            const currentTime = new Date().toLocaleTimeString('en-US', { hour12: false });
+            const fullTimestamp = `${att.date}T${currentTime}`;
+
             const updatedAtt = {
                 ...att,
                 status: newStatus as any,
+                time: (att as any).time || currentTime,
+                timestamp: (att as any).timestamp || fullTimestamp,
                 updatedAt: new Date().toISOString()
             };
             await updateLocal('attendance', updatedAtt);
@@ -151,6 +293,24 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
         } catch (error) {
             console.error("Failed to update attendance:", error);
             toast.error("Failed to update status");
+        } finally {
+            setIsUpdating(false);
+        }
+    };
+
+    const handleDeleteAttendance = async (att: Attendance) => {
+        if (!confirm(`Are you sure you want to delete the attendance record for ${att.date}? This action cannot be undone.`)) return;
+
+        setIsUpdating(true);
+
+        try {
+            await deleteLocal('attendance', att.id);
+            toast.success(`Attendance record for ${att.date} deleted successfully`);
+        } catch (error) {
+            console.error("Failed to delete attendance:", error);
+            toast.error("Failed to delete attendance record");
+        } finally {
+            setIsUpdating(false);
         }
     };
 
@@ -163,18 +323,33 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
         }
     };
 
+    const getStatusIcon = (status: string) => {
+        switch (status.toLowerCase()) {
+            case 'present': return <UserCheck className="w-3.5 h-3.5" />;
+            case 'absent': return <UserX className="w-3.5 h-3.5" />;
+            case 'leave': return <CalendarOff className="w-3.5 h-3.5" />;
+            default: return <Clock className="w-3.5 h-3.5" />;
+        }
+    };
+
     return (
         <>
             <Dialog open={open} onOpenChange={(val) => !val && onClose()}>
-                <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col p-0 border-none bg-white rounded-2xl shadow-2xl">
+                <DialogContent className="max-w-5xl max-h-[90vh] overflow-hidden flex flex-col p-0 border-none bg-white rounded-2xl shadow-2xl">
                     <DialogHeader className="p-6 bg-gradient-to-r from-primary to-blue-600 text-white rounded-t-2xl">
                         <div className="flex items-center justify-between">
                             <div>
                                 <DialogTitle className="text-2xl font-black tracking-tight">{staff.name}</DialogTitle>
                                 <p className="text-blue-100 text-xs font-bold uppercase tracking-widest mt-1">Payment History & Activity Log</p>
                             </div>
-                            <div className="p-3 bg-white/20 rounded-2xl backdrop-blur-sm">
-                                <Clock className="w-6 h-6" />
+                            <div className="flex items-center gap-3">
+                                <div className="bg-white/20 rounded-xl px-3 py-1.5">
+                                    <p className="text-xs font-bold text-blue-100">Total Paid</p>
+                                    <p className="text-lg font-black text-white">{formatCurrency(totalPaid)}</p>
+                                </div>
+                                <div className="p-3 bg-white/20 rounded-2xl backdrop-blur-sm">
+                                    <Wallet className="w-6 h-6" />
+                                </div>
                             </div>
                         </div>
                     </DialogHeader>
@@ -183,28 +358,33 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                         <Tabs defaultValue="payments" className="h-full flex flex-col">
                             <div className="px-6 py-4 bg-white border-b">
                                 <TabsList className="grid w-full grid-cols-2 max-w-sm rounded-xl p-1 bg-gray-100">
-                                    <TabsTrigger value="payments" className="rounded-lg font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm">Payments</TabsTrigger>
-                                    <TabsTrigger value="attendance" className="rounded-lg font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm">Attendance</TabsTrigger>
+                                    <TabsTrigger value="payments" className="rounded-lg font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm">
+                                        Payments ({staffTransactions.length})
+                                    </TabsTrigger>
+                                    <TabsTrigger value="attendance" className="rounded-lg font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm">
+                                        Attendance ({groupedAttendance.length})
+                                    </TabsTrigger>
                                 </TabsList>
                             </div>
 
+                            {/* Payments Tab */}
                             <TabsContent value="payments" className="flex-1 overflow-y-auto p-6 m-0">
                                 {staffTransactions.length === 0 ? (
                                     <div className="flex flex-col items-center justify-center py-20 text-center">
                                         <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
-                                            <AlertCircle className="w-8 h-8 text-gray-400" />
+                                            <DollarSign className="w-8 h-8 text-gray-400" />
                                         </div>
-                                        <h3 className="font-bold text-gray-900">No activity yet</h3>
-                                        <p className="text-muted-foreground text-sm max-w-[200px] mt-1">Payments recorded for this staff member will appear here.</p>
+                                        <h3 className="font-bold text-gray-900">No payments recorded</h3>
+                                        <p className="text-muted-foreground text-sm max-w-[200px] mt-1">Salary payments for this staff member will appear here.</p>
                                     </div>
                                 ) : (
                                     <div className="border rounded-xl overflow-hidden bg-white shadow-sm border-gray-100">
                                         <Table>
                                             <TableHeader className="bg-gray-50/50">
                                                 <TableRow className="hover:bg-transparent">
-                                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-gray-400 py-4">Date</TableHead>
-                                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-gray-400">Total Amount</TableHead>
-                                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-gray-400">Type</TableHead>
+                                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-gray-400 py-4">Date & Time</TableHead>
+                                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-gray-400">Amount</TableHead>
+                                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-gray-400">Method</TableHead>
                                                     <TableHead className="font-black text-[10px] uppercase tracking-widest text-gray-400 text-right">Actions</TableHead>
                                                 </TableRow>
                                             </TableHeader>
@@ -212,9 +392,17 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                                                 {staffTransactions.map((txn) => (
                                                     <TableRow key={txn.id} className="hover:bg-blue-50/30 transition-colors group">
                                                         <TableCell className="font-medium text-gray-600">
-                                                            <div className="flex items-center gap-2">
-                                                                <Calendar className="w-3.5 h-3.5 text-gray-400" />
-                                                                {new Date(txn.date).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })}
+                                                            <div className="flex flex-col">
+                                                                <div className="flex items-center gap-2">
+                                                                    <Calendar className="w-3.5 h-3.5 text-gray-400" />
+                                                                    {new Date(txn.date).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })}
+                                                                </div>
+                                                                {(txn as any).paymentTime && (
+                                                                    <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
+                                                                        <Clock className="w-3 h-3" />
+                                                                        {(txn as any).paymentTime}
+                                                                    </div>
+                                                                )}
                                                             </div>
                                                         </TableCell>
                                                         <TableCell>
@@ -222,31 +410,31 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                                                         </TableCell>
                                                         <TableCell>
                                                             <Badge variant="outline" className="font-bold text-[10px] uppercase border-blue-100 bg-blue-50/50 text-blue-600">
-                                                                {txn.type}
+                                                                {(txn as any).method || 'Cash'}
                                                             </Badge>
                                                         </TableCell>
                                                         <TableCell className="text-right">
-                                                            <div className="flex items-center justify-end gap-1">
-                                                                {isAdmin && (
-                                                                    <>
-                                                                        <Button
-                                                                            variant="ghost"
-                                                                            size="sm"
-                                                                            className="h-8 w-8 p-0 text-blue-600 hover:bg-blue-100 rounded-lg"
-                                                                            onClick={() => handleEditClick(txn)}
-                                                                        >
-                                                                            <Edit2 className="w-3.5 h-3.5" />
-                                                                        </Button>
-                                                                        <Button
-                                                                            variant="ghost"
-                                                                            size="sm"
-                                                                            className="h-8 w-8 p-0 text-destructive/70 hover:bg-destructive/10 rounded-lg"
-                                                                            onClick={() => handleDeleteTxn(txn)}
-                                                                        >
-                                                                            <Trash2 className="w-3.5 h-3.5" />
-                                                                        </Button>
-                                                                    </>
-                                                                )}
+                                                            <div className="flex items-center justify-end gap-2">
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="sm"
+                                                                    className="h-8 w-8 p-0 text-blue-600 hover:bg-blue-100 rounded-lg"
+                                                                    onClick={() => handleEditPayment(txn)}
+                                                                    disabled={isUpdating}
+                                                                    title="Edit Payment"
+                                                                >
+                                                                    <Edit2 className="w-4 h-4" />
+                                                                </Button>
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="sm"
+                                                                    className="h-8 w-8 p-0 text-destructive hover:bg-destructive/10 rounded-lg"
+                                                                    onClick={() => handleDeletePayment(txn)}
+                                                                    disabled={isUpdating}
+                                                                    title="Delete Payment"
+                                                                >
+                                                                    <Trash2 className="w-4 h-4" />
+                                                                </Button>
                                                             </div>
                                                         </TableCell>
                                                     </TableRow>
@@ -257,8 +445,9 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                                 )}
                             </TabsContent>
 
+                            {/* Attendance Tab */}
                             <TabsContent value="attendance" className="flex-1 overflow-y-auto p-6 m-0">
-                                {staffAttendance.length === 0 ? (
+                                {groupedAttendance.length === 0 ? (
                                     <div className="flex flex-col items-center justify-center py-20 text-center">
                                         <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
                                             <Calendar className="w-8 h-8 text-gray-400" />
@@ -272,12 +461,14 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                                             <TableHeader className="bg-gray-50/50">
                                                 <TableRow className="hover:bg-transparent">
                                                     <TableHead className="font-black text-[10px] uppercase tracking-widest text-gray-400 py-4">Date</TableHead>
+                                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-gray-400">Time</TableHead>
                                                     <TableHead className="font-black text-[10px] uppercase tracking-widest text-gray-400">Status</TableHead>
-                                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-gray-400 text-right">Adjust Status</TableHead>
+                                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-gray-400">Notes</TableHead>
+                                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-gray-400 text-right">Actions</TableHead>
                                                 </TableRow>
                                             </TableHeader>
                                             <TableBody>
-                                                {staffAttendance.map((att) => (
+                                                {groupedAttendance.map((att) => (
                                                     <TableRow key={att.id} className="hover:bg-blue-50/30 transition-colors group">
                                                         <TableCell className="font-medium text-gray-600">
                                                             <div className="flex items-center gap-2">
@@ -286,42 +477,75 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                                                             </div>
                                                         </TableCell>
                                                         <TableCell>
-                                                            <Badge variant="outline" className={cn("font-bold text-[10px] uppercase", getStatusColor(att.status))}>
+                                                            <div className="flex items-center gap-2 text-sm font-mono">
+                                                                <Clock className="w-3.5 h-3.5 text-gray-400" />
+                                                                {(att as any).time || '--:--:--'}
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <Badge variant="outline" className={cn("font-bold text-[10px] uppercase flex items-center gap-1 w-fit", getStatusColor(att.status))}>
+                                                                {getStatusIcon(att.status)}
                                                                 {att.status}
                                                             </Badge>
                                                         </TableCell>
+                                                        <TableCell className="max-w-[200px]">
+                                                            <p className="text-xs text-gray-500 truncate">{att.notes || '—'}</p>
+                                                        </TableCell>
                                                         <TableCell className="text-right">
-                                                            {isAdmin && (
-                                                                <div className="flex items-center justify-end gap-1">
+                                                            <div className="flex items-center justify-end gap-2">
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="sm"
+                                                                    className="h-8 w-8 p-0 text-blue-600 hover:bg-blue-100 rounded-lg"
+                                                                    onClick={() => handleEditAttendance(att)}
+                                                                    disabled={isUpdating}
+                                                                    title="Edit Attendance"
+                                                                >
+                                                                    <Edit2 className="w-4 h-4" />
+                                                                </Button>
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="sm"
+                                                                    className="h-8 w-8 p-0 text-destructive hover:bg-destructive/10 rounded-lg"
+                                                                    onClick={() => handleDeleteAttendance(att)}
+                                                                    disabled={isUpdating}
+                                                                    title="Delete Attendance"
+                                                                >
+                                                                    <Trash2 className="w-4 h-4" />
+                                                                </Button>
+                                                                <div className="flex items-center gap-0.5 border-l pl-2 ml-1">
                                                                     <Button
                                                                         variant="ghost"
                                                                         size="sm"
-                                                                        className="text-[10px] font-black uppercase tracking-tighter hover:bg-green-50 text-green-700"
-                                                                        onClick={() => handleUpdateAttendance(att, 'present')}
-                                                                        disabled={att.status === 'present'}
+                                                                        className="h-7 w-7 p-0 text-green-600 hover:bg-green-50 rounded-lg"
+                                                                        onClick={() => handleUpdateAttendanceStatus(att, 'present')}
+                                                                        disabled={att.status === 'present' || isUpdating}
+                                                                        title="Mark Present"
                                                                     >
-                                                                        P
+                                                                        <UserCheck className="w-3.5 h-3.5" />
                                                                     </Button>
                                                                     <Button
                                                                         variant="ghost"
                                                                         size="sm"
-                                                                        className="text-[10px] font-black uppercase tracking-tighter hover:bg-red-50 text-red-700"
-                                                                        onClick={() => handleUpdateAttendance(att, 'absent')}
-                                                                        disabled={att.status === 'absent'}
+                                                                        className="h-7 w-7 p-0 text-red-600 hover:bg-red-50 rounded-lg"
+                                                                        onClick={() => handleUpdateAttendanceStatus(att, 'absent')}
+                                                                        disabled={att.status === 'absent' || isUpdating}
+                                                                        title="Mark Absent"
                                                                     >
-                                                                        A
+                                                                        <UserX className="w-3.5 h-3.5" />
                                                                     </Button>
                                                                     <Button
                                                                         variant="ghost"
                                                                         size="sm"
-                                                                        className="text-[10px] font-black uppercase tracking-tighter hover:bg-yellow-50 text-yellow-700"
-                                                                        onClick={() => handleUpdateAttendance(att, 'leave')}
-                                                                        disabled={att.status === 'leave'}
+                                                                        className="h-7 w-7 p-0 text-yellow-600 hover:bg-yellow-50 rounded-lg"
+                                                                        onClick={() => handleUpdateAttendanceStatus(att, 'leave')}
+                                                                        disabled={att.status === 'leave' || isUpdating}
+                                                                        title="Mark Leave"
                                                                     >
-                                                                        L
+                                                                        <CalendarOff className="w-3.5 h-3.5" />
                                                                     </Button>
                                                                 </div>
-                                                            )}
+                                                            </div>
                                                         </TableCell>
                                                     </TableRow>
                                                 ))}
@@ -334,14 +558,14 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                     </div>
 
                     <DialogFooter className="p-4 border-t bg-gray-50/50 rounded-b-2xl">
-                        <Button variant="outline" onClick={onClose} className="font-bold rounded-xl border-gray-200">
+                        <Button variant="outline" onClick={onClose} className="font-bold rounded-xl border-gray-200" disabled={isUpdating}>
                             Close History
                         </Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
 
-            {/* Edit Payment Sub-Modal */}
+            {/* Edit Payment Modal */}
             <Dialog open={!!editingTxn} onOpenChange={(val) => !val && setEditingTxn(null)}>
                 <DialogContent className="max-w-md bg-white rounded-2xl p-0 overflow-hidden border-none shadow-2xl">
                     <DialogHeader className="p-6 border-b bg-gray-50/50">
@@ -349,7 +573,7 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                             <div className="p-2 bg-blue-100 rounded-lg text-blue-600">
                                 <Edit2 className="w-4 h-4" />
                             </div>
-                            Adjust Payment
+                            Edit Payment Record
                         </DialogTitle>
                     </DialogHeader>
                     <div className="p-6 space-y-4">
@@ -362,6 +586,7 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                                     className="pl-9 h-11 font-black shadow-sm rounded-xl focus-visible:ring-primary"
                                     value={editFormData.amount}
                                     onChange={(e) => setEditFormData({ ...editFormData, amount: Number(e.target.value) })}
+                                    disabled={isUpdating}
                                 />
                             </div>
                         </div>
@@ -374,16 +599,145 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                                     className="pl-9 h-11 font-bold shadow-sm rounded-xl focus-visible:ring-primary"
                                     value={editFormData.date}
                                     onChange={(e) => setEditFormData({ ...editFormData, date: e.target.value })}
+                                    disabled={isUpdating}
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="text-xs font-black uppercase text-gray-400 tracking-widest">Payment Time</label>
+                            <div className="relative">
+                                <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                                <Input
+                                    type="time"
+                                    step="1"
+                                    className="pl-9 h-11 font-bold shadow-sm rounded-xl focus-visible:ring-primary"
+                                    value={editFormData.time}
+                                    onChange={(e) => setEditFormData({ ...editFormData, time: e.target.value })}
+                                    disabled={isUpdating}
                                 />
                             </div>
                         </div>
                     </div>
                     <DialogFooter className="p-4 bg-gray-50/80 border-t flex gap-2">
-                        <Button variant="ghost" className="font-bold rounded-xl flex-1" onClick={() => setEditingTxn(null)}>
+                        <Button
+                            variant="ghost"
+                            className="font-bold rounded-xl flex-1"
+                            onClick={() => setEditingTxn(null)}
+                            disabled={isUpdating}
+                        >
                             Cancel
                         </Button>
-                        <Button className="font-black rounded-xl bg-primary hover:bg-primary/90 flex-1 gap-2 shadow-lg" onClick={handleSaveEdit}>
-                            <Save className="w-4 h-4" /> Save Adjustments
+                        <Button
+                            className="font-black rounded-xl bg-primary hover:bg-primary/90 flex-1 gap-2 shadow-lg"
+                            onClick={handleSaveEditPayment}
+                            disabled={isUpdating}
+                        >
+                            {isUpdating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                            Save Changes
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* Edit Attendance Modal */}
+            <Dialog open={!!editingAttendance} onOpenChange={(val) => !val && setEditingAttendance(null)}>
+                <DialogContent className="max-w-md bg-white rounded-2xl p-0 overflow-hidden border-none shadow-2xl">
+                    <DialogHeader className="p-6 border-b bg-gray-50/50">
+                        <DialogTitle className="font-black text-gray-900 flex items-center gap-2">
+                            <div className="p-2 bg-blue-100 rounded-lg text-blue-600">
+                                <Edit2 className="w-4 h-4" />
+                            </div>
+                            Edit Attendance Record
+                        </DialogTitle>
+                    </DialogHeader>
+                    <div className="p-6 space-y-4">
+                        <div className="space-y-1.5">
+                            <label className="text-xs font-black uppercase text-gray-400 tracking-widest">Date</label>
+                            <div className="relative">
+                                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                                <Input
+                                    type="date"
+                                    className="pl-9 h-11 font-bold shadow-sm rounded-xl focus-visible:ring-primary"
+                                    value={editFormData.date}
+                                    disabled={true}
+                                />
+                            </div>
+                            <p className="text-[10px] text-gray-400 mt-1">Date cannot be changed</p>
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="text-xs font-black uppercase text-gray-400 tracking-widest">Time</label>
+                            <div className="relative">
+                                <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                                <Input
+                                    type="time"
+                                    step="1"
+                                    className="pl-9 h-11 font-bold shadow-sm rounded-xl focus-visible:ring-primary"
+                                    value={editFormData.time}
+                                    onChange={(e) => setEditFormData({ ...editFormData, time: e.target.value })}
+                                    disabled={isUpdating}
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="text-xs font-black uppercase text-gray-400 tracking-widest">Status</label>
+                            <div className="flex gap-2">
+                                <Button
+                                    type="button"
+                                    variant={editFormData.status === 'present' ? 'default' : 'outline'}
+                                    className={cn("flex-1 gap-2 font-bold", editFormData.status === 'present' && "bg-green-600 hover:bg-green-700")}
+                                    onClick={() => setEditFormData({ ...editFormData, status: 'present' })}
+                                    disabled={isUpdating}
+                                >
+                                    <UserCheck className="w-4 h-4" /> Present
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant={editFormData.status === 'absent' ? 'default' : 'outline'}
+                                    className={cn("flex-1 gap-2 font-bold", editFormData.status === 'absent' && "bg-red-600 hover:bg-red-700")}
+                                    onClick={() => setEditFormData({ ...editFormData, status: 'absent' })}
+                                    disabled={isUpdating}
+                                >
+                                    <UserX className="w-4 h-4" /> Absent
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant={editFormData.status === 'leave' ? 'default' : 'outline'}
+                                    className={cn("flex-1 gap-2 font-bold", editFormData.status === 'leave' && "bg-yellow-600 hover:bg-yellow-700")}
+                                    onClick={() => setEditFormData({ ...editFormData, status: 'leave' })}
+                                    disabled={isUpdating}
+                                >
+                                    <CalendarOff className="w-4 h-4" /> Leave
+                                </Button>
+                            </div>
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="text-xs font-black uppercase text-gray-400 tracking-widest">Notes</label>
+                            <textarea
+                                className="w-full p-3 border rounded-xl text-sm font-medium resize-none focus-visible:ring-primary focus-visible:outline-none"
+                                rows={3}
+                                value={editFormData.notes}
+                                onChange={(e) => setEditFormData({ ...editFormData, notes: e.target.value })}
+                                placeholder="Add notes about this attendance record..."
+                                disabled={isUpdating}
+                            />
+                        </div>
+                    </div>
+                    <DialogFooter className="p-4 bg-gray-50/80 border-t flex gap-2">
+                        <Button
+                            variant="ghost"
+                            className="font-bold rounded-xl flex-1"
+                            onClick={() => setEditingAttendance(null)}
+                            disabled={isUpdating}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            className="font-black rounded-xl bg-primary hover:bg-primary/90 flex-1 gap-2 shadow-lg"
+                            onClick={handleSaveEditAttendance}
+                            disabled={isUpdating}
+                        >
+                            {isUpdating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                            Save Changes
                         </Button>
                     </DialogFooter>
                 </DialogContent>

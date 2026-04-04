@@ -1,4 +1,5 @@
-import { getFromLocal, saveToLocal } from '@/services/indexedDbUtils';
+// import { getFromLocal, saveToLocal } from '@/services/expireindexedDbUtils_OLDs';
+import { dbManager, STORE_CONFIGS, getKeyPath } from '@/lib/indexedDB';
 import { db } from '@/lib/firebase';
 import { doc, setDoc } from 'firebase/firestore';
 

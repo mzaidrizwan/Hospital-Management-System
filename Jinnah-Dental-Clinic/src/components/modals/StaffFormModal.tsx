@@ -393,7 +393,7 @@ export default function StaffFormModal({
                 Processing...
               </div>
             ) : (
-              isEditing ? 'Update Personnel' : 'Add Personnel'
+              isEditing ? 'Update Member' : 'Add Member'
             )}
           </Button>
         </div>

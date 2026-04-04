@@ -36,7 +36,8 @@ import { InventoryFormModal } from '@/components/modals/InventoryFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { toast } from 'sonner';
 import { smartSync, smartDelete } from '@/services/syncService';
-import { deleteFromLocal } from '@/services/indexedDbUtils';
+// import { deleteFromLocal } from '@/services/expireindexedDbUtils_OLDs';
+import { dbManager, STORE_CONFIGS, getKeyPath } from '@/lib/indexedDB';
 
 const categories = ['Materials', 'Supplies', 'Anesthetics', 'Instruments', 'Equipment', 'Medications'];
 
@@ -118,7 +119,7 @@ export default function SharedInventory() {
     const handleDeleteItem = async (id: string) => {
         if (!window.confirm('Delete this item from record?')) return;
         try {
-            await deleteFromLocal('inventory', id);
+            await dbManager.deleteFromLocal('inventory', id);
             setInventory(prev => prev.filter(i => i.id !== id));
             smartDelete('inventory', id);
             toast.success("Item removed");
@@ -187,7 +188,7 @@ export default function SharedInventory() {
     const handleDeletePurchase = async (id: string) => {
         if (!window.confirm('Void this purchase record? (This will not affect stock)')) return;
         try {
-            await deleteFromLocal('purchases', id);
+            await dbManager.deleteFromLocal('purchases', id);
             setPurchases(prev => prev.filter(p => p.id !== id));
             smartDelete('purchases', id);
             toast.success("Purchase record voided");

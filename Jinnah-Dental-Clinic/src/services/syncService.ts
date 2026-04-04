@@ -7,9 +7,11 @@ import {
   doc,
   updateDoc,
   setDoc,
-  serverTimestamp
+  serverTimestamp,
+  deleteDoc
 } from 'firebase/firestore';
-import { saveToLocal, getFromLocal, deleteFromLocal } from '@/services/indexedDbUtils';
+// import { saveToLocal, getFromLocal, deleteFromLocal } from '@/services/expireindexedDbUtils_OLDs';
+import { dbManager, STORE_CONFIGS, getKeyPath } from '@/lib/indexedDB';
 import { toast } from 'sonner';
 
 /**
@@ -55,7 +57,7 @@ export const smartSync = async (collectionName: string, data: any) => {
 
   // 2. Save to IndexedDB (Always first, local source of truth)
   try {
-    await saveToLocal(collectionName, enrichedData);
+    await dbManager.putItem(collectionName, enrichedData);
   } catch (err) {
     console.error(`Local save failed for ${collectionName}:`, err);
     throw err;
@@ -65,19 +67,19 @@ export const smartSync = async (collectionName: string, data: any) => {
   try {
     const docRef = doc(db, collectionName, docId);
     await setDoc(docRef, sanitizeData(enrichedData));
-    await deleteFromLocal('syncQueue', `${collectionName}_${docId}`).catch(() => { });
+    await dbManager.deleteFromLocal('syncQueue', `${collectionName}_${docId}`).catch(() => { });
   } catch (err: any) {
     // 4. Handle Offline/Connectivity failure
     console.warn(`Firebase sync failed for ${collectionName}. Adding to queue.`, err);
 
     // Update local record with needsSync flag so UI can optionally show it
-    await saveToLocal(collectionName, {
+    await dbManager.putItem(collectionName, {
       ...enrichedData,
       needsSync: true
     });
 
     // Add to specific syncQueue store
-    await saveToLocal('syncQueue', {
+    await dbManager.putItem('syncQueue', {
       id: `${collectionName}_${docId}`,
       type: 'PATCH',
       collectionName,
@@ -108,7 +110,7 @@ export const smartDelete = async (collectionName: string, docId: string) => {
 
   // 1. Delete from IndexedDB (Immediate UI update via Context)
   try {
-    await deleteFromLocal(collectionName, docId);
+    await dbManager.deleteFromLocal(collectionName, docId);
     console.log(`Local delete success: ${collectionName}/${docId}`);
   } catch (err) {
     console.error(`Local delete failed for ${collectionName}:`, err);
@@ -122,12 +124,12 @@ export const smartDelete = async (collectionName: string, docId: string) => {
     console.log(`Firebase delete success: ${collectionName}/${docId}`);
 
     // Remove any pending sync tasks for this document
-    await deleteFromLocal('syncQueue', `${collectionName}_${docId}`).catch(() => { });
+    await dbManager.deleteFromLocal('syncQueue', `${collectionName}_${docId}`).catch(() => { });
   } catch (err) {
     console.warn(`Firebase delete failed for ${collectionName}. Queueing deletion.`, err);
 
     // Add deletion task to syncQueue
-    await saveToLocal('syncQueue', {
+    await dbManager.putItem('syncQueue', {
       id: `${collectionName}_${docId}`,
       type: 'DELETE',
       collectionName,
@@ -148,7 +150,7 @@ export const smartDelete = async (collectionName: string, docId: string) => {
  */
 export const processSyncQueue = async () => {
   try {
-    const queue = await getFromLocal('syncQueue') as any[];
+    const queue = await dbManager.getFromLocal('syncQueue') as any[];
     if (queue.length === 0) return;
 
     console.log(`Processing ${queue.length} items from sync queue...`);
@@ -161,18 +163,18 @@ export const processSyncQueue = async () => {
         if (type === 'DELETE') {
           const { deleteDoc } = await import('firebase/firestore');
           await deleteDoc(doc(db, collectionName, docId));
-          await deleteFromLocal('syncQueue', task.id);
+          await dbManager.deleteFromLocal('syncQueue', task.id);
         } else {
-          const localData = await getFromLocal(collectionName, docId);
+          const localData = await dbManager.getFromLocal(collectionName, docId);
 
           if (localData) {
             const docRef = doc(db, collectionName, docId);
             const sanitizedData = sanitizeData({ ...localData, needsSync: false });
             await setDoc(docRef, sanitizedData);
-            await saveToLocal(collectionName, { ...localData, needsSync: false });
-            await deleteFromLocal('syncQueue', task.id);
+            await dbManager.putItem(collectionName, { ...localData, needsSync: false });
+            await dbManager.deleteFromLocal('syncQueue', task.id);
           } else {
-            await deleteFromLocal('syncQueue', task.id);
+            await dbManager.deleteFromLocal('syncQueue', task.id);
           }
         }
       } catch (err) {
@@ -307,4 +309,64 @@ export const syncPatientAfterTreatment = async (patientNumber: string) => {
     console.error('Error syncing patient:', error);
     throw error;
   }
+};
+
+
+export const cascadeDeleteStaff = async (staffId: string) => {
+    try {
+        console.log(`[cascadeDeleteStaff] Starting cascade delete for staff: ${staffId}`);
+        
+        // 1. Get all related records from Firebase
+        const attendanceRef = collection(db, 'attendance');
+        const attendanceQuery = query(attendanceRef, where('staffId', '==', staffId));
+        const attendanceSnapshot = await getDocs(attendanceQuery);
+        
+        const paymentsRef = collection(db, 'salaryPayments');
+        const paymentsQuery = query(paymentsRef, where('staffId', '==', staffId));
+        const paymentsSnapshot = await getDocs(paymentsQuery);
+        
+        const transactionsRef = collection(db, 'transactions');
+        const transactionsQuery = query(transactionsRef, where('staffId', '==', staffId));
+        const transactionsSnapshot = await getDocs(transactionsQuery);
+        
+        // 2. Delete all attendance records
+        for (const doc of attendanceSnapshot.docs) {
+            await deleteDoc(doc.ref);
+            console.log(`[cascadeDeleteStaff] Deleted attendance: ${doc.id}`);
+        }
+        
+        // 3. Delete all payment records and linked expenses
+        for (const doc of paymentsSnapshot.docs) {
+            // Find and delete linked expense
+            const expenseRef = collection(db, 'expenses');
+            const expenseQuery = query(expenseRef, where('id', '==', doc.id));
+            const expenseSnapshot = await getDocs(expenseQuery);
+            
+            for (const expenseDoc of expenseSnapshot.docs) {
+                await deleteDoc(expenseDoc.ref);
+                console.log(`[cascadeDeleteStaff] Deleted linked expense: ${expenseDoc.id}`);
+            }
+            
+            await deleteDoc(doc.ref);
+            console.log(`[cascadeDeleteStaff] Deleted payment: ${doc.id}`);
+        }
+        
+        // 4. Delete all transactions
+        for (const doc of transactionsSnapshot.docs) {
+            await deleteDoc(doc.ref);
+            console.log(`[cascadeDeleteStaff] Deleted transaction: ${doc.id}`);
+        }
+        
+        // 5. Finally, delete the staff member
+        const staffRef = doc(db, 'staff', staffId);
+        await deleteDoc(staffRef);
+        
+        console.log(`[cascadeDeleteStaff] Successfully deleted staff: ${staffId}`);
+        
+        return true;
+        
+    } catch (error) {
+        console.error('[cascadeDeleteStaff] Error:', error);
+        return false;
+    }
 };

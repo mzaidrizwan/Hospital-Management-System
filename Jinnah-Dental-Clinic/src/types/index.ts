@@ -315,6 +315,11 @@ export interface QueueItem {
   updatedAt?: string;
   lastUpdated?: number;
   needsSync?: boolean;
+  treatmentDate?:String;
+  treatmentTime?: string;      // Treatment time (HH:MM:SS)
+  treatmentDateTime?: string;
+  preReceiveAmount?: number; 
+  preReceiveNotes?: string; 
 }
 
 export interface FirebaseQueueItem extends Omit<QueueItem, 'id'> {
@@ -434,6 +439,9 @@ export interface Expense {
   nextDueDate?: string;
   createdAt: string;
   updatedAt?: string;
+  paymentTime?: string;
+  paymentDate?: string;
+  fullPaymentDateTime?: string;
 }
 
 export interface ExpenseReport {
@@ -468,13 +476,21 @@ export interface Staff {
   pendingSalary: number;
   totalPaid: number;
   totalEarned: number;
-  lastSalaryDate?: string;
-  updatedAt?: string;
-  lastPaidDate: string;
+  lastSalaryDate?: string;           // Already tha (Date only)  
+  // NEW FIELDS - Date & Time ke liye
+  lastPaidDate?: string;             // Full ISO DateTime (Recommended)
+  lastPaidTime?: string;             // HH:MM (optional, for display)
   nextSalaryDate?: string;
   attendance?: Attendance[];
   attendanceStatus?: string;
-  salaryStatus?: 'Paid' | 'Pending';
+  // salaryStatus?: 'Paid' | 'Pending';
+  updatedAt?: string;
+
+  createdAt: string;
+  lastUpdated?: number;
+  salaryStatus?: string;
+  isPaymentDue?: boolean;
+  todayAttendanceRecord?: Attendance;
 }
 
 export interface SalaryPayment {
@@ -482,35 +498,91 @@ export interface SalaryPayment {
   staffId: string;
   staffName: string;
   amount: number;
-  date: string;
+  date: string;                      // Full ISO timestamp (old)
+
+  // NEW FIELDS - Better Date & Time handling
+  paymentDate: string;               // YYYY-MM-DD
+  paymentTime: string;               // HH:MM (24 hour)
+  fullPaymentDateTime: string;       // Full ISO string (best for sorting & queries)
+
   period: string;
   periodType: 'daily' | 'weekly' | 'monthly';
   status: 'paid';
   paymentMethod: string;
   notes: string;
-  startDate: string;
-  endDate: string;
+  startDate?: string;
+  endDate?: string;
+  createdAt?: string;
 }
 
 export interface Transaction {
   id: string;
-  staffId: string;
-  staffName: string;
+  staffId?: string;
+  staffName?: string;
   amount: number;
-  date: string;
-  type: string;
+  date: string;                      // Full ISO (old)
+  patientNumber?: string; 
+  patientName?: string;   
+  createdAt?: string;
+
+  // NEW FIELDS
+  paymentDate: string;               // YYYY-MM-DD
+  paymentTime: string;               // HH:MM
+  fullPaymentDateTime: string;       // Best field for queries
+
+  // type: string;
   method?: string;
   notes?: string;
   expenseId?: string;
   updatedAt?: string;
+
+  queueItemId?: string;
+  type: 'pre_receive' | 'Salary' | 'treatment_payment';
 }
+
+export interface PatientTransaction {
+  id: string;
+  patientId: string;
+  patientNumber: string;
+  patientName: string;
+  type: 'payment' | 'opening_balance' | 'discount' | 'pre_receive' | 'refund';
+  amount: number;
+  paymentMethod?: 'cash' | 'online' | 'bank';
+  billId?: string;
+  queueItemId?: string;
+  date: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// export interface Attendance {
+//   id: string;
+//   staffId: string;
+//   date: string;
+//   status: 'present' | 'absent' | 'leave';
+//   notes?: string;
+// }
+
+
+// types.ts - Update the Attendance interface
 
 export interface Attendance {
   id: string;
   staffId: string;
-  date: string;
+  date: string;        // YYYY-MM-DD
+  time?: string;       // HH:MM:SS format - NEW
+  timestamp?: string;  // Full ISO timestamp (date + time) - NEW
   status: 'present' | 'absent' | 'leave';
   notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  synced?: boolean;    // For sync tracking
+}
+
+export interface AttendanceWithTime extends Attendance {
+  time: string;
+  timestamp: string;
 }
 
 // =============================================
@@ -559,6 +631,7 @@ export interface InventoryTransaction {
   transactionNumber: string;
   itemId: string;
   itemName: string;
+  patientId: string;
   type: 'purchase' | 'sale' | 'adjustment' | 'return' | 'wastage';
   quantity: number;
   unit: UnitType;

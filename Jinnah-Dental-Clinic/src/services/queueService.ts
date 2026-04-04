@@ -14,6 +14,7 @@ import {
   getDoc
 } from 'firebase/firestore';
 import { syncPatientAfterTreatment } from './syncService';   // ← Added import
+import { dbManager, STORE_CONFIGS, getKeyPath } from '@/lib/indexedDB';
 
 const QUEUE_COLLECTION = 'queue';
 
@@ -219,8 +220,8 @@ export const updateQueueItem = async (
     const { smartSync, syncPatientAfterTreatment } = await import('./syncService');
 
     // Get current data from local (or fallback to firebase if needed, but local-first is better)
-    const { getFromLocal } = await import('./indexedDbUtils');
-    const currentData = await getFromLocal(QUEUE_COLLECTION, id) as any;
+    const { getFromLocal } = await import('./expireindexedDbUtils_OLDs');
+    const currentData = await dbManager.getFromLocal(QUEUE_COLLECTION, id) as any;
 
     await smartSync(QUEUE_COLLECTION, { ...currentData, ...updateData, id });
 

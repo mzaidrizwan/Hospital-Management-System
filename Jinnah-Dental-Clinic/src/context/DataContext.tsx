@@ -3,7 +3,8 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useMemo, useRef } from 'react';
 import { db } from '@/lib/firebase';
 import { collection, onSnapshot, query, setDoc, doc, getDocs, getDoc, deleteDoc } from 'firebase/firestore';
-import { getFromLocal, saveToLocal, openDB, getAllStores, saveMultipleToLocal, deleteFromLocal, clearStore, STORE_CONFIGS } from '@/services/indexedDbUtils';
+// import { getFromLocal, saveToLocal, openDB, getAllStores, saveMultipleToLocal, deleteFromLocal, clearStore, STORE_CONFIGS } from '@/services/expireindexedDbUtils_OLDs';
+import { dbManager, STORE_CONFIGS, getKeyPath } from '@/lib/indexedDB';
 import { processSyncQueue, smartSync, smartDelete } from '@/services/syncService';
 import { useConnectionStatus } from '@/hooks/useConnectionStatus';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -21,10 +22,12 @@ import {
     InventoryItem,
     Expense,
     Bill,
-    Treatment
+    Treatment,
+    PatientTransaction
 } from '@/types';
 import { toast } from 'sonner';
 import { getSalaryStatus } from '@/hooks/useSalaryLogic';
+import { migrateAttendanceRecords } from '@/scripts/migrateAttendance';
 
 interface DataContextType {
     patients: Patient[];
@@ -86,6 +89,12 @@ interface DataContextType {
     clearDataStore: (collectionName: string) => Promise<void>;
     autoSyncEnabled: boolean;
     setAutoSyncEnabled: (enabled: boolean) => void;
+
+    updateAttendanceWithTime: (attendance: Attendance) => Promise<void>;
+    getAttendanceWithTimeRange: (staffId: string, startDate: string, endDate: string) => Promise<Attendance[]>;
+    checkDuplicateAttendance: (staffId: string, timestamp: string) => Promise<boolean>;
+    deleteStaffWithAllRecords: (staffMember: Staff) => Promise<boolean>;
+    deletePatientWithAllRecords: (patient: Patient) => Promise<boolean>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -106,11 +115,14 @@ const COLLECTIONS = [
     'users',
     'transactions',
     'purchases',
-    'roles'
+    'roles',
+    'patientTransactions' 
 ];
 
 export function DataProvider({ children }: { children: ReactNode }) {
     const isOnline = useConnectionStatus();
+    const [patientTransactions, setPatientTransactions] = useState<PatientTransaction[]>([]);
+
 
     const [patients, setPatients] = useState<Patient[]>([]);
     const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -179,6 +191,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         transactions: setTransactions,
         purchases: setPurchases,
         roles: setRoles,
+        patientTransactions: setPatientTransactions,
     }), []);
 
     useEffect(() => {
@@ -189,15 +202,131 @@ export function DataProvider({ children }: { children: ReactNode }) {
         return calculateRemainingDays(settings?.licenseExpiry);
     }, []);
 
+    // const initializeData = async () => {
+    //     if (initialLoadDone.current) return;
+
+    //     try {
+    //         const results = await Promise.all(COLLECTIONS.map(async (collectionName) => {
+    //             try {
+    //                 const data = await dbManager.getFromLocal(collectionName);
+    //                 return { collectionName, data };
+    //             } catch (error) {
+    //                 console.error(`Error loading ${collectionName} from IndexedDB:`, error);
+    //                 return { collectionName, data: null };
+    //             }
+    //         }));
+
+    //         results.forEach(({ collectionName, data }) => {
+    //             if (data === null || data === undefined) return;
+
+    //             const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
+    //             if (!setter) return;
+
+    //             if (collectionName === 'clinicSettings') {
+    //                 const settings = Array.isArray(data) ? data[0] : data;
+    //                 if (settings) {
+    //                     setter(settings);
+    //                     // Legacy shutdown check - disabled in favor of 'power' collection
+    //                     // if (settings.shutdown !== undefined) setIsShutdown(!!settings.shutdown);
+    //                 }
+    //             } else if (collectionName === 'staff') {
+    //                 // Filter out invalid staff members with empty or missing names
+    //                 const validStaff = Array.isArray(data)
+    //                     ? data.filter((s: any) => s && s.name && s.name.trim() !== '')
+    //                     : [];
+    //                 setter(validStaff);
+    //             } else if (collectionName === 'treatments') {
+    //                 // Filter out ghost treatments with NaN fees
+    //                 const validTreatments = Array.isArray(data)
+    //                     ? data.filter((t: any) => t && t.name && !isNaN(Number(t.fee)))
+    //                     : [];
+    //                 setter(validTreatments);
+    //             } else {
+    //                 setter(Array.isArray(data) ? data : []);
+    //             }
+    //         });
+
+    //         try {
+    //             const settingsData = await dbManager.getFromLocal('clinicSettings', 'clinic-settings');
+    //             const clinicId = settingsData?.id || 'clinic-settings';
+
+    //             let licenseData = await dbManager.getFromLocal('settings', 'clinic_license');
+
+    //             // Try to fetch latest license from Firebase if online
+    //             if (isOnline) {
+    //                 try {
+    //                     const licenseDoc = await getDoc(doc(db, 'settings', 'license'));
+    //                     if (licenseDoc.exists()) {
+    //                         const firebaseLicense = licenseDoc.data();
+    //                         if (firebaseLicense.expiryDate) {
+    //                             licenseData = { ...licenseData, ...firebaseLicense };
+    //                             // Save back to local for offline use
+    //                             await dbManager.saveToLocal('settings', { id: 'clinic_license', ...firebaseLicense });
+    //                         }
+    //                     }
+    //                 } catch (fbError) {
+    //                     console.warn('Could not fetch license from Firebase, using local:', fbError);
+    //                 }
+    //             }
+
+    //             // NO FREE TRIAL - License is required from the start
+    //             if (licenseData && (licenseData.key || licenseData.expiryDate)) {
+    //                 setLicenseKey(licenseData.key || null);
+    //                 setLicenseExpiryDate(licenseData.expiryDate);
+
+    //                 const days = checkSubscription({ licenseExpiry: licenseData.expiryDate });
+    //                 setLicenseDaysLeft(Math.max(0, days));
+    //                 setLicenseStatus(days > 0 ? 'valid' : 'expired');
+    //             } else {
+    //                 // No license found - App should be disabled
+    //                 console.warn('⚠️ No license key found. Application is locked.');
+    //                 setLicenseKey(null);
+    //                 setLicenseExpiryDate(null);
+    //                 setLicenseDaysLeft(0);
+    //                 setLicenseStatus('missing');
+    //             }
+    //         } catch (e) {
+    //             console.error('Error checking license:', e);
+    //             setLicenseStatus('missing');
+    //         }
+
+    //         setTimeout(() => {
+    //             migrateAttendanceRecords().catch(console.error);
+    //         }, 1000);
+
+    //         setInitialLoadComplete(true);
+    //         setLoading(false);
+    //         initialLoadDone.current = true;
+
+    //     } catch (error) {
+    //         console.error('Error initializing data:', error);
+    //         setInitialLoadComplete(true);
+    //         setLoading(false);
+    //         initialLoadDone.current = true;
+    //     }
+    // };
+
     const initializeData = async () => {
         if (initialLoadDone.current) return;
 
         try {
-            await openDB();
+            // Get deleted patients from localStorage
+            const deletedPatients = JSON.parse(localStorage.getItem('deleted_patients') || '[]');
+            console.log(`[initializeData] Deleted patients list:`, deletedPatients);
 
             const results = await Promise.all(COLLECTIONS.map(async (collectionName) => {
                 try {
-                    const data = await getFromLocal(collectionName);
+                    let data = await dbManager.getFromLocal(collectionName);
+
+                    // ✅ FILTER OUT DELETED PATIENTS on initial load
+                    if (collectionName === 'patients' && Array.isArray(data) && deletedPatients.length > 0) {
+                        const originalCount = data.length;
+                        data = data.filter((p: any) => !deletedPatients.includes(p.id));
+                        if (originalCount !== data.length) {
+                            console.log(`[initializeData] Filtered out ${originalCount - data.length} deleted patients from ${collectionName}`);
+                        }
+                    }
+
                     return { collectionName, data };
                 } catch (error) {
                     console.error(`Error loading ${collectionName} from IndexedDB:`, error);
@@ -215,8 +344,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     const settings = Array.isArray(data) ? data[0] : data;
                     if (settings) {
                         setter(settings);
-                        // Legacy shutdown check - disabled in favor of 'power' collection
-                        // if (settings.shutdown !== undefined) setIsShutdown(!!settings.shutdown);
                     }
                 } else if (collectionName === 'staff') {
                     // Filter out invalid staff members with empty or missing names
@@ -236,10 +363,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
             });
 
             try {
-                const settingsData = await getFromLocal('clinicSettings', 'clinic-settings');
+                const settingsData = await dbManager.getFromLocal('clinicSettings', 'clinic-settings');
                 const clinicId = settingsData?.id || 'clinic-settings';
 
-                let licenseData = await getFromLocal('settings', 'clinic_license');
+                let licenseData = await dbManager.getFromLocal('settings', 'clinic_license');
 
                 // Try to fetch latest license from Firebase if online
                 if (isOnline) {
@@ -250,7 +377,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             if (firebaseLicense.expiryDate) {
                                 licenseData = { ...licenseData, ...firebaseLicense };
                                 // Save back to local for offline use
-                                await saveToLocal('settings', { id: 'clinic_license', ...firebaseLicense });
+                                await dbManager.saveToLocal('settings', { id: 'clinic_license', ...firebaseLicense });
                             }
                         }
                     } catch (fbError) {
@@ -279,9 +406,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 setLicenseStatus('missing');
             }
 
+            setTimeout(() => {
+                migrateAttendanceRecords().catch(console.error);
+            }, 1000);
+
             setInitialLoadComplete(true);
             setLoading(false);
             initialLoadDone.current = true;
+
         } catch (error) {
             console.error('Error initializing data:', error);
             setInitialLoadComplete(true);
@@ -313,7 +445,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     // We still want to mark it as needing sync so it goes up when enabled
                     if (data._deleted) {
                         // For deletions, we add a DELETE task to syncQueue manually
-                        await saveToLocal('syncQueue', {
+                        await dbManager.saveToLocal('syncQueue', {
                             id: `${collectionName}_${data.id}`,
                             type: 'DELETE',
                             collectionName,
@@ -328,8 +460,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             lastUpdated: Date.now(),
                             updatedAt: new Date().toISOString()
                         };
-                        await saveToLocal(collectionName, enrichedData);
-                        await saveToLocal('syncQueue', {
+                        await dbManager.saveToLocal(collectionName, enrichedData);
+                        await dbManager.saveToLocal('syncQueue', {
                             id: `${collectionName}_${data.id}`,
                             type: 'PATCH',
                             collectionName,
@@ -390,7 +522,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             }
 
             // 2. Save to IndexedDB (Local persistence)
-            await saveToLocal(collectionName, enrichedData);
+            await dbManager.saveToLocal(collectionName, enrichedData);
 
             // 3. Push to Firebase in background (Cloud sync)
             backgroundFirebaseSync(collectionName, enrichedData);
@@ -437,7 +569,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
         // 4. STEP 2: Save to IndexedDB (Wait for local persistence)
         try {
-            await saveToLocal('queue', updatedItem);
+            await dbManager.saveToLocal('queue', updatedItem);
             console.log(`[updateQueueItemOptimistic] Saved to IndexedDB successfully: ${itemId}`);
             toast.success("Done", { duration: 1000, id: "sync-status" });
         } catch (dbError) {
@@ -463,7 +595,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
         try {
             // 1. STEP 1: Update IndexedDB (Awaited for local persistence)
-            await saveToLocal('attendance', record);
+            await dbManager.saveToLocal('attendance', record);
 
             // 2. STEP 2: Update React State (Triggers useAvailableDoctors refresh)
             setAttendance(prev => {
@@ -532,7 +664,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             });
 
             // 4. STEP 2: Save to IndexedDB (Awaited for local persistence)
-            await saveToLocal('patients', updatedPatient);
+            await dbManager.saveToLocal('patients', updatedPatient);
             console.log(`[updatePatientStatus] Saved to IndexedDB: ${patientId}`);
 
             // 5. STEP 3: Background Firebase Sync (Fire and Forget)
@@ -616,7 +748,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             });
 
             // 6. STEP 2: Save to IndexedDB (Awaited for local persistence)
-            await saveToLocal('patients', updatedPatient);
+            await dbManager.saveToLocal('patients', updatedPatient);
             console.log(`[handleMovePatient] Saved to IndexedDB (ClinicDB): ${patientId}`);
             toast.success("Done", { duration: 1000, id: "sync-status" });
 
@@ -645,7 +777,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
             // 2. STEP 2: Delete from IndexedDB (Wait for local persistence)
             try {
-                await deleteFromLocal(collectionName, id);
+                await dbManager.deleteFromLocal(collectionName, id);
                 console.log(`[deleteLocal] Deleted from IndexedDB: ${id}`);
             } catch (dbError) {
                 console.error(`[deleteLocal] IndexedDB delete failed:`, dbError);
@@ -731,7 +863,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
     const refreshCollection = useCallback(async (collectionName: string) => {
         try {
-            const data = await getFromLocal(collectionName);
+            const data = await dbManager.getFromLocal(collectionName);
             const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
             if (setter) {
                 if (collectionName === 'clinicSettings') {
@@ -1046,7 +1178,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             // Clear everything first
                             for (const col of COLLECTIONS) {
                                 if (col === 'users') continue;
-                                await clearStore(col);
+                                await dbManager.clearStore(col);
                             }
 
                             // Restore each collection
@@ -1058,40 +1190,31 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
                             for (const store of storesToRestore) {
                                 try {
-                                    /*
-                                     * Check if store is valid (in COLLECTIONS or STORE_CONFIGS)
-                                     */
                                     const isKnownCollection = COLLECTIONS.includes(store);
-                                    let keyPath = 'id';
-                                    if (STORE_CONFIGS[store]) keyPath = STORE_CONFIGS[store].keyPath;
+                                    let keyPath = getKeyPath(store);        // ← Updated
                                     const hasConfig = !!STORE_CONFIGS[store];
 
                                     if (isKnownCollection || hasConfig) {
                                         const items = backupData[store];
 
                                         if (Array.isArray(items) && items.length > 0) {
-                                            // Filter out items missing the keyPath AND completely empty objects
-                                            const validItems = items.filter(item => item && item[keyPath] !== undefined && Object.keys(item).length > 0);
-                                            const invalidCount = items.length - validItems.length;
-
-                                            if (invalidCount > 0) {
-                                                console.warn(`[Restore] Skipping ${invalidCount} invalid items in ${store} (missing ${keyPath})`);
-                                            }
+                                            const validItems = items.filter(item =>
+                                                item && item[keyPath] !== undefined && Object.keys(item).length > 0
+                                            );
 
                                             if (validItems.length > 0) {
-                                                // Mark every item as needing sync, then save to IndexedDB
                                                 const syncableItems = validItems.map(item => ({
                                                     ...item,
                                                     needsSync: true,
                                                     lastUpdated: item.lastUpdated || Date.now()
                                                 }));
-                                                await saveMultipleToLocal(store, syncableItems);
 
-                                                // Enqueue each item in syncQueue so processSyncQueue can push to Firebase
+                                                await dbManager.putMultiple(store, syncableItems);   // ← Better name
+
                                                 if (previousAutoSync) {
                                                     for (const item of syncableItems) {
                                                         const docId = item[keyPath];
-                                                        await saveToLocal('syncQueue', {
+                                                        await dbManager.putItem('syncQueue', {
                                                             id: `${store}_${docId}`,
                                                             type: 'PATCH',
                                                             collectionName: store,
@@ -1100,16 +1223,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
                                                         });
                                                     }
                                                 }
-
                                                 restoreCount += validItems.length;
                                             }
-                                        } else if (store === 'clinicSettings' && items && !Array.isArray(items)) {
-                                            // Handle single object clinicSettings
+                                        }
+                                        else if (store === 'clinicSettings' && items && !Array.isArray(items)) {
                                             if (items[keyPath]) {
-                                                const syncableItem = { ...items, needsSync: true, lastUpdated: items.lastUpdated || Date.now() };
-                                                await saveToLocal(store, syncableItem);
+                                                const syncableItem = {
+                                                    ...items,
+                                                    needsSync: true,
+                                                    lastUpdated: items.lastUpdated || Date.now()
+                                                };
+                                                await dbManager.putItem(store, syncableItem);
+
                                                 if (previousAutoSync) {
-                                                    await saveToLocal('syncQueue', {
+                                                    await dbManager.putItem('syncQueue', {
                                                         id: `${store}_${items[keyPath]}`,
                                                         type: 'PATCH',
                                                         collectionName: store,
@@ -1118,15 +1245,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
                                                     });
                                                 }
                                                 restoreCount++;
-                                            } else {
-                                                console.warn(`[Restore] Skipping invalid clinicSettings (missing ${keyPath})`);
                                             }
                                         }
                                     }
                                 } catch (innerErr: any) {
                                     console.error(`Failed to restore store: ${store}`, innerErr);
                                     errors.push(`${store}: ${innerErr.message || 'Unknown error'}`);
-                                    // Continue to next store! Don't abort entire restore.
                                 }
                             }
 
@@ -1295,7 +1419,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             isSyncingRef.current = true;
 
             // 1. Clear Local IndexedDB
-            await clearStore(collectionName);
+            await dbManager.clearStore(collectionName);
 
             // 2. Update React State
             const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
@@ -1373,7 +1497,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
                 // Point 3: Password protection for admin/operator
                 if (colName === 'users') {
-                    const localUsers = await getFromLocal('users');
+                    const localUsers = await dbManager.getFromLocal('users');
                     const localUsersMap = new Map<string, any>(localUsers.map((u: any) => [u.id, u]));
                     data = data.map((remoteUser: any) => {
                         const localUser = localUsersMap.get(remoteUser.id);
@@ -1388,11 +1512,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }
 
                 // Clear local store
-                await clearStore(colName);
+                await dbManager.clearStore(colName);
 
                 // Save new data
                 if (data && data.length > 0) {
-                    await saveMultipleToLocal(colName, data);
+                    await dbManager.saveMultipleToLocal(colName, data);
                 }
 
                 // Update React State
@@ -1427,7 +1551,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
                 // Point 3: Password protection
                 if (colName === 'users') {
-                    const localUsers = await getFromLocal('users');
+                    const localUsers = await dbManager.getFromLocal('users');
                     const localUsersMap = new Map<string, any>(localUsers.map((u: any) => [u.id, u]));
                     data = data.map((remoteUser: any) => {
                         const localUser = localUsersMap.get(remoteUser.id);
@@ -1440,10 +1564,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     });
                 }
 
-                await clearStore(colName);
+                await dbManager.clearStore(colName);
 
                 if (data && data.length > 0) {
-                    await saveMultipleToLocal(colName, data);
+                    await dbManager.saveMultipleToLocal(colName, data);
                 }
 
                 const setter = stateSetterMap[colName as keyof typeof stateSetterMap];
@@ -1462,121 +1586,32 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
     }, [fetchFullCloudBackup, stateSetterMap, initializeData]);
 
-    // const activateLicense = useCallback(async (inputKey: string) => {
-    //     try {
-    //         const clinicName = clinicSettings?.name || 'Jinnah Dental';
-    //         const isValid = await validateLicense(inputKey, clinicName);
-    //         if (!isValid) {
-    //             toast.error("Invalid License Key");
-    //             return false;
-    //         }
-
-    //         const currentExpiryISO = licenseExpiryDate || clinicSettings?.licenseExpiry || new Date().toISOString();
-    //         const currentExpiry = new Date(currentExpiryISO);
-    //         const newExpiry = new Date(currentExpiry.getTime() + (30 * 24 * 60 * 60 * 1000));
-    //         const newExpiryISO = newExpiry.toISOString();
-
-    //         // 1. Update React State
-    //         setLicenseKey(inputKey);
-    //         setLicenseExpiryDate(newExpiryISO);
-
-    //         const days = Math.ceil((newExpiry.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
-    //         setLicenseDaysLeft(Math.max(0, days));
-    //         setLicenseStatus(days > 0 ? 'valid' : 'expired');
-
-    //         // 2. Update clinicSettings (Local + Firebase via updateLocal)
-    //         const updatedSettings = {
-    //             ...(clinicSettings || {}),
-    //             id: (clinicSettings?.id) || 'clinic-settings',
-    //             licenseExpiry: newExpiryISO,
-    //             licenseKey: inputKey,
-    //             updatedAt: new Date().toISOString()
-    //         };
-
-    //         await updateLocal('clinicSettings', updatedSettings);
-
-    //         // 3. Update dedicated license doc if needed
-    //         const licenseDocData = {
-    //             id: 'clinic_license',
-    //             key: inputKey,
-    //             expiryDate: newExpiryISO,
-    //             updatedAt: new Date().toISOString()
-    //         };
-
-    //         await saveToLocal('settings', licenseDocData);
-
-    //         if (isOnline) {
-    //             try {
-    //                 await setDoc(doc(db, 'settings', 'license'), {
-    //                     key: inputKey,
-    //                     expiryDate: newExpiryISO,
-    //                     updatedAt: new Date().toISOString()
-    //                 }, { merge: true });
-    //             } catch (e) {
-    //                 console.warn("Could not sync dedicated license doc:", e);
-    //             }
-    //         }
-
-    //         toast.success(`License Extended! New expiry: ${newExpiry.toLocaleDateString()}`);
-    //         return true;
-    //     } catch (error) {
-    //         console.error("License activation failed:", error);
-    //         toast.error("Failed to activate license");
-    //         return false;
-    //     }
-    // }, [licenseExpiryDate, clinicSettings, updateLocal, isOnline]);
-
-
     const activateLicense = useCallback(async (inputKey: string) => {
         try {
             const clinicName = clinicSettings?.name || 'Jinnah Dental Clinic';
-
-            // 🔹 1. Get already used license keys from IndexedDB
-            const existingKeysDoc = await getFromLocal('settings', 'used_license_keys');
-            const usedLicenseKeys: string[] = existingKeysDoc?.keys || [];
-            console.log(usedLicenseKeys)
-
-            // 🔹 2. Check if license already used
-            if (usedLicenseKeys.includes(inputKey)) {
-                toast.error("This License Key has already been used.");
-                return false;
-            }
-
-            // 🔹 3. Validate license normally
             const isValid = await validateLicense(inputKey, clinicName);
             if (!isValid) {
                 toast.error("Invalid License Key");
                 return false;
             }
 
-            // 🔹 4. Calculate new expiry
-            const currentExpiryISO =
-                licenseExpiryDate ||
-                clinicSettings?.licenseExpiry ||
-                new Date().toISOString();
-
+            const currentExpiryISO = licenseExpiryDate || clinicSettings?.licenseExpiry || new Date().toISOString();
             const currentExpiry = new Date(currentExpiryISO);
-            const newExpiry = new Date(
-                currentExpiry.getTime() + (30 * 24 * 60 * 60 * 1000)
-            );
+            const newExpiry = new Date(currentExpiry.getTime() + (30 * 24 * 60 * 60 * 1000));
             const newExpiryISO = newExpiry.toISOString();
 
-            // 🔹 5. Update React State
+            // 1. Update React State
             setLicenseKey(inputKey);
             setLicenseExpiryDate(newExpiryISO);
 
-            const days = Math.ceil(
-                (newExpiry.getTime() - new Date().getTime()) /
-                (1000 * 60 * 60 * 24)
-            );
-
+            const days = Math.ceil((newExpiry.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
             setLicenseDaysLeft(Math.max(0, days));
             setLicenseStatus(days > 0 ? 'valid' : 'expired');
 
-            // 🔹 6. Update clinicSettings
+            // 2. Update clinicSettings (Local + Firebase via updateLocal)
             const updatedSettings = {
                 ...(clinicSettings || {}),
-                id: clinicSettings?.id || 'clinic-settings',
+                id: (clinicSettings?.id) || 'clinic-settings',
                 licenseExpiry: newExpiryISO,
                 licenseKey: inputKey,
                 updatedAt: new Date().toISOString()
@@ -1584,7 +1619,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
             await updateLocal('clinicSettings', updatedSettings);
 
-            // 🔹 7. Save dedicated license doc
+            // 3. Update dedicated license doc if needed
             const licenseDocData = {
                 id: 'clinic_license',
                 key: inputKey,
@@ -1592,53 +1627,174 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 updatedAt: new Date().toISOString()
             };
 
-            await saveToLocal('settings', licenseDocData);
+            await dbManager.saveToLocal('settings', licenseDocData);
 
-            // 🔹 8. Add this key to used keys array
-            const updatedUsedKeys = [...usedLicenseKeys, inputKey];
-
-            await saveToLocal('settings', {
-                id: 'used_license_keys',
-                keys: updatedUsedKeys,
-                updatedAt: new Date().toISOString()
-            });
-
-            // 🔹 9. Optional Firebase Sync
             if (isOnline) {
                 try {
-                    await setDoc(
-                        doc(db, 'settings', 'license'),
-                        {
-                            key: inputKey,
-                            expiryDate: newExpiryISO,
-                            updatedAt: new Date().toISOString()
-                        },
-                        { merge: true }
-                    );
+                    await setDoc(doc(db, 'settings', 'license'), {
+                        key: inputKey,
+                        expiryDate: newExpiryISO,
+                        updatedAt: new Date().toISOString()
+                    }, { merge: true });
                 } catch (e) {
                     console.warn("Could not sync dedicated license doc:", e);
                 }
             }
 
-            toast.success(
-                `License Extended! New expiry: ${newExpiry.toLocaleDateString()}`
-            );
-
+            toast.success(`License Extended! New expiry: ${newExpiry.toLocaleDateString()}`);
             return true;
-
         } catch (error) {
             console.error("License activation failed:", error);
             toast.error("Failed to activate license");
             return false;
         }
-    }, [
-        licenseExpiryDate,
-        clinicSettings,
-        updateLocal,
-        isOnline
-    ]);
+    }, [licenseExpiryDate, clinicSettings, updateLocal, isOnline]);
 
+    // const handleFirebaseUpdate = useCallback(async (collectionName: string, remoteData: any[]) => {
+    //     // Reduced strict lock to prevent missing sync updates
+    //     if (isSyncingRef.current) {
+    //         // If we are currently saving a batch, we might want to wait instead of returning
+    //         // but for now, low-latency return is okay if we use setTimeout
+    //     }
 
+    //     try {
+    //         // FIX: Handle empty remote data (collection cleared in cloud)
+    //         // const localData = (await dbManager.getFromLocal(collectionName) || []) as any[];
+    //         const localData = (await dbManager.getFromLocal(collectionName) || []) as any[];
+    //         // Track deleted patients from localStorage
+    //         const deletedPatients = JSON.parse(localStorage.getItem('deleted_patients') || '[]');
+
+    //         // ✅ FILTER OUT DELETED PATIENTS from remote data
+    //         let filteredRemoteData = remoteData;
+    //         if (collectionName === 'patients' && deletedPatients.length > 0) {
+    //             filteredRemoteData = remoteData.filter(p => !deletedPatients.includes(p.id));
+    //             console.log(`[handleFirebaseUpdate] Filtered out ${remoteData.length - filteredRemoteData.length} deleted patients`);
+    //         }
+
+    //         if (remoteData.length === 0) {
+    //             if (localData.length > 0) {
+    //                 // Cloud is empty but we have local data — push everything up.
+    //                 // This listener only fires when online, so no stale isOnline check needed.
+    //                 console.log(`[Sync] Cloud empty for ${collectionName}. Pushing ${localData.length} local items to cloud...`);
+    //                 let pushed = 0;
+    //                 for (const item of localData) {
+    //                     try {
+    //                         const keyPath = STORE_CONFIGS[collectionName]?.keyPath || 'id';
+    //                         const docId = item[keyPath];
+    //                         if (!docId) continue;
+    //                         const sanitized: any = { ...item, needsSync: false, lastUpdated: item.lastUpdated || Date.now() };
+    //                         // Remove undefined values (Firestore rejects them)
+    //                         Object.keys(sanitized).forEach(k => sanitized[k] === undefined && delete sanitized[k]);
+    //                         await setDoc(doc(db, collectionName, String(docId)), sanitized);
+    //                         await dbManager.saveToLocal(collectionName, sanitized);
+    //                         pushed++;
+    //                     } catch (pushErr) {
+    //                         console.error(`[Sync] Failed to push ${collectionName} item to cloud:`, pushErr);
+    //                     }
+    //                 }
+    //                 console.log(`[Sync] ✅ Pushed ${pushed}/${localData.length} items of ${collectionName} to cloud.`);
+    //             }
+    //             return;
+    //         }
+
+    //         if (collectionName === 'clinicSettings') {
+    //             const remoteSettings = remoteData[0];
+    //             const localSettings = Array.isArray(localData) ? localData[0] : localData;
+
+    //             if (JSON.stringify(remoteSettings) === JSON.stringify(localSettings)) return;
+
+    //             // Always update shutdown state if clinicSettings changed
+    //             setIsShutdown(!!remoteSettings.shutdown);
+
+    //             const remoteTimestamp = remoteSettings.lastUpdated || remoteSettings.updatedAt || 0;
+    //             const localTimestamp = localSettings?.lastUpdated || localSettings?.updatedAt || 0;
+
+    //             if (!localSettings || remoteTimestamp > localTimestamp) {
+    //                 isSyncingRef.current = true;
+    //                 await dbManager.saveToLocal(collectionName, remoteSettings);
+
+    //                 // Update React State
+    //                 setClinicSettings(remoteSettings);
+
+    //                 // Recalculate Subscription (Point 4)
+    //                 const days = checkSubscription(remoteSettings);
+    //                 setLicenseDaysLeft(days);
+    //                 setLicenseStatus(days > 0 ? 'valid' : 'expired');
+
+    //                 if (remoteSettings.licenseKey) setLicenseKey(remoteSettings.licenseKey);
+    //                 if (remoteSettings.licenseExpiry) setLicenseExpiryDate(remoteSettings.licenseExpiry);
+
+    //                 setTimeout(() => { isSyncingRef.current = false; }, 100);
+    //             }
+    //             return;
+    //         }
+
+    //         const localMap = new Map(localData.map(item => [item.id, item]));
+    //         let hasChanged = false;
+    //         const updatesToSave: any[] = [];
+
+    //         // Track remote IDs to detect deletions
+    //         const remoteIds = new Set(remoteData.map(d => d.id));
+
+    //         for (const remoteItem of remoteData) {
+    //             const localItem = localMap.get(remoteItem.id);
+
+    //             if (!localItem) {
+    //                 updatesToSave.push(remoteItem);
+    //                 hasChanged = true;
+    //                 continue;
+    //             }
+
+    //             // Point 3: Specific rule for users password
+    //             if (collectionName === 'users' && (remoteItem.id === 'admin' || remoteItem.id === 'operator')) {
+    //                 if (!remoteItem.password && localItem.password) {
+    //                     remoteItem.password = localItem.password;
+    //                 }
+    //             }
+
+    //             if (JSON.stringify(remoteItem) !== JSON.stringify(localItem)) {
+    //                 const remoteTimestamp = remoteItem.lastUpdated || remoteItem.updatedAt || 0;
+    //                 const localTimestamp = localItem.lastUpdated || localItem.updatedAt || 0;
+
+    //                 const isLocalPendingSync = localItem.needsSync || localItem.syncPending;
+    //                 // If remote is newer OR if we don't have a sync pending and it's different
+    //                 if ((remoteTimestamp > localTimestamp || !isLocalPendingSync)) {
+    //                     updatesToSave.push(remoteItem);
+    //                     hasChanged = true;
+    //                 }
+    //             }
+    //         }
+
+    //         // Handle Deletions: If item in local but not in remote and not pending sync
+    //         for (const localItem of localData) {
+    //             if (!remoteIds.has(localItem.id) && !localItem.needsSync) {
+    //                 console.log(`[Sync] Item ${localItem.id} not found in cloud, deleting locally.`);
+    //                 await dbManager.deleteFromLocal(collectionName, localItem.id);
+    //                 hasChanged = true;
+    //             }
+    //         }
+
+    //         if (updatesToSave.length > 0) {
+    //             isSyncingRef.current = true;
+    //             await dbManager.saveMultipleToLocal(collectionName, updatesToSave);
+    //         }
+
+    //         if (hasChanged) {
+    //             const freshLocalData = await dbManager.getFromLocal(collectionName);
+    //             const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
+    //             if (setter) {
+    //                 setter(Array.isArray(freshLocalData) ? freshLocalData : []);
+    //                 dataChangedRef.current[collectionName] = true;
+    //             }
+    //             setTimeout(() => { isSyncingRef.current = false; }, 200);
+    //         } else if (updatesToSave.length > 0) {
+    //             setTimeout(() => { isSyncingRef.current = false; }, 200);
+    //         }
+    //     } catch (error) {
+    //         console.error(`Error handling Firebase update for ${collectionName}:`, error);
+    //         isSyncingRef.current = false;
+    //     }
+    // }, [stateSetterMap]);
 
     const handleFirebaseUpdate = useCallback(async (collectionName: string, remoteData: any[]) => {
         // Reduced strict lock to prevent missing sync updates
@@ -1648,13 +1804,24 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
 
         try {
-            // FIX: Handle empty remote data (collection cleared in cloud)
-            const localData = (await getFromLocal(collectionName) || []) as any[];
+            // Get deleted patients from localStorage
+            const deletedPatients = JSON.parse(localStorage.getItem('deleted_patients') || '[]');
 
-            if (remoteData.length === 0) {
+            // ✅ FILTER OUT DELETED PATIENTS from remote data
+            let filteredRemoteData = remoteData;
+            if (collectionName === 'patients' && deletedPatients.length > 0) {
+                filteredRemoteData = remoteData.filter(p => !deletedPatients.includes(p.id));
+                if (remoteData.length !== filteredRemoteData.length) {
+                    console.log(`[handleFirebaseUpdate] Filtered out ${remoteData.length - filteredRemoteData.length} deleted patients from ${collectionName}`);
+                }
+            }
+
+            // FIX: Handle empty remote data (collection cleared in cloud)
+            const localData = (await dbManager.getFromLocal(collectionName) || []) as any[];
+
+            if (filteredRemoteData.length === 0) {
                 if (localData.length > 0) {
                     // Cloud is empty but we have local data — push everything up.
-                    // This listener only fires when online, so no stale isOnline check needed.
                     console.log(`[Sync] Cloud empty for ${collectionName}. Pushing ${localData.length} local items to cloud...`);
                     let pushed = 0;
                     for (const item of localData) {
@@ -1666,7 +1833,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             // Remove undefined values (Firestore rejects them)
                             Object.keys(sanitized).forEach(k => sanitized[k] === undefined && delete sanitized[k]);
                             await setDoc(doc(db, collectionName, String(docId)), sanitized);
-                            await saveToLocal(collectionName, sanitized);
+                            await dbManager.saveToLocal(collectionName, sanitized);
                             pushed++;
                         } catch (pushErr) {
                             console.error(`[Sync] Failed to push ${collectionName} item to cloud:`, pushErr);
@@ -1678,7 +1845,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             }
 
             if (collectionName === 'clinicSettings') {
-                const remoteSettings = remoteData[0];
+                const remoteSettings = filteredRemoteData[0];
                 const localSettings = Array.isArray(localData) ? localData[0] : localData;
 
                 if (JSON.stringify(remoteSettings) === JSON.stringify(localSettings)) return;
@@ -1691,12 +1858,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
                 if (!localSettings || remoteTimestamp > localTimestamp) {
                     isSyncingRef.current = true;
-                    await saveToLocal(collectionName, remoteSettings);
+                    await dbManager.saveToLocal(collectionName, remoteSettings);
 
                     // Update React State
                     setClinicSettings(remoteSettings);
 
-                    // Recalculate Subscription (Point 4)
+                    // Recalculate Subscription
                     const days = checkSubscription(remoteSettings);
                     setLicenseDaysLeft(days);
                     setLicenseStatus(days > 0 ? 'valid' : 'expired');
@@ -1714,9 +1881,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
             const updatesToSave: any[] = [];
 
             // Track remote IDs to detect deletions
-            const remoteIds = new Set(remoteData.map(d => d.id));
+            const remoteIds = new Set(filteredRemoteData.map(d => d.id));
 
-            for (const remoteItem of remoteData) {
+            for (const remoteItem of filteredRemoteData) {
                 const localItem = localMap.get(remoteItem.id);
 
                 if (!localItem) {
@@ -1725,7 +1892,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     continue;
                 }
 
-                // Point 3: Specific rule for users password
+                // Specific rule for users password
                 if (collectionName === 'users' && (remoteItem.id === 'admin' || remoteItem.id === 'operator')) {
                     if (!remoteItem.password && localItem.password) {
                         remoteItem.password = localItem.password;
@@ -1749,21 +1916,26 @@ export function DataProvider({ children }: { children: ReactNode }) {
             for (const localItem of localData) {
                 if (!remoteIds.has(localItem.id) && !localItem.needsSync) {
                     console.log(`[Sync] Item ${localItem.id} not found in cloud, deleting locally.`);
-                    await deleteFromLocal(collectionName, localItem.id);
+                    await dbManager.deleteFromLocal(collectionName, localItem.id);
                     hasChanged = true;
                 }
             }
 
             if (updatesToSave.length > 0) {
                 isSyncingRef.current = true;
-                await saveMultipleToLocal(collectionName, updatesToSave);
+                await dbManager.saveMultipleToLocal(collectionName, updatesToSave);
             }
 
             if (hasChanged) {
-                const freshLocalData = await getFromLocal(collectionName);
+                const freshLocalData = await dbManager.getFromLocal(collectionName);
                 const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
                 if (setter) {
-                    setter(Array.isArray(freshLocalData) ? freshLocalData : []);
+                    // ✅ Apply deleted filter again before setting state
+                    let finalData = Array.isArray(freshLocalData) ? freshLocalData : [];
+                    if (collectionName === 'patients' && deletedPatients.length > 0) {
+                        finalData = finalData.filter((p: any) => !deletedPatients.includes(p.id));
+                    }
+                    setter(finalData);
                     dataChangedRef.current[collectionName] = true;
                 }
                 setTimeout(() => { isSyncingRef.current = false; }, 200);
@@ -1776,8 +1948,643 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
     }, [stateSetterMap]);
 
+    const verifyDataIntegrity = useCallback(async () => {
+        console.log('[verifyDataIntegrity] Starting data integrity check...');
+
+        const issues = [];
+
+        try {
+            // Check for attendance records with missing staff
+            const allAttendance = await dbManager.getFromLocal('attendance');
+            const allStaff = await dbManager.getFromLocal('staff');
+            const staffIds = new Set(allStaff.map(s => s.id));
+
+            const orphanedAttendance = (allAttendance || []).filter(a => !staffIds.has(a.staffId));
+            if (orphanedAttendance.length > 0) {
+                issues.push(`${orphanedAttendance.length} orphaned attendance records found`);
+                console.log('[verifyDataIntegrity] Orphaned attendance:', orphanedAttendance);
+            }
+
+            // Check for salary payments with missing staff
+            const allPayments = await dbManager.getFromLocal('salaryPayments');
+            const orphanedPayments = (allPayments || []).filter(p => !staffIds.has(p.staffId));
+            if (orphanedPayments.length > 0) {
+                issues.push(`${orphanedPayments.length} orphaned payment records found`);
+            }
+
+            // Check for transactions with missing staff
+            const allTransactions = await dbManager.getFromLocal('transactions');
+            const orphanedTransactions = (allTransactions || []).filter(t => t.staffId && !staffIds.has(t.staffId));
+            if (orphanedTransactions.length > 0) {
+                issues.push(`${orphanedTransactions.length} orphaned transaction records found`);
+            }
+
+            if (issues.length > 0) {
+                console.warn('[verifyDataIntegrity] Issues found:', issues);
+                return { valid: false, issues };
+            } else {
+                console.log('[verifyDataIntegrity] All data is consistent');
+                return { valid: true, issues: [] };
+            }
+
+        } catch (error) {
+            console.error('[verifyDataIntegrity] Error:', error);
+            return { valid: false, issues: ['Failed to verify data integrity'] };
+        }
+    }, []);
+
     const handleFirebaseUpdateRef = useRef(handleFirebaseUpdate);
     handleFirebaseUpdateRef.current = handleFirebaseUpdate;
+
+    // Add this function in DataContext.tsx (around line 550-600, before updateAttendanceWithTime)
+
+    const addToSyncQueue = useCallback(async (collectionName: string, data: any, operation: 'create' | 'update' | 'delete' | 'upsert') => {
+        try {
+            const syncItem = {
+                id: `${collectionName}_${data.id}_${Date.now()}`,
+                collectionName,
+                docId: data.id,
+                data,
+                operation: operation === 'upsert' ? 'update' : operation,
+                timestamp: Date.now(),
+                retryCount: 0
+            };
+
+            await dbManager.saveToLocal('syncQueue', syncItem);
+
+            // If online and autoSync is enabled, process immediately
+            if (isOnline && autoSyncEnabled) {
+                setTimeout(() => processSyncQueue(), 0);
+            }
+        } catch (error) {
+            console.error('Failed to add to sync queue:', error);
+        }
+    }, [isOnline, autoSyncEnabled]);
+
+    const updateAttendanceWithTime = useCallback(async (attendance: Attendance): Promise<void> => {
+        try {
+            // Validate required fields
+            if (!attendance.staffId) {
+                throw new Error('Staff ID is required');
+            }
+
+            if (!attendance.date) {
+                throw new Error('Date is required');
+            }
+
+            // Ensure time is in correct format
+            let time = attendance.time;
+            let timestamp = attendance.timestamp;
+
+            // If time is not provided but date is, create default time
+            if (!time && attendance.date) {
+                const now = new Date();
+                time = now.toLocaleTimeString('en-US', {
+                    hour12: false,
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                });
+            }
+
+            // Create timestamp if not provided
+            if (!timestamp && attendance.date && time) {
+                timestamp = `${attendance.date}T${time}`;
+            }
+
+            // Check for duplicate attendance at same timestamp
+            const isDuplicate = await checkDuplicateAttendance(attendance.staffId, timestamp!);
+            if (isDuplicate && !attendance.id) {
+                toast.warning('Attendance already recorded for this time');
+                return;
+            }
+
+            const attendanceWithTime: Attendance = {
+                ...attendance,
+                time,
+                timestamp,
+                updatedAt: new Date().toISOString(),
+                synced: false
+            };
+
+            if (!attendanceWithTime.createdAt) {
+                attendanceWithTime.createdAt = new Date().toISOString();
+            }
+
+            // Ensure ID exists
+            if (!attendanceWithTime.id) {
+                attendanceWithTime.id = `att-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+            }
+
+            // 1. Update local state immediately (Optimistic UI)
+            setAttendance(prev => {
+                const exists = prev.some(a => a.id === attendanceWithTime.id);
+                if (exists) {
+                    return prev.map(a => a.id === attendanceWithTime.id ? attendanceWithTime : a);
+                } else {
+                    return [...prev, attendanceWithTime];
+                }
+            });
+
+            // 2. Save to IndexedDB (Local persistence)
+            await dbManager.saveToLocal('attendance', attendanceWithTime);
+
+            // 3. Add to sync queue for Firebase background sync
+            await addToSyncQueue('attendance', attendanceWithTime, 'upsert');
+
+            // 4. Show success message
+            toast.success(`Attendance recorded for ${attendanceWithTime.date} at ${attendanceWithTime.time}`);
+
+        } catch (error) {
+            console.error('Failed to update attendance:', error);
+            toast.error('Failed to record attendance');
+            throw error;
+        }
+    }, [addToSyncQueue]);
+
+    const getAttendanceWithTimeRange = useCallback(async (staffId: string, startDate: string, endDate: string): Promise<Attendance[]> => {
+        try {
+            const allAttendance = await dbManager.getFromLocal('attendance');
+            if (!allAttendance || !Array.isArray(allAttendance)) return [];
+
+            return allAttendance.filter((att: Attendance) =>
+                att.staffId === staffId &&
+                att.date >= startDate &&
+                att.date <= endDate
+            );
+        } catch (error) {
+            console.error('Failed to get attendance by time range:', error);
+            return [];
+        }
+    }, []);
+
+    const checkDuplicateAttendance = useCallback(async (staffId: string, timestamp: string): Promise<boolean> => {
+        try {
+            const allAttendance = await dbManager.getFromLocal('attendance');
+            if (!allAttendance || !Array.isArray(allAttendance)) return false;
+
+            return allAttendance.some((att: Attendance) =>
+                att.staffId === staffId && att.timestamp === timestamp
+            );
+        } catch (error) {
+            console.error('Failed to check duplicate attendance:', error);
+            return false;
+        }
+    }, []);
+
+    const deleteAttendance = useCallback(async (attendanceId: string): Promise<void> => {
+        try {
+            // 1. Find the attendance record
+            const attendanceToDelete = attendance.find(a => a.id === attendanceId);
+            if (!attendanceToDelete) {
+                throw new Error('Attendance record not found');
+            }
+
+            // 2. Delete from IndexedDB and Firebase
+            await deleteLocal('attendance', attendanceId);
+
+            // 3. Update local state
+            setAttendance(prev => prev.filter(a => a.id !== attendanceId));
+
+            // 4. Show success message
+            toast.success(`Attendance record for ${attendanceToDelete.date} deleted successfully`);
+
+            // 5. No need to recalculate staff stats as attendance doesn't affect salary calculations directly
+            // Salary is calculated based on attendance when paying salary
+
+        } catch (error) {
+            console.error('Failed to delete attendance:', error);
+            toast.error('Failed to delete attendance record');
+            throw error;
+        }
+    }, [attendance, deleteLocal]);
+
+    const deleteStaffWithAllRecords = useCallback(async (staffMember: Staff): Promise<boolean> => {
+        console.log(`[deleteStaffWithAllRecords] Deleting staff: ${staffMember.name} (${staffMember.id})`);
+
+        try {
+            // 1. Get all related records
+            const staffAttendance = attendance.filter(a => a.staffId === staffMember.id);
+            const staffPayments = salaryPayments.filter(p => p.staffId === staffMember.id);
+            const staffTransactions = transactions.filter(t => t.staffId === staffMember.id && t.type === 'Salary');
+
+            console.log(`[deleteStaffWithAllRecords] Found: ${staffAttendance.length} attendance, ${staffPayments.length} payments, ${staffTransactions.length} transactions`);
+
+            // 2. Delete all attendance records
+            for (const att of staffAttendance) {
+                await deleteLocal('attendance', att.id);
+                console.log(`[deleteStaffWithAllRecords] Deleted attendance: ${att.id} (${att.date})`);
+            }
+
+            // 3. Delete all salary payments and linked expenses
+            for (const payment of staffPayments) {
+                // Delete the salary payment record
+                await deleteLocal('salaryPayments', payment.id);
+
+                // Find and delete linked expense
+                const linkedExpense = expenses.find(e => e.id === payment.id || e.title?.includes(staffMember.name));
+                if (linkedExpense) {
+                    await deleteLocal('expenses', linkedExpense.id);
+                    console.log(`[deleteStaffWithAllRecords] Deleted linked expense: ${linkedExpense.id}`);
+                }
+
+                console.log(`[deleteStaffWithAllRecords] Deleted payment: ${payment.id}`);
+            }
+
+            // 4. Delete all transactions
+            for (const txn of staffTransactions) {
+                await deleteLocal('transactions', txn.id);
+                console.log(`[deleteStaffWithAllRecords] Deleted transaction: ${txn.id}`);
+            }
+
+            // 5. Finally, delete the staff member
+            await deleteLocal('staff', staffMember.id);
+            console.log(`[deleteStaffWithAllRecords] Deleted staff: ${staffMember.id}`);
+
+            // 6. Update local state to remove all related records
+            setAttendance(prev => prev.filter(a => a.staffId !== staffMember.id));
+            setSalaryPayments(prev => prev.filter(p => p.staffId !== staffMember.id));
+            setTransactions(prev => prev.filter(t => t.staffId !== staffMember.id));
+
+            // 7. Update expenses to remove any lingering linked expenses
+            const updatedExpenses = expenses.filter(e => !e.title?.includes(staffMember.name) && e.id !== staffMember.id);
+            setExpenses(updatedExpenses);
+
+            toast.success(`${staffMember.name} and all associated records deleted successfully`);
+
+            return true;
+
+        } catch (error) {
+            console.error('[deleteStaffWithAllRecords] Error:', error);
+            toast.error(`Failed to completely delete ${staffMember.name}. Please check console for details.`);
+            return false;
+        }
+    }, [attendance, salaryPayments, transactions, expenses, deleteLocal]);
+
+    const cleanupOrphanedExpenses = useCallback(async () => {
+        try {
+            const allExpenses = await dbManager.getFromLocal('expenses');
+            const allStaff = await dbManager.getFromLocal('staff');
+            const staffIds = new Set(allStaff.map(s => s.id));
+
+            // Find expenses that reference staff but staff doesn't exist
+            const orphanedExpenses = (allExpenses || []).filter(expense => {
+                // Check if expense is a salary expense
+                if (expense.category === 'salary' && expense.staffId) {
+                    return !staffIds.has(expense.staffId);
+                }
+                return false;
+            });
+
+            if (orphanedExpenses.length > 0) {
+                console.log(`[cleanupOrphanedExpenses] Found ${orphanedExpenses.length} orphaned expenses`);
+                for (const expense of orphanedExpenses) {
+                    await deleteLocal('expenses', expense.id);
+                    console.log(`[cleanupOrphanedExpenses] Deleted orphaned expense: ${expense.id}`);
+                }
+            }
+        } catch (error) {
+            console.error('[cleanupOrphanedExpenses] Error:', error);
+        }
+    }, [deleteLocal]);
+
+    // const deletePatientWithAllRecords = useCallback(async (patient: Patient): Promise<boolean> => {
+    //     console.log(`[deletePatientWithAllRecords] Deleting patient: ${patient.name} (${patient.id})`);
+    //     console.log(`[deletePatientWithAllRecords] Patient Number: ${patient.patientNumber}`);
+
+    //     try {
+    //         // 1. Get all related records - Match by ALL possible fields
+    //         const patientQueueItems = queue.filter(q =>
+    //             q.patientId === patient.id ||
+    //             q.patientNumber === patient.patientNumber ||
+    //             q.patientName === patient.name
+    //         );
+
+    //         const patientBills = bills.filter(b =>
+    //             b.patientId === patient.id ||
+    //             b.patientNumber === patient.patientNumber
+    //         );
+
+    //         const patientTransactions = transactions.filter(t =>
+    //             t.patientId === patient.id ||
+    //             t.patientNumber === patient.patientNumber ||
+    //             t.patientName === patient.name
+    //         );
+
+    //         console.log(`[deletePatientWithAllRecords] Found: 
+    //         - ${patientQueueItems.length} queue items
+    //         - ${patientBills.length} bills
+    //         - ${patientTransactions.length} transactions`);
+
+    //         // 2. Delete all queue items (including treatments)
+    //         for (const item of patientQueueItems) {
+    //             await deleteLocal('queue', item.id);
+    //             console.log(`[deletePatientWithAllRecords] Deleted queue item: ${item.id}`);
+    //         }
+
+    //         // 3. Delete all bills
+    //         for (const bill of patientBills) {
+    //             await deleteLocal('bills', bill.id);
+    //             console.log(`[deletePatientWithAllRecords] Deleted bill: ${bill.id}`);
+    //         }
+
+    //         // 4. Delete all transactions (including pre-receive payments)
+    //         for (const txn of patientTransactions) {
+    //             await deleteLocal('transactions', txn.id);
+    //             console.log(`[deletePatientWithAllRecords] Deleted transaction: ${txn.id}`);
+    //         }
+
+    //         // 5. Finally, delete the patient
+    //         await deleteLocal('patients', patient.id);
+    //         console.log(`[deletePatientWithAllRecords] Deleted patient: ${patient.id}`);
+
+    //         // 6. Update local state to remove all related records
+    //         setQueue(prev => prev.filter(q =>
+    //             q.patientId !== patient.id &&
+    //             q.patientNumber !== patient.patientNumber &&
+    //             q.patientName !== patient.name
+    //         ));
+
+    //         setBills(prev => prev.filter(b =>
+    //             b.patientId !== patient.id &&
+    //             b.patientNumber !== patient.patientNumber
+    //         ));
+
+    //         setTransactions(prev => prev.filter(t =>
+    //             t.patientId !== patient.id &&
+    //             t.patientNumber !== patient.patientNumber &&
+    //             t.patientName !== patient.name
+    //         ));
+
+    //         toast.success(`${patient.name} and all associated records deleted successfully`);
+
+    //         return true;
+
+    //     } catch (error) {
+    //         console.error('[deletePatientWithAllRecords] Error:', error);
+    //         toast.error(`Failed to completely delete ${patient.name}. Please check console for details.`);
+    //         return false;
+    //     }
+    // }, [queue, bills, transactions, deleteLocal]);
+
+    // const deletePatientWithAllRecords = useCallback(async (patient: Patient): Promise<boolean> => {
+    //     console.log(`[deletePatientWithAllRecords] Deleting patient: ${patient.name} (${patient.id})`);
+
+    //     try {
+    //         // 1. Get all related records
+    //         const patientQueueItems = queue.filter(q =>
+    //             q.patientId === patient.id ||
+    //             q.patientNumber === patient.patientNumber ||
+    //             q.patientName === patient.name
+    //         );
+
+    //         const patientBills = bills.filter(b =>
+    //             b.patientId === patient.id ||
+    //             b.patientNumber === patient.patientNumber
+    //         );
+
+    //         const patientTransactions = transactions.filter(t =>
+    //             t.patientId === patient.id ||
+    //             t.patientNumber === patient.patientNumber ||
+    //             t.patientName === patient.name
+    //         );
+
+    //         console.log(`Found: ${patientQueueItems.length} queue, ${patientBills.length} bills, ${patientTransactions.length} transactions`);
+
+    //         // 2. Delete all queue items
+    //         for (const item of patientQueueItems) {
+    //             await deleteLocal('queue', item.id);
+    //         }
+
+    //         // 3. Delete all bills
+    //         for (const bill of patientBills) {
+    //             await deleteLocal('bills', bill.id);
+    //         }
+
+    //         // 4. Delete all transactions
+    //         for (const txn of patientTransactions) {
+    //             await deleteLocal('transactions', txn.id);
+    //         }
+
+    //         // 5. Delete the patient
+    //         await deleteLocal('patients', patient.id);
+
+    //         // 6. ✅ ADD THIS - Update patients state immediately
+    //         setPatients(prev => prev.filter(p => p.id !== patient.id));
+
+    //         // 7. Update other states
+    //         setQueue(prev => prev.filter(q =>
+    //             q.patientId !== patient.id &&
+    //             q.patientNumber !== patient.patientNumber &&
+    //             q.patientName !== patient.name
+    //         ));
+
+    //         setBills(prev => prev.filter(b =>
+    //             b.patientId !== patient.id &&
+    //             b.patientNumber !== patient.patientNumber
+    //         ));
+
+    //         setTransactions(prev => prev.filter(t =>
+    //             t.patientId !== patient.id &&
+    //             t.patientNumber !== patient.patientNumber &&
+    //             t.patientName !== patient.name
+    //         ));
+
+    //         toast.success(`${patient.name} and all associated records deleted successfully`);
+    //         return true;
+
+    //     } catch (error) {
+    //         console.error('[deletePatientWithAllRecords] Error:', error);
+    //         toast.error(`Failed to delete ${patient.name}`);
+    //         return false;
+    //     }
+    // }, [queue, bills, transactions, deleteLocal, setPatients]); // ✅ Add setPatients to dependencies
+
+
+    const deletePatientWithAllRecords = useCallback(async (patient: Patient): Promise<boolean> => {
+    console.log(`[deletePatientWithAllRecords] ========== START ==========`);
+    console.log(`[deletePatientWithAllRecords] Deleting patient: ${patient.name}`);
+    console.log(`[deletePatientWithAllRecords] Patient ID: ${patient.id}`);
+    console.log(`[deletePatientWithAllRecords] Patient Number: ${patient.patientNumber}`);
+
+    try {
+        // ============================================
+        // STEP 1: Get ALL data from current state
+        // ============================================
+        console.log(`[deletePatientWithAllRecords] Fetching all related records...`);
+        
+        // Queue items - Match by multiple fields
+        const patientQueueItems = queue.filter(q => {
+            const matchById = q.patientId === patient.id;
+            const matchByNumber = q.patientNumber === patient.patientNumber;
+            const matchByName = q.patientName === patient.name;
+            const matched = matchById || matchByNumber || matchByName;
+            if (matched) {
+                console.log(`[deletePatientWithAllRecords] Found queue item:`, { id: q.id, patientId: q.patientId, patientNumber: q.patientNumber, patientName: q.patientName });
+            }
+            return matched;
+        });
+
+        // Bills - Match by patient ID or patient number
+        const patientBills = bills.filter(b => {
+            const matchById = b.patientId === patient.id;
+            const matchByNumber = b.patientNumber === patient.patientNumber;
+            const matched = matchById || matchByNumber;
+            if (matched) {
+                console.log(`[deletePatientWithAllRecords] Found bill:`, { id: b.id, patientId: b.patientId, patientNumber: b.patientNumber });
+            }
+            return matched;
+        });
+
+        // Transactions - Match by patient ID, patient number, or patient name
+        const patientTransactions = transactions.filter(t => {
+            const matchById = t.patientId === patient.id;
+            const matchByNumber = t.patientNumber === patient.patientNumber;
+            const matchByName = t.patientName === patient.name;
+            const matched = matchById || matchByNumber || matchByName;
+            if (matched) {
+                console.log(`[deletePatientWithAllRecords] Found transaction:`, { id: t.id, type: t.type, amount: t.amount });
+            }
+            return matched;
+        });
+
+        console.log(`[deletePatientWithAllRecords] SUMMARY:`);
+        console.log(`  - Queue items: ${patientQueueItems.length}`);
+        console.log(`  - Bills: ${patientBills.length}`);
+        console.log(`  - Transactions: ${patientTransactions.length}`);
+
+        // ============================================
+        // STEP 2: Delete all queue items
+        // ============================================
+        for (const item of patientQueueItems) {
+            try {
+                await deleteLocal('queue', item.id);
+                console.log(`✅ Deleted queue: ${item.id} (${item.patientName})`);
+            } catch (err) {
+                console.error(`❌ Failed to delete queue ${item.id}:`, err);
+            }
+        }
+
+        // ============================================
+        // STEP 3: Delete all bills
+        // ============================================
+        for (const bill of patientBills) {
+            try {
+                await deleteLocal('bills', bill.id);
+                console.log(`✅ Deleted bill: ${bill.id}`);
+            } catch (err) {
+                console.error(`❌ Failed to delete bill ${bill.id}:`, err);
+            }
+        }
+
+        // ============================================
+        // STEP 4: Delete all transactions (including payments)
+        // ============================================
+        for (const txn of patientTransactions) {
+            try {
+                await deleteLocal('transactions', txn.id);
+                console.log(`✅ Deleted transaction: ${txn.id} (${txn.type}: ${txn.amount})`);
+            } catch (err) {
+                console.error(`❌ Failed to delete transaction ${txn.id}:`, err);
+            }
+        }
+
+        // ============================================
+        // STEP 5: Delete the patient
+        // ============================================
+        await deleteLocal('patients', patient.id);
+        console.log(`✅ Deleted patient: ${patient.id}`);
+
+        // ============================================
+        // STEP 6: Mark as deleted to prevent re-fetch
+        // ============================================
+        const deletedPatients = JSON.parse(localStorage.getItem('deleted_patients') || '[]');
+        if (!deletedPatients.includes(patient.id)) {
+            deletedPatients.push(patient.id);
+            localStorage.setItem('deleted_patients', JSON.stringify(deletedPatients));
+            console.log(`📝 Added ${patient.id} to deleted_patients list`);
+        }
+
+        // ============================================
+        // STEP 7: Update all React states
+        // ============================================
+        setPatients(prev => {
+            const filtered = prev.filter(p => p.id !== patient.id);
+            console.log(`🔄 Patients state: ${prev.length} -> ${filtered.length}`);
+            return filtered;
+        });
+
+        setQueue(prev => {
+            const filtered = prev.filter(q =>
+                q.patientId !== patient.id &&
+                q.patientNumber !== patient.patientNumber &&
+                q.patientName !== patient.name
+            );
+            console.log(`🔄 Queue state: ${prev.length} -> ${filtered.length}`);
+            return filtered;
+        });
+
+        setBills(prev => {
+            const filtered = prev.filter(b =>
+                b.patientId !== patient.id &&
+                b.patientNumber !== patient.patientNumber
+            );
+            console.log(`🔄 Bills state: ${prev.length} -> ${filtered.length}`);
+            return filtered;
+        });
+
+        setTransactions(prev => {
+            const filtered = prev.filter(t =>
+                t.patientId !== patient.id &&
+                t.patientNumber !== patient.patientNumber &&
+                t.patientName !== patient.name
+            );
+            console.log(`🔄 Transactions state: ${prev.length} -> ${filtered.length}`);
+            return filtered;
+        });
+
+        // Also update filteredPatients in OperatorPatients if needed
+        // This will be handled by the component's own state
+
+        console.log(`[deletePatientWithAllRecords] ========== COMPLETE ==========`);
+        toast.success(`${patient.name} and all ${patientQueueItems.length} queue items, ${patientBills.length} bills, ${patientTransactions.length} transactions deleted successfully`);
+        console.log(debugPatientRecords(patient))
+        return true;
+
+    } catch (error) {
+        console.error('[deletePatientWithAllRecords] FATAL ERROR:', error);
+        toast.error(`Failed to delete ${patient.name}. Please try again.`);
+        return false;
+    }
+
+}, [queue, bills, transactions, deleteLocal, setPatients, setQueue, setBills, setTransactions]);
+
+    const debugPatientRecords = useCallback((patient: Patient) => {
+    console.log(`[DEBUG] Checking records for patient: ${patient.name} (${patient.id})`);
+    
+    const patientQueueItems = queue.filter(q =>
+        q.patientId === patient.id ||
+        q.patientNumber === patient.patientNumber ||
+        q.patientName === patient.name
+    );
+    
+    const patientBills = bills.filter(b =>
+        b.patientId === patient.id ||
+        b.patientNumber === patient.patientNumber
+    );
+    
+    const patientTransactions = transactions.filter(t =>
+        t.patientId === patient.id ||
+        t.patientNumber === patient.patientNumber ||
+        t.patientName === patient.name
+    );
+    
+    console.log(`[DEBUG] Queue items:`, patientQueueItems.map(q => ({ id: q.id, patientId: q.patientId, patientNumber: q.patientNumber })));
+    console.log(`[DEBUG] Bills:`, patientBills.map(b => ({ id: b.id, patientId: b.patientId, patientNumber: b.patientNumber })));
+    console.log(`[DEBUG] Transactions:`, patientTransactions.map(t => ({ id: t.id, type: t.type, amount: t.amount })));
+    
+    return { patientQueueItems, patientBills, patientTransactions };
+}, [queue, bills, transactions]);
 
     useEffect(() => {
         initializeData();
@@ -1891,6 +2698,36 @@ export function DataProvider({ children }: { children: ReactNode }) {
         };
     }, [isOnline, initialLoadComplete, autoSyncEnabled]);
 
+    useEffect(() => {
+        // Process sync queue when online
+        const handleOnline = async () => {
+            console.log('[DataContext] Online, processing sync queue...');
+            const { processSyncQueue } = await import('@/services/offlineSync');
+            await processSyncQueue();
+        };
+
+        window.addEventListener('online', handleOnline);
+
+        // Initial sync if online
+        if (navigator.onLine) {
+            handleOnline();
+        }
+
+        // Periodic sync every 5 minutes
+        const interval = setInterval(() => {
+            if (navigator.onLine) {
+                import('@/services/offlineSync').then(({ processSyncQueue }) => {
+                    processSyncQueue();
+                });
+            }
+        }, 5 * 60 * 1000);
+
+        return () => {
+            window.removeEventListener('online', handleOnline);
+            clearInterval(interval);
+        };
+    }, []);
+
     return (
         <DataContext.Provider value={{
             patients, queue, appointments, staff, salaryPayments, attendance,
@@ -1916,7 +2753,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
             importFromJSON,
             clearDataStore,
             autoSyncEnabled,
-            setAutoSyncEnabled
+            setAutoSyncEnabled,
+
+            updateAttendanceWithTime,
+            getAttendanceWithTimeRange,
+            checkDuplicateAttendance,
+            deleteStaffWithAllRecords,
+            deletePatientWithAllRecords
         }}>
             {children}
         </DataContext.Provider>

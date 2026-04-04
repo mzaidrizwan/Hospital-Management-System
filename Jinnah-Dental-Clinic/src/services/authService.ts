@@ -1,4 +1,5 @@
-import { saveToLocal, getFromLocal } from '@/services/indexedDbUtils';
+// import { saveToLocal, getFromLocal } from '@/services/expireindexedDbUtils_OLDs';
+import { dbManager, STORE_CONFIGS, getKeyPath } from '@/lib/indexedDB';
 import { smartSync } from '@/services/syncService';
 
 /**
@@ -12,7 +13,7 @@ import { smartSync } from '@/services/syncService';
 export const updateUserPassword = async (userId: string, currentPassword: string, newPassword: string): Promise<boolean> => {
     try {
         // 1. Fetch current user data from IndexedDB
-        const storedUser = await getFromLocal('users', userId);
+        const storedUser = await dbManager.getFromLocal('users', userId);
 
         if (!storedUser) {
             throw new Error('User record not found in local storage.');
@@ -58,7 +59,7 @@ export const updateUserPassword = async (userId: string, currentPassword: string
 export const updateUserPasswordLocally = async (userId: string, newPassword: string): Promise<boolean> => {
     try {
         // 1. Update password in the 'users' store within IndexedDB immediately
-        const storedUser = await getFromLocal('users', userId);
+        const storedUser = await dbManager.getFromLocal('users', userId);
         if (!storedUser) throw new Error('User record not found in local storage.');
 
         const updatedUser = {
@@ -68,7 +69,7 @@ export const updateUserPasswordLocally = async (userId: string, newPassword: str
             updatedAt: new Date().toISOString()
         };
 
-        await saveToLocal('users', updatedUser);
+        await dbManager.putItem('users', updatedUser);
 
         // 2. Add a 'passwordUpdate' task to the 'syncQueue' for Firebase
         // smartSync handles naming and queueing if offline. We trigger it in background.

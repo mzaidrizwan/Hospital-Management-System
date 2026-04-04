@@ -130,7 +130,6 @@ export default function Bill() {
             const treatmentItems: { name: string; fee: number }[] = [];
             let treatmentString = item.treatment || '';
 
-            // Try to parse "Treatment (Rs. 500), Treatment 2 (Rs. 1000)" format
             const parts = treatmentString.split(/,\s*(?![^(]*\))/);
             parts.forEach(part => {
                 const match = part.match(/^(.*?)\s*\(Rs\.\s*([\d,]+)\)$/i);
@@ -147,7 +146,7 @@ export default function Bill() {
                 }
             });
 
-            // Fix fees if parsing missed them but total exists
+            // Fix fees if parsing missed them
             const parsedTotal = treatmentItems.reduce((sum, t) => sum + t.fee, 0);
             const itemFee = item.fee || 0;
             if (parsedTotal !== itemFee) {
@@ -166,9 +165,6 @@ export default function Bill() {
             const amountPaid = item.amountPaid || 0;
             const treatmentFee = itemFee;
 
-            // Reverse calculate Previous Pending
-            // Final Balance = Previous + Fee - Discount - Paid
-            // Previous = Final Balance - Fee + Discount + Paid
             let previousPending = currentPendingBalance - treatmentFee + discount + amountPaid;
             if (previousPending < 0) previousPending = 0;
 
@@ -176,64 +172,73 @@ export default function Bill() {
             const totalDueAfterDiscount = Math.max(0, totalDueBeforeDiscount - discount);
             const remainingAfterPayment = Math.max(0, totalDueAfterDiscount - amountPaid);
 
-            // 3. Prepare Print Content
+            // 3. Doctor Name
             const doctorName = staff.find(s => s.id === item.doctorId)?.name || item.doctor || '—';
-            const now = new Date(); // Use current date for reprint
+
+            const now = new Date();
             const dateStr = now.toLocaleString('en-PK', {
-                year: 'numeric', month: '2-digit', day: '2-digit',
-                hour: '2-digit', minute: '2-digit', hour12: true
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true
             });
 
             const treatmentsRows = treatmentItems.map((t, i) => `
-        <tr>
-          <td style="border:1px solid #000;padding:3px;">${i + 1}</td>
-          <td style="border:1px solid #000;padding:3px;">${t.name}</td>
-          <td style="border:1px solid #000;padding:3px;text-align:right;">Rs. ${t.fee.toFixed(0)}</td>
-        </tr>
-      `).join('');
+      <tr>
+        <td style="border:1px solid #000;padding:4px;">${i + 1}</td>
+        <td style="border:1px solid #000;padding:4px;">${t.name}</td>
+        <td style="border:1px solid #000;padding:4px;text-align:right;">Rs. ${t.fee.toFixed(0)}</td>
+      </tr>
+    `).join('');
 
+            // Print Content with Bigger Title
             const printContent = `
-JINNAH DENTAL CLINIC
+================================
 Token: #${item.tokenNumber || '—'}
 Patient: ${item.patientName}
 Phone: ${item.patientPhone || 'N/A'}
 Date: ${dateStr}
 Doctor: ${doctorName}
---------------------------------
+================================
+
 TREATMENTS
 --------------------------------
-<table style="width:100%;border-collapse:collapse;font-size:12px;">
+<table style="width:100%;border-collapse:collapse;font-size:13px;">
   <thead>
     <tr style="background:#f0f0f0;">
-      <th style="border:1px solid #000;padding:3px;">S.No</th>
-      <th style="border:1px solid #000;padding:3px;">Treatment</th>
-      <th style="border:1px solid #000;padding:3px;">Fee</th>
+      <th style="border:1px solid #000;padding:5px;">S.No</th>
+      <th style="border:1px solid #000;padding:5px;">Treatment</th>
+      <th style="border:1px solid #000;padding:5px;text-align:right;">Fee</th>
     </tr>
   </thead>
   <tbody>
     ${treatmentsRows}
-    <tr style="font-weight:bold;">
-      <td colspan="2" style="border:1px solid #000;padding:3px;">Total Treatments</td>
-      <td style="border:1px solid #000;padding:3px;text-align:right;">Rs. ${treatmentFee.toFixed(0)}</td>
+    <tr style="font-weight:bold;background:#f9f9f9;">
+      <td colspan="2" style="border:1px solid #000;padding:5px;">Total Treatments</td>
+      <td style="border:1px solid #000;padding:5px;text-align:right;">Rs. ${treatmentFee.toFixed(0)}</td>
     </tr>
   </tbody>
 </table>
+
 --------------------------------
 PAYMENT SUMMARY
 --------------------------------
-Previous Pending: Rs. ${previousPending.toFixed(0)}
+Previous Pending : Rs. ${previousPending.toFixed(0)}
 Current Treatments: Rs. ${treatmentFee.toFixed(0)}
-Discount: Rs. ${discount.toFixed(0)}
+Discount          : Rs. ${discount.toFixed(0)}
 --------------------------------
-Total Due: Rs. ${totalDueAfterDiscount.toFixed(0)}
-Paid: Rs. ${amountPaid.toFixed(0)}
-Remaining: Rs. ${remainingAfterPayment.toFixed(0)}
+Total Due         : Rs. ${totalDueAfterDiscount.toFixed(0)}
+Paid              : Rs. ${amountPaid.toFixed(0)}
+**Remaining**     : Rs. ${remainingAfterPayment.toFixed(0)}
 --------------------------------
 Status: ${item.paymentStatus ? item.paymentStatus.toUpperCase() : 'PENDING'}
 Notes: ${item.notes || 'None'}
---------------------------------
+================================
 Thank You! Visit Again
 Powered by Saynz Technologies
+Contact Us: 0347 1887181
 `.trim();
 
             const printWindow = window.open('', '_blank');
@@ -243,48 +248,65 @@ Powered by Saynz Technologies
             }
 
             printWindow.document.write(`
-        <html>
-          <head>
-            <title>Receipt - ${item.patientName}</title>
-            <style>
-              @page { size: 80mm auto; margin: 0; }
-              body { 
-                margin: 0; 
-                padding: 4mm; 
-                font-family: 'Courier New', Courier, monospace; 
-                font-size: 12px; 
-                line-height: 1.2; 
-                width: 72mm; 
-              }
-              table { 
-                width: 100%; 
-                border-collapse: collapse; 
-                margin: 4px 0; 
-              }
-              th, td { 
-                border: 1px solid #000; 
-                padding: 3px; 
-                text-align: left;
-              }
-              .bold { font-weight: bold; }
-              pre { white-space: pre-wrap; word-wrap: break-word; }
-            </style>
-          </head>
-          <body>
-            <pre>${printContent}</pre>
-            <script>
-              window.onload = function() {
+      <html>
+        <head>
+          <title>Receipt - ${item.patientName}</title>
+          <style>
+            @page { size: 80mm auto; margin: 0; }
+            body { 
+              margin: 0; 
+              padding: 5mm; 
+              font-family: 'Courier New', Courier, monospace; 
+              font-size: 12px; 
+              line-height: 1.3; 
+              width: 72mm; 
+            }
+            .clinic-title {
+              font-size: 18px;
+              font-weight: bold;
+              text-align: center;
+              margin-bottom: 8px;
+              letter-spacing: 1px;
+            }
+            .divider {
+              border-top: 1px dashed #000;
+              margin: 8px 0;
+            }
+            table { 
+              width: 100%; 
+              border-collapse: collapse; 
+              margin: 6px 0; 
+            }
+            th, td { 
+              border: 1px solid #000; 
+              padding: 5px; 
+              text-align: left;
+            }
+            th { background:#f0f0f0; }
+            .bold { font-weight: bold; }
+            .highlight { font-weight: bold; font-size: 13px; }
+          </style>
+        </head>
+        <body>
+          <div class="clinic-title">JINNAH DENTAL CLINIC🦷</div>
+          <div class="divider"></div>
+          
+          <pre style="margin:0; font-size:12px;">${printContent}</pre>
+
+          <script>
+            window.onload = function() {
+              setTimeout(function() {
+                window.print();
                 setTimeout(function() {
-                  window.print();
-                  setTimeout(function() {
-                    window.close();
-                  }, 1000);
-                }, 300);
-              }
-            </script>
-          </body>
-        </html>
-      `);
+                  window.close();
+                }, 800);
+              }, 400);
+            }
+          </script>
+        </body>
+      </html>
+    `);
+
             printWindow.document.close();
 
         } catch (error) {

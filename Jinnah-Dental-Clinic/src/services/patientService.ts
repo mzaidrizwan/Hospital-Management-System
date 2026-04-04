@@ -14,6 +14,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Patient } from "@/types";
+import { dbManager, STORE_CONFIGS, getKeyPath } from '@/lib/indexedDB';
 
 const patientsRef = collection(db, "patients");
 
@@ -164,8 +165,8 @@ export const updatePatient = async (id: string, data: Partial<Patient>) => {
     const { smartSync } = await import('./syncService');
 
     // Get current local data
-    const { getFromLocal } = await import('./indexedDbUtils');
-    const currentData = await getFromLocal("patients", id) as any;
+    const { getFromLocal } = await import('./expireindexedDbUtils_OLDs');
+    const currentData = await dbManager.getFromLocal("patients", id) as any;
 
     await smartSync("patients", { ...currentData, ...data, id });
   } catch (error) {

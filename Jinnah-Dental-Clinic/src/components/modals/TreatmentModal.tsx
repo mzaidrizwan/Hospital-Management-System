@@ -1,29 +1,35 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Save, Plus, Trash, DollarSign, CreditCard, History, User, AlertTriangle, Printer } from 'lucide-react';
+import { X, Save, Plus, Trash, DollarSign, CreditCard, History, User, AlertTriangle, Printer, Calendar, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Staff, QueueItem, Bill, Patient } from '@/types'; // Added Staff type
+import { Staff, QueueItem, Bill, Patient, Transaction } from '@/types';
 import { useData } from '@/context/DataContext';
 import { toast } from 'sonner';
-import { updateQueueItem } from '@/services/queueService';
-
-// IndexedDB Utilities
-import { saveToLocal, openDB } from '@/services/indexedDbUtils';
 import { useAvailableDoctors } from '@/hooks/useAvailableDoctors';
 
 interface TreatmentModalProps {
   open: boolean;
   onClose: () => void;
-  onSubmit: (data: { treatment: string; fee: number; doctor: string; doctorId?: string }) => void;
+  onSubmit: (data: {
+    treatment: string;
+    fee: number;
+    doctor: string;
+    doctorId?: string;
+    treatmentDate?: string;
+    treatmentTime?: string;
+    isEdit?: boolean;
+    originalQueueItem?: QueueItem;
+    preReceiveAmount?: number;
+  }) => void;
   queueItem: QueueItem | null;
   doctors: Staff[];
-  patientData?: Patient | null; // ADDED: Direct patient data
+  patientData?: Patient | null;
   patientHistory?: {
     queueHistory: QueueItem[];
     paymentHistory: Bill[];
@@ -37,6 +43,7 @@ interface TreatmentModalProps {
 interface SelectedTreatment {
   name: string;
   fee: number;
+  id?: string;
 }
 
 export default function TreatmentModal({
@@ -45,48 +52,139 @@ export default function TreatmentModal({
   onSubmit,
   queueItem,
   doctors,
-  patientData = null, // ADDED: Direct patient data
+  patientData = null,
   patientHistory = { queueHistory: [], paymentHistory: [], bills: [] },
   patientInfo = { pendingBalance: 0 }
 }: TreatmentModalProps) {
-  const { treatments, staff, licenseDaysLeft } = useData();
+  const { treatments, staff, licenseDaysLeft, updateLocal, deleteLocal, transactions } = useData();
   const { presentDoctors } = useAvailableDoctors();
   const [showAllDoctors, setShowAllDoctors] = useState(false);
   const effectiveDoctors = showAllDoctors
     ? staff.filter(s => ['doctor', 'dentist'].includes(s.role?.toLowerCase()))
     : presentDoctors;
 
+  // Treatment related state
   const [selectedTreatments, setSelectedTreatments] = useState<SelectedTreatment[]>([]);
   const [newTreatmentName, setNewTreatmentName] = useState('');
   const [newTreatmentFee, setNewTreatmentFee] = useState('');
+
+  // Treatment date and time
+  const [treatmentDate, setTreatmentDate] = useState('');
+  const [treatmentTime, setTreatmentTime] = useState('');
+
+  // Pre-receive payment - stored in queue item
+  const [preReceiveAmount, setPreReceiveAmount] = useState('');
+  const [preReceiveNotes, setPreReceiveNotes] = useState('');
+  const [hasPreReceive, setHasPreReceive] = useState(false);
+
+  // Financial calculations
   const [manualTotal, setManualTotal] = useState('');
   const [discount, setDiscount] = useState(0);
   const [selectedDoctor, setSelectedDoctor] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isManualEdited, setIsManualEdited] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+
   const [paymentBreakdown, setPaymentBreakdown] = useState({
     totalTreatments: 0,
     totalAmount: 0,
     totalPaid: 0,
     pendingBalance: 0,
     currentPending: 0,
-    newPending: 0
+    newPending: 0,
+    preReceived: 0
   });
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isManualEdited, setIsManualEdited] = useState(false);
 
-  // Use refs to prevent infinite loops
+  const hasLoadedData = useRef(false);
   const isInitialLoad = useRef(true);
 
-  if (!open || !queueItem) return null;
+  // Check if we're editing an existing completed treatment
+  useEffect(() => {
+    if (open && queueItem) {
+      const hasExistingTreatment = queueItem.treatment && queueItem.treatment !== 'No treatments yet';
+      const wasCompleted = queueItem.status === 'completed' || queueItem.treatmentEndTime;
 
-  // Calculate payment statistics from patient data - FIXED: Use patientData directly
+      if (hasExistingTreatment && wasCompleted) {
+        setIsEditMode(true);
+      } else {
+        setIsEditMode(false);
+      }
+
+      // Load existing pre-receive from queue item
+      if (queueItem.preReceiveAmount && queueItem.preReceiveAmount > 0) {
+        setHasPreReceive(true);
+        setPaymentBreakdown(prev => ({ ...prev, preReceived: queueItem.preReceiveAmount || 0 }));
+      }
+    }
+  }, [open, queueItem]);
+
+  // Initialize date/time
+  useEffect(() => {
+    if (open && queueItem) {
+      if (queueItem.treatmentDate) {
+        setTreatmentDate(queueItem.treatmentDate as string);
+      } else {
+        const now = new Date();
+        setTreatmentDate(now.toISOString().split('T')[0]);
+      }
+
+      if (queueItem.treatmentTime) {
+        setTreatmentTime(queueItem.treatmentTime as string);
+      } else {
+        const now = new Date();
+        setTreatmentTime(now.toLocaleTimeString('en-US', {
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        }));
+      }
+    }
+  }, [open, queueItem]);
+
+  // Load existing treatments from queue item
+  useEffect(() => {
+    if (!open || !queueItem || hasLoadedData.current) return;
+
+    const loadExistingData = async () => {
+      try {
+        if (queueItem.treatment && queueItem.treatment !== 'No treatments yet') {
+          const treatmentNames = queueItem.treatment.split(', ');
+          const loadedTreatments: SelectedTreatment[] = [];
+
+          for (const t of treatmentNames) {
+            const match = t.match(/(.+?)\s*\(Rs\.\s*([\d,]+)\)/);
+            if (match) {
+              loadedTreatments.push({
+                name: match[1],
+                fee: parseInt(match[2].replace(/,/g, '')),
+                id: `treatment-${Date.now()}-${Math.random()}`
+              });
+            }
+          }
+
+          if (loadedTreatments.length > 0) {
+            setSelectedTreatments(loadedTreatments);
+          }
+        }
+
+        if (queueItem.doctorId) {
+          setSelectedDoctor(queueItem.doctorId);
+        }
+
+        hasLoadedData.current = true;
+      } catch (error) {
+        console.error('Failed to load existing data:', error);
+      }
+    };
+
+    loadExistingData();
+  }, [open, queueItem]);
+
+  // Calculate payment statistics
   useEffect(() => {
     if (!open) return;
 
-    console.log('Patient Data in TreatmentModal:', patientData);
-    console.log('Patient History:', patientHistory);
-    console.log('Patient Info:', patientInfo);
-
-    // Use patientData if available, otherwise use patientHistory/patientInfo
     let totalTreatments = 0;
     let totalAmount = 0;
     let totalPaid = 0;
@@ -94,85 +192,64 @@ export default function TreatmentModal({
     let currentPending = 0;
 
     if (patientData) {
-      // Use patientData from Firestore
       totalTreatments = patientData.totalVisits || 0;
       totalPaid = patientData.totalPaid || 0;
       pendingBalance = patientData.pendingBalance || 0;
-
-      // Calculate totalAmount from patientHistory or use pendingBalance + totalPaid
       totalAmount = (patientHistory?.queueHistory || []).reduce((sum, item) => sum + (item.fee || 0), 0);
 
-      // If totalAmount is 0 but we have pendingBalance and totalPaid
       if (totalAmount === 0 && (pendingBalance > 0 || totalPaid > 0)) {
         totalAmount = pendingBalance + totalPaid;
       }
     } else {
-      // Fallback to patientHistory/patientInfo
       totalTreatments = patientHistory?.queueHistory?.length || 0;
       totalAmount = (patientHistory?.queueHistory || []).reduce((sum, item) => sum + (item.fee || 0), 0);
       totalPaid = (patientHistory?.paymentHistory || []).reduce((sum, payment) => sum + (payment.amountPaid || 0), 0);
       pendingBalance = patientInfo?.pendingBalance || 0;
     }
 
-    currentPending = pendingBalance; // Current pending is the patient's pending balance
+    currentPending = pendingBalance - paymentBreakdown.preReceived;
 
-    console.log('Calculated Values:', {
+    setPaymentBreakdown(prev => ({
+      ...prev,
       totalTreatments,
       totalAmount,
       totalPaid,
       pendingBalance,
-      currentPending
-    });
+      currentPending: Math.max(0, currentPending),
+      newPending: Math.max(0, currentPending)
+    }));
 
-    setPaymentBreakdown({
-      totalTreatments,
-      totalAmount,
-      totalPaid,
-      pendingBalance,
-      currentPending,
-      newPending: currentPending
-    });
-
-    // Set initial manual total only once
     if (isInitialLoad.current) {
-      setManualTotal(currentPending.toFixed(2));
+      setManualTotal(currentPending.toString());
       isInitialLoad.current = false;
     }
-  }, [open, patientData, patientHistory, patientInfo]);
+  }, [open, patientData, patientHistory, patientInfo, paymentBreakdown.preReceived]);
 
-  // Auto-calculate actual total (current treatments)
   const actualTotal = selectedTreatments.reduce((sum, t) => sum + t.fee, 0);
 
-  // Auto-update manual total when treatments change (if not manually edited)
   useEffect(() => {
     if (isManualEdited || !open) return;
-
-    const newManualTotal = (actualTotal + paymentBreakdown.currentPending).toFixed(2);
+    const newManualTotal = (actualTotal + paymentBreakdown.currentPending).toString();
     setManualTotal(newManualTotal);
   }, [actualTotal, paymentBreakdown.currentPending, isManualEdited, open]);
 
-  // Calculate discount and new pending
   useEffect(() => {
     if (!open) return;
 
-    const manual = parseFloat(manualTotal) || 0;
+    const manualAmount = parseFloat(manualTotal) || 0;
     const totalDue = actualTotal + paymentBreakdown.currentPending;
 
-    // Prevent manual total from going below previous pending
-    if (manual < paymentBreakdown.currentPending) {
+    if (manualAmount < paymentBreakdown.currentPending) {
       toast.warning('Amount cannot be less than previous pending balance');
-      setManualTotal(paymentBreakdown.currentPending.toFixed(2));
+      setManualTotal(paymentBreakdown.currentPending.toString());
       setDiscount(0);
       return;
     }
 
-    // Discount = total due - what user entered
-    const effectiveDiscount = totalDue - manual;
+    const effectiveDiscount = totalDue - manualAmount;
     setDiscount(effectiveDiscount > 0 ? effectiveDiscount : 0);
 
-    // New pending after this treatment (before any new payment)
-    // = previous pending + current fee (after discount)
-    const effectiveFee = manual - paymentBreakdown.currentPending;
+    const effectiveFee = manualAmount - paymentBreakdown.currentPending;
     const newPending = paymentBreakdown.currentPending + effectiveFee;
     setPaymentBreakdown(prev => ({
       ...prev,
@@ -180,21 +257,21 @@ export default function TreatmentModal({
     }));
   }, [manualTotal, actualTotal, paymentBreakdown.currentPending, open]);
 
-  // Reset state when modal closes
+  // Reset form when modal closes
   useEffect(() => {
     if (!open) {
       const timer = setTimeout(() => {
-        setSelectedTreatments([]);
         setNewTreatmentName('');
         setNewTreatmentFee('');
-        setManualTotal('');
-        setDiscount(0);
-        setSelectedDoctor('');
+        setPreReceiveAmount('');
+        setPreReceiveNotes('');
         setIsSubmitting(false);
         setIsManualEdited(false);
+        hasLoadedData.current = false;
         isInitialLoad.current = true;
+        setIsEditMode(false);
+        setHasPreReceive(false);
       }, 300);
-
       return () => clearTimeout(timer);
     }
   }, [open]);
@@ -206,8 +283,12 @@ export default function TreatmentModal({
 
   const handleAddTreatment = () => {
     const feeNum = parseFloat(newTreatmentFee) || 0;
-    if (newTreatmentName && feeNum >= 0 && !selectedTreatments.some(t => t.name === newTreatmentName)) {
-      setSelectedTreatments([...selectedTreatments, { name: newTreatmentName, fee: feeNum }]);
+    if (newTreatmentName && feeNum >= 0) {
+      setSelectedTreatments([...selectedTreatments, {
+        name: newTreatmentName,
+        fee: feeNum,
+        id: `treatment-${Date.now()}-${Math.random()}`
+      }]);
       setNewTreatmentName('');
       setNewTreatmentFee('');
     } else {
@@ -215,12 +296,199 @@ export default function TreatmentModal({
     }
   };
 
-  const handleRemoveTreatment = (name: string) => {
-    setSelectedTreatments(selectedTreatments.filter(t => t.name !== name));
+  const handleRemoveTreatment = (id: string) => {
+    setSelectedTreatments(selectedTreatments.filter(t => t.id !== id));
+  };
+
+  // const handleAddPreReceive = async () => {
+  //   const amount = parseFloat(preReceiveAmount);
+  //   if (isNaN(amount) || amount <= 0) {
+  //     toast.error('Please enter a valid amount');
+  //     return;
+  //   }
+
+  //   try {
+  //     const timestamp = new Date().toISOString();
+
+  //     // Save pre-receive to queue item
+  //     const updatedQueueItem = {
+  //       ...queueItem,
+  //       preReceiveAmount: amount,
+  //       preReceiveNotes: preReceiveNotes,
+  //       updatedAt: timestamp
+  //     };
+
+  //     await updateLocal('queue', updatedQueueItem);
+
+  //     setHasPreReceive(true);
+  //     setPaymentBreakdown(prev => ({
+  //       ...prev,
+  //       preReceived: amount,
+  //       currentPending: Math.max(0, prev.currentPending - amount)
+  //     }));
+
+  //     setPreReceiveAmount('');
+  //     setPreReceiveNotes('');
+
+  //     toast.success(`Pre-receive payment of Rs. ${amount} added for this treatment`);
+  //   } catch (error) {
+  //     console.error('Failed to add pre-receive payment:', error);
+  //     toast.error('Failed to add payment');
+  //   }
+  // };
+
+  const handleAddPreReceive = async () => {
+    const amount = parseFloat(preReceiveAmount);
+    if (isNaN(amount) || amount <= 0) {
+      toast.error('Please enter a valid amount');
+      return;
+    }
+
+    try {
+      const timestamp = new Date().toISOString();
+      const now = new Date();
+      const paymentDate = now.toISOString().split('T')[0];
+      const paymentTime = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+      // 1. Save pre-receive to queue item
+      const updatedQueueItem = {
+        ...queueItem,
+        preReceiveAmount: amount,
+        preReceiveNotes: preReceiveNotes,
+        updatedAt: timestamp
+      };
+      await updateLocal('queue', updatedQueueItem);
+
+      // 2. ALSO save pre-receive to patient record (using patientData prop)
+      if (patientData) {
+        // Update patient's pending balance (pre-receive reduces pending)
+        const updatedPatient = {
+          ...patientData,
+          pendingBalance: Math.max(0, (patientData.pendingBalance || 0) - amount),
+          updatedAt: timestamp
+        };
+        await updateLocal('patients', updatedPatient);
+
+        // Create a transaction record for pre-receive
+        // FIX: Use patientNumber instead of patientId (since Transaction type doesn't have patientId)
+        const newTransaction: Transaction = {
+          id: `pre-${Date.now()}`,
+          patientNumber: patientData.patientNumber,
+          patientName: patientData.name,
+          amount: amount,
+          date: timestamp,
+          type: 'pre_receive',
+          method: 'cash',
+          notes: preReceiveNotes,
+          paymentDate: paymentDate,
+          paymentTime: paymentTime,
+          fullPaymentDateTime: `${paymentDate}T${paymentTime}`,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          queueItemId: queueItem?.id
+        };
+        await updateLocal('transactions', newTransaction);
+      }
+
+      setHasPreReceive(true);
+      setPaymentBreakdown(prev => ({
+        ...prev,
+        preReceived: amount,
+        currentPending: Math.max(0, prev.currentPending - amount)
+      }));
+
+      setPreReceiveAmount('');
+      setPreReceiveNotes('');
+
+      toast.success(`Pre-receive payment of Rs. ${amount} added for this treatment`);
+    } catch (error) {
+      console.error('Failed to add pre-receive payment:', error);
+      toast.error('Failed to add payment');
+    }
+  };
+
+  // const handleDeletePreReceive = async () => {
+  //   if (!queueItem) return;
+
+  //   if (!confirm(`Are you sure you want to remove the pre-receive payment?`)) return;
+
+  //   try {
+  //     const updatedQueueItem = {
+  //       ...queueItem,
+  //       preReceiveAmount: 0,
+  //       preReceiveNotes: '',
+  //       updatedAt: new Date().toISOString()
+  //     };
+
+  //     await updateLocal('queue', updatedQueueItem);
+
+  //     setHasPreReceive(false);
+  //     setPaymentBreakdown(prev => ({
+  //       ...prev,
+  //       preReceived: 0,
+  //       currentPending: prev.currentPending + (queueItem.preReceiveAmount || 0)
+  //     }));
+
+  //     toast.success('Pre-receive payment removed');
+  //   } catch (error) {
+  //     console.error('Failed to delete pre-receive:', error);
+  //     toast.error('Failed to remove payment');
+  //   }
+  // };
+
+  const handleDeletePreReceive = async () => {
+    if (!queueItem) return;
+
+    if (!confirm(`Are you sure you want to remove the pre-receive payment?`)) return;
+
+    try {
+      const timestamp = new Date().toISOString();
+
+      // 1. Update queue item
+      const updatedQueueItem = {
+        ...queueItem,
+        preReceiveAmount: 0,
+        preReceiveNotes: '',
+        updatedAt: timestamp
+      };
+      await updateLocal('queue', updatedQueueItem);
+
+      // 2. Also update patient's pending balance (add back the amount)
+      if (patientData) {
+        const updatedPatient = {
+          ...patientData,
+          pendingBalance: (patientData.pendingBalance || 0) + (queueItem.preReceiveAmount || 0),
+          updatedAt: timestamp
+        };
+        await updateLocal('patients', updatedPatient);
+      }
+
+      // 3. Delete the transaction record if exists
+      const preReceiveTransaction = (transactions || []).find(t =>
+        t.queueItemId === queueItem.id && t.type === 'pre_receive'
+      );
+      if (preReceiveTransaction) {
+        await deleteLocal('transactions', preReceiveTransaction.id);
+        console.log('Deleted pre-receive transaction:', preReceiveTransaction.id);
+      }
+
+      // 4. Update local state
+      setHasPreReceive(false);
+      setPaymentBreakdown(prev => ({
+        ...prev,
+        preReceived: 0,
+        currentPending: prev.currentPending + (queueItem.preReceiveAmount || 0)
+      }));
+
+      toast.success('Pre-receive payment removed successfully');
+
+    } catch (error) {
+      console.error('Failed to delete pre-receive:', error);
+      toast.error('Failed to remove payment');
+    }
   };
 
   const handlePrint = () => {
-    // Create a printable invoice with current form data
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
       toast.error('Please allow popups to print');
@@ -228,17 +496,15 @@ export default function TreatmentModal({
     }
 
     const doctorName = effectiveDoctors.find(d => d.id === selectedDoctor)?.name || 'Not assigned';
-    const currentDate = new Date().toLocaleDateString('en-PK', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
+    const treatmentDateTime = treatmentDate && treatmentTime
+      ? `${new Date(treatmentDate).toLocaleDateString()} at ${treatmentTime}`
+      : 'Not specified';
 
     const printContent = `
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Treatment Invoice - ${queueItem.patientName}</title>
+          <title>Treatment Invoice - ${queueItem?.patientName}</title>
           <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
@@ -251,18 +517,46 @@ export default function TreatmentModal({
             .totals { background: #f8fafc; padding: 20px; border-radius: 8px; margin-top: 20px; }
             .total-row { display: flex; justify-content: space-between; padding: 8px 0; }
             .total-row.grand { border-top: 2px solid #2563eb; margin-top: 10px; padding-top: 15px; font-size: 18px; font-weight: bold; color: #1e40af; }
+            .pre-receive { background: #fef3c7; padding: 15px; border-radius: 8px; margin-top: 15px; }
+            .info-row { display: flex; justify-content: space-between; margin-bottom: 10px; }
             @media print { .no-print { display: none; } }
           </style>
         </head>
         <body>
-          <div class="header"><h1>Treatment Invoice</h1><p>Date: ${currentDate}</p></div>
-          <div class="section-title">Patient: ${queueItem.patientName} | Token: #${queueItem.tokenNumber} | Doctor: ${doctorName}</div>
-          <table><thead><tr><th>Treatment</th><th style="text-align: right;">Fee (Rs.)</th></tr></thead>
-          <tbody>${selectedTreatments.map(t => `<tr><td>${t.name}</td><td style="text-align: right;">Rs. ${t.fee.toLocaleString()}</td></tr>`).join('')}</tbody></table>
+          <div class="header">
+            <h1>Treatment Invoice</h1>
+            <p>Date: ${new Date().toLocaleDateString()}</p>
+          </div>
+          <div class="info-row"><strong>Patient:</strong> ${queueItem?.patientName}</div>
+          <div class="info-row"><strong>Token #:</strong> ${queueItem?.tokenNumber}</div>
+          <div class="info-row"><strong>Doctor:</strong> ${doctorName}</div>
+          <div class="info-row"><strong>Treatment Date & Time:</strong> ${treatmentDateTime}</div>
+          
+          ${selectedTreatments.length > 0 ? `
+            <div class="section-title">Treatments</div>
+            <table>
+              <thead>
+                <tr><th>Treatment</th><th style="text-align: right;">Fee (Rs.)</th></tr>
+              </thead>
+              <tbody>
+                ${selectedTreatments.map(t => `<tr><td>${t.name}</td><td style="text-align: right;">Rs. ${t.fee.toLocaleString()}</td></tr>`).join('')}
+              </tbody>
+            </table>
+          ` : '<p style="color: #666; margin: 20px 0;">No treatments added</p>'}
+          
           <div class="totals">
             <div class="total-row"><span>Previous Pending:</span><span>Rs. ${paymentBreakdown.currentPending.toLocaleString()}</span></div>
-            <div class="total-row"><span>Current Treatment:</span><span>Rs. ${actualTotal.toLocaleString()}</span></div>
+            ${selectedTreatments.length > 0 ? `<div class="total-row"><span>Current Treatment:</span><span>Rs. ${actualTotal.toLocaleString()}</span></div>` : ''}
             ${discount > 0 ? `<div class="total-row" style="color: #16a34a;"><span>Discount:</span><span>- Rs. ${discount.toLocaleString()}</span></div>` : ''}
+            ${paymentBreakdown.preReceived > 0 ? `
+              <div class="pre-receive">
+                <h4>Pre-Receive Payment</h4>
+                <div class="total-row">
+                  <span>Amount Received</span>
+                  <span>- Rs. ${paymentBreakdown.preReceived.toLocaleString()}</span>
+                </div>
+              </div>
+            ` : ''}
             <div class="total-row grand"><span>Total Due:</span><span>Rs. ${(parseFloat(manualTotal) || 0).toLocaleString()}</span></div>
           </div>
           <div class="no-print" style="text-align: center; margin-top: 30px;">
@@ -284,59 +578,56 @@ export default function TreatmentModal({
       return;
     }
 
-    if (selectedTreatments.length === 0) {
-      toast.error('At least one treatment is required');
-      return;
-    }
-    const manual = parseFloat(manualTotal);
-    if (isNaN(manual) || manual < 0) {
-      toast.error('Enter valid manual total amount');
-      return;
-    }
-    if (manual < paymentBreakdown.currentPending) {
-      toast.error('Amount cannot be less than previous pending balance');
-      return;
-    }
     if (!selectedDoctor) {
       toast.error('Please select a doctor');
       return;
     }
 
+    if (!treatmentDate || !treatmentTime) {
+      toast.error('Please select treatment date and time');
+      return;
+    }
+
+    const manualAmount = parseFloat(manualTotal);
+    if (isNaN(manualAmount) || manualAmount < 0) {
+      toast.error('Enter valid total amount');
+      return;
+    }
+
+    if (manualAmount < paymentBreakdown.currentPending) {
+      toast.error('Amount cannot be less than previous pending balance');
+      return;
+    }
+
     setIsSubmitting(true);
-    const toastId = toast.loading('Saving treatment...');
+    const toastId = toast.loading(isEditMode ? 'Updating treatment...' : 'Saving treatment...');
 
     try {
-      const treatmentString = selectedTreatments.map(t => `${t.name} (Rs. ${t.fee})`).join(', ');
-      const manual = parseFloat(manualTotal);
-      const effectiveFee = manual - paymentBreakdown.currentPending;
+      const treatmentString = selectedTreatments.length > 0
+        ? selectedTreatments.map(t => `${t.name} (Rs. ${t.fee})`).join(', ')
+        : 'No treatments yet';
+
+      const effectiveFee = manualAmount - paymentBreakdown.currentPending;
 
       const assignedDoctor = effectiveDoctors.find(d => d.id === selectedDoctor);
+
       const data = {
         treatment: treatmentString,
         fee: effectiveFee,
         doctor: assignedDoctor?.name || selectedDoctor,
-        doctorId: selectedDoctor
+        doctorId: selectedDoctor,
+        treatmentDate: treatmentDate,
+        treatmentTime: treatmentTime,
+        treatmentDateTime: `${treatmentDate}T${treatmentTime}`,
+        isEdit: isEditMode,
+        originalQueueItem: isEditMode ? queueItem : undefined,
+        preReceiveAmount: paymentBreakdown.preReceived
       };
 
-      // Save to IndexedDB first
-      await saveToLocal('queue', {
-        ...queueItem,
-        ...data,
-        updatedAt: new Date().toISOString()
-      });
-
-      // Modal immediately close
-      onClose();
-      toast.success('Treatment saved locally!', { id: toastId });
-
-      // Background Firebase sync
-      updateQueueItem(queueItem.id, data).catch(err => {
-        console.error('Firebase sync failed:', err);
-        toast.error('Failed to sync to cloud (saved locally only)');
-      });
-
-      // Parent onSubmit
       onSubmit(data);
+
+      onClose();
+      toast.success(isEditMode ? 'Treatment updated successfully!' : 'Treatment saved successfully!', { id: toastId });
 
     } catch (error) {
       console.error('Error saving treatment:', error);
@@ -353,20 +644,23 @@ export default function TreatmentModal({
     }).format(amount);
   };
 
+  if (!open || !queueItem) return null;
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl">
+      <div className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] overflow-y-auto shadow-2xl">
         <div className="flex items-center justify-between p-5 border-b sticky top-0 bg-white z-10">
           <div>
-            <h2 className="text-xl font-bold">Complete Treatment - {queueItem.patientName}</h2>
-            <p className="text-sm text-gray-500">Patient ID: {queueItem.patientNumber || queueItem.patientId || 'N/A'}</p>
-            {patientData && (
-              <p className="text-xs text-gray-400 mt-1">
-                Total Visits: {patientData.totalVisits || 0} |
-                Pending: {formatCurrency(patientData.pendingBalance || 0)} |
-                Paid: {formatCurrency(patientData.totalPaid || 0)}
+            <h2 className="text-xl font-bold">
+              {isEditMode ? 'Edit Treatment - ' : 'Complete Treatment - '}
+              {queueItem.patientName}
+            </h2>
+            {isEditMode && (
+              <p className="text-xs text-amber-600 mt-1">
+                Editing existing treatment record. Changes will update the original record.
               </p>
             )}
+            <p className="text-sm text-gray-500">Patient ID: {queueItem.patientNumber || queueItem.patientId || 'N/A'}</p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full" disabled={isSubmitting}>
             <X className="w-5 h-5" />
@@ -374,9 +668,43 @@ export default function TreatmentModal({
         </div>
 
         <div className="p-6 space-y-6">
+          {/* Treatment Date & Time Section */}
+          <div className="border rounded-lg p-4 bg-blue-50">
+            <h3 className="font-semibold mb-3 flex items-center gap-2">
+              <Calendar className="w-4 h-4" />
+              Treatment Date & Time
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold">Treatment Date</Label>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <Input
+                    type="date"
+                    className="pl-9"
+                    value={treatmentDate}
+                    onChange={(e) => setTreatmentDate(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold">Treatment Time</Label>
+                <div className="relative">
+                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <Input
+                    type="time"
+                    step="1"
+                    className="pl-9"
+                    value={treatmentTime}
+                    onChange={(e) => setTreatmentTime(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Patient Info & Payment Summary */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Patient Details */}
             <div className="border rounded-lg p-4 bg-gray-50">
               <h3 className="font-semibold mb-3 flex items-center gap-2">
                 <User className="w-4 h-4" />
@@ -402,7 +730,6 @@ export default function TreatmentModal({
               </div>
             </div>
 
-            {/* Payment Summary */}
             <div className="border rounded-lg p-4 bg-blue-50">
               <h3 className="font-semibold mb-3 flex items-center gap-2">
                 <CreditCard className="w-4 h-4" />
@@ -410,33 +737,86 @@ export default function TreatmentModal({
               </h3>
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
-                  <span className="text-sm">Previous Total:</span>
+                  <span className="text-sm">Total:</span>
                   <span className="font-medium">{formatCurrency(paymentBreakdown.totalAmount)}</span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-sm">Amount Paid:</span>
-                  <span className="font-medium text-green-600">{formatCurrency(paymentBreakdown.totalPaid)}</span>
+                  <span className="text-sm">Pre Receive:</span>
+                  <span className="font-medium text-green-600">{formatCurrency(paymentBreakdown.preReceived)}</span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-sm">Pending Balance:</span>
-                  <span className={`font-medium ${paymentBreakdown.pendingBalance > 0 ? 'text-red-600' : 'text-gray-600'}`}>
-                    {formatCurrency(paymentBreakdown.pendingBalance)}
-                  </span>
+                  <span className="text-sm">Paid:</span>
+                  <span className="font-medium text-green-600">{formatCurrency(paymentBreakdown.totalPaid)}</span>
                 </div>
                 <div className="flex justify-between items-center border-t pt-2">
-                  <span className="text-sm font-semibold">Current Pending:</span>
+                  <span className="text-sm font-semibold">Current Balance:</span>
                   <span className="font-bold text-red-600">{formatCurrency(paymentBreakdown.currentPending)}</span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Rest of the modal remains the same... */}
+          {/* Pre-Receive Payment Section */}
+          <div className="border rounded-lg p-4 bg-yellow-50">
+            <h3 className="font-semibold mb-3 flex items-center gap-2">
+              <DollarSign className="w-4 h-4" />
+              Pre-Receive Payment (Advance for this treatment)
+            </h3>
+            {hasPreReceive ? (
+              <div className="space-y-3">
+                <div className="flex justify-between items-center p-3 bg-yellow-100 rounded-lg">
+                  <div>
+                    <p className="font-bold text-lg">{formatCurrency(paymentBreakdown.preReceived)}</p>
+                    {queueItem?.preReceiveNotes && <p className="text-xs text-gray-600 mt-1">Note: {queueItem.preReceiveNotes}</p>}
+                  </div>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleDeletePreReceive}
+                  >
+                    <Trash className="w-4 h-4 mr-1" /> Remove
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Amount (Rs.)</Label>
+                  <Input
+                    type="number"
+                    placeholder="Enter amount"
+                    value={preReceiveAmount}
+                    onChange={(e) => setPreReceiveAmount(e.target.value)}
+                    min="0"
+                    step="1"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Notes (Optional)</Label>
+                  <Input
+                    placeholder="Payment notes"
+                    value={preReceiveNotes}
+                    onChange={(e) => setPreReceiveNotes(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
+            {!hasPreReceive && (
+              <Button
+                onClick={handleAddPreReceive}
+                className="mt-3 w-full bg-yellow-600 hover:bg-yellow-700"
+                disabled={!preReceiveAmount}
+              >
+                <Plus className="w-4 h-4 mr-2" /> Add Pre-Receive Payment for this Treatment
+              </Button>
+            )}
+          </div>
+
           {/* Add Treatments */}
           <div className="space-y-3">
             <Label className="flex items-center gap-2">
               <Plus className="w-4 h-4" />
-              Add Treatment
+              Add Treatments (Optional)
             </Label>
             <div className="flex flex-col sm:flex-row gap-3">
               <div className="flex-1">
@@ -472,56 +852,57 @@ export default function TreatmentModal({
                 onChange={e => setNewTreatmentFee(e.target.value)}
                 className="w-32"
                 min="0"
-                step="0.01"
+                step="1"
               />
-              <Button onClick={handleAddTreatment} className="gap-1" disabled={isSubmitting}>
+              <Button onClick={handleAddTreatment} className="gap-1">
                 <Plus className="w-4 h-4" /> Add
               </Button>
             </div>
           </div>
 
           {/* Selected Treatments Table */}
-          {selectedTreatments.length > 0 ? (
-            <div className="border rounded-lg overflow-hidden">
-              <Table>
-                <TableHeader className="bg-gray-100">
+          <div className="border rounded-lg overflow-hidden">
+            <Table>
+              <TableHeader className="bg-gray-100">
+                <TableRow>
+                  <TableHead>Treatment</TableHead>
+                  <TableHead className="text-right">Fee (Rs.)</TableHead>
+                  <TableHead className="w-16 text-center">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {selectedTreatments.length === 0 ? (
                   <TableRow>
-                    <TableHead>Treatment</TableHead>
-                    <TableHead className="text-right">Fee (Rs.)</TableHead>
-                    <TableHead className="w-16 text-center">Action</TableHead>
+                    <TableCell colSpan={3} className="text-center text-gray-500 py-8">
+                      No treatments added yet
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {selectedTreatments.map((t, index) => (
-                    <TableRow key={index}>
+                ) : (
+                  selectedTreatments.map((t) => (
+                    <TableRow key={t.id}>
                       <TableCell>{t.name}</TableCell>
                       <TableCell className="text-right font-medium">{formatCurrency(t.fee)}</TableCell>
                       <TableCell className="text-center">
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleRemoveTreatment(t.name)}
-                          disabled={isSubmitting}
+                          onClick={() => handleRemoveTreatment(t.id!)}
                         >
                           <Trash className="w-4 h-4 text-red-600" />
                         </Button>
                       </TableCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-
-              {/* Actual Total */}
+                  ))
+                )}
+              </TableBody>
+            </Table>
+            {selectedTreatments.length > 0 && (
               <div className="p-4 bg-gray-50 border-t flex justify-between items-center">
                 <span className="font-semibold">Actual Total (Sum of Treatments):</span>
                 <span className="text-xl font-bold text-green-700">{formatCurrency(actualTotal)}</span>
               </div>
-            </div>
-          ) : (
-            <div className="text-center py-8 text-gray-500 border rounded-lg">
-              No treatments added yet
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Current Treatment Calculation */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -529,7 +910,7 @@ export default function TreatmentModal({
               <div>
                 <Label htmlFor="manualTotal" className="flex items-center gap-2 mb-2">
                   <DollarSign className="w-4 h-4" />
-                  Final Amount to Collect (Previous + Treatments)
+                  Final Amount to Collect
                 </Label>
                 <Input
                   id="manualTotal"
@@ -538,8 +919,7 @@ export default function TreatmentModal({
                   onChange={handleManualChange}
                   placeholder="Auto: previous + treatments sum"
                   min={paymentBreakdown.currentPending}
-                  step="0.01"
-                  disabled={isSubmitting}
+                  step="1"
                 />
                 <p className="text-xs text-gray-500 mt-1">
                   Default: Previous pending + current treatments. Edit to apply discount.
@@ -551,13 +931,12 @@ export default function TreatmentModal({
                 <Input value={formatCurrency(discount)} disabled className="bg-gray-100" />
                 <p className="text-xs text-gray-500 mt-1">
                   {discount > 0
-                    ? `Discount applied: ${formatCurrency(discount)} (user entered less amount)`
-                    : 'No discount (full amount entered)'}
+                    ? `Discount applied: ${formatCurrency(discount)}`
+                    : 'No discount applied'}
                 </p>
               </div>
             </div>
 
-            {/* New Pending Summary */}
             <div className="border rounded-lg p-4 bg-amber-50">
               <h3 className="font-semibold mb-3 flex items-center gap-2">
                 <History className="w-4 h-4" />
@@ -568,21 +947,20 @@ export default function TreatmentModal({
                   <span className="text-sm">Current Pending:</span>
                   <span className="font-medium text-red-600">{formatCurrency(paymentBreakdown.currentPending)}</span>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm">This Treatment (after discount):</span>
-                  <span className="font-medium text-blue-600">
-                    {formatCurrency(paymentBreakdown.newPending - paymentBreakdown.currentPending || 0)}
-                  </span>
-                </div>
+                {selectedTreatments.length > 0 && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm">This Treatment (after discount):</span>
+                    <span className="font-medium text-blue-600">
+                      {formatCurrency(paymentBreakdown.newPending - paymentBreakdown.currentPending || 0)}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center border-t pt-2">
                   <span className="text-sm font-semibold">New Total Pending (after this):</span>
                   <span className="font-bold text-red-700">
                     {formatCurrency(paymentBreakdown.newPending)}
                   </span>
                 </div>
-                <p className="text-xs text-gray-500 mt-2">
-                  After adding this treatment, patient&apos;s total pending amount will be updated
-                </p>
               </div>
             </div>
           </div>
@@ -603,12 +981,12 @@ export default function TreatmentModal({
             {presentDoctors.length === 0 && !showAllDoctors && (
               <div className="flex items-center gap-2 p-3 mb-3 bg-yellow-50 text-yellow-800 rounded-md border border-yellow-200 text-sm">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>No doctors marked as &apos;Present&apos; today. Please check Staff/Attendance or enable &quot;Show All&quot;.</span>
+                <span>No doctors marked as 'Present' today. Please check Staff/Attendance or enable "Show All".</span>
               </div>
             )}
 
             <Select onValueChange={setSelectedDoctor} value={selectedDoctor}>
-              <SelectTrigger disabled={isSubmitting}>
+              <SelectTrigger>
                 <SelectValue placeholder="Select doctor..." />
               </SelectTrigger>
               <SelectContent>
@@ -623,18 +1001,25 @@ export default function TreatmentModal({
 
           {/* Buttons */}
           <div className="flex justify-end gap-3 pt-4 border-t">
-            <Button variant="outline" onClick={onClose} disabled={isSubmitting}>Cancel</Button>
-
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button
+              onClick={handlePrint}
+              variant="outline"
+              className="gap-2"
+            >
+              <Printer className="w-4 h-4" /> Print
+            </Button>
             <Button
               onClick={handleSubmit}
-              disabled={selectedTreatments.length === 0 || !manualTotal || !selectedDoctor || isSubmitting || licenseDaysLeft <= 0}
+              disabled={!selectedDoctor || !treatmentDate || !treatmentTime || isSubmitting || licenseDaysLeft <= 0}
               className="gap-2 bg-green-600 hover:bg-green-700"
             >
               {isSubmitting ? (
                 <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
               ) : (
                 <>
-                  <Save className="w-4 h-4" /> Save & Complete Treatment
+                  <Save className="w-4 h-4" />
+                  {isEditMode ? 'Update Treatment' : 'Save & Complete Treatment'}
                 </>
               )}
             </Button>

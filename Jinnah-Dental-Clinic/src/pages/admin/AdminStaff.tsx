@@ -24,12 +24,15 @@ import {
   Mail,
   Loader2,
   Download,
-  History
+  History,
+  UserCheck,
+  UserX,
+  CalendarOff
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { useData } from '@/context/DataContext';
@@ -51,8 +54,6 @@ const formatCurrency = (amount: number) => {
   }).format(amount);
 };
 
-
-
 const calculateNextSalaryDate = (staffMember: Staff): string => {
   const lastDate = staffMember?.lastSalaryDate || staffMember?.joinDate;
   if (!lastDate) return '';
@@ -68,6 +69,24 @@ const calculateNextSalaryDate = (staffMember: Staff): string => {
     return next.toISOString().split('T')[0];
   } catch (e) {
     return '';
+  }
+};
+
+const getAttendanceStatusColor = (status: string | undefined) => {
+  switch (status) {
+    case 'Present': return 'bg-green-500';
+    case 'Absent': return 'bg-red-500';
+    case 'Leave': return 'bg-yellow-500';
+    default: return 'bg-gray-300';
+  }
+};
+
+const getAttendanceIcon = (status: string | undefined) => {
+  switch (status) {
+    case 'Present': return <UserCheck className="w-3.5 h-3.5" />;
+    case 'Absent': return <UserX className="w-3.5 h-3.5" />;
+    case 'Leave': return <CalendarOff className="w-3.5 h-3.5" />;
+    default: return <CalendarDays className="w-3.5 h-3.5" />;
   }
 };
 
@@ -88,7 +107,8 @@ export default function AdminStaff() {
     updateAttendance,
     deleteLocal,
     generateStaffReport,
-    exportToCSV
+    exportToCSV,
+    refreshCollection // Add this from useData
   } = useData();
 
   const { getSalaryStatus } = useSalaryLogic();
@@ -97,6 +117,7 @@ export default function AdminStaff() {
   const [selectedRole, setSelectedRole] = useState('all');
   const [selectedStatus, setSelectedStatus] = useState('all');
   const [selectedDuration, setSelectedDuration] = useState('all');
+  const [loading, setLoading] = useState(false); // Add loading state
 
   const [showStaffForm, setShowStaffForm] = useState(false);
   const [showStaffDetails, setShowStaffDetails] = useState<Staff | null>(null);
@@ -108,33 +129,69 @@ export default function AdminStaff() {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [selectedStaffForHistory, setSelectedStaffForHistory] = useState<Staff | null>(null);
 
-  const isPaymentDue = (staff: Staff): boolean => {
-    // 1. Always allow payment if there is a pending balance (Partial payments)
-    // IMPORTANT: staff.pendingSalary here is the PERSISTED one, 
-    // but we can also use getSalaryStatus to be sure.
-    const { amountDue } = getSalaryStatus(staff);
-    if (amountDue > 0) return true;
-
-    // Enable payment on joining day (when totalPaid is 0)
-    if (staff.totalPaid === 0) return true;
-    if (!staff.lastPaidDate) return true;
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const lastPaid = new Date(staff.lastPaidDate);
-    lastPaid.setHours(0, 0, 0, 0);
-
-    // Calculate difference in days
-    const diffTime = Math.abs(today.getTime() - lastPaid.getTime());
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-    if (staff.salaryDuration === 'daily') {
-      return lastPaid.getTime() !== today.getTime();
-    } else if (staff.salaryDuration === 'weekly') {
-      return diffDays >= 7;
-    } else {
-      return diffDays >= 30;
+  // Comprehensive delete function for staff with all related records
+  const deleteStaffWithAllRecords = async (staffMember: Staff): Promise<boolean> => {
+    console.log(`[deleteStaffWithAllRecords] Deleting staff: ${staffMember.name} (${staffMember.id})`);
+    
+    try {
+      // 1. Get all related records
+      const staffAttendance = contextAttendance.filter(a => a.staffId === staffMember.id);
+      const staffPayments = contextPayments.filter(p => p.staffId === staffMember.id);
+      const staffTransactions = transactions.filter(t => t.staffId === staffMember.id && t.type === 'Salary');
+      
+      console.log(`[deleteStaffWithAllRecords] Found: ${staffAttendance.length} attendance, ${staffPayments.length} payments, ${staffTransactions.length} transactions`);
+      
+      // 2. Delete all attendance records
+      for (const att of staffAttendance) {
+        await deleteLocal('attendance', att.id);
+        console.log(`[deleteStaffWithAllRecords] Deleted attendance: ${att.id} (${att.date})`);
+      }
+      
+      // 3. Delete all salary payments and linked expenses
+      for (const payment of staffPayments) {
+        await deleteLocal('salaryPayments', payment.id);
+        
+        const linkedExpense = expenses.find(e => e.id === payment.id || e.title?.includes(staffMember.name));
+        if (linkedExpense) {
+          await deleteLocal('expenses', linkedExpense.id);
+          console.log(`[deleteStaffWithAllRecords] Deleted linked expense: ${linkedExpense.id}`);
+        }
+        
+        console.log(`[deleteStaffWithAllRecords] Deleted payment: ${payment.id}`);
+      }
+      
+      // 4. Delete all transactions
+      for (const txn of staffTransactions) {
+        await deleteLocal('transactions', txn.id);
+        console.log(`[deleteStaffWithAllRecords] Deleted transaction: ${txn.id}`);
+      }
+      
+      // 5. Finally, delete the staff member
+      await deleteLocal('staff', staffMember.id);
+      console.log(`[deleteStaffWithAllRecords] Deleted staff: ${staffMember.id}`);
+      
+      // 6. Update local state to remove all related records
+      setAttendance(prev => prev.filter(a => a.staffId !== staffMember.id));
+      setSalaryPayments(prev => prev.filter(p => p.staffId !== staffMember.id));
+      setTransactions(prev => prev.filter(t => t.staffId !== staffMember.id));
+      
+      // 7. Update expenses to remove any lingering linked expenses
+      const updatedExpenses = expenses.filter(e => !e.title?.includes(staffMember.name) && e.id !== staffMember.id);
+      setExpenses(updatedExpenses);
+      
+      toast.success(`${staffMember.name} and all associated records deleted successfully`);
+      
+      return true;
+      
+    } catch (error) {
+      console.error('[deleteStaffWithAllRecords] Error:', error);
+      toast.error(`Failed to completely delete ${staffMember.name}. Please check console for details.`);
+      return false;
     }
+  };
+
+  const isPaymentDue = (staff: Staff): boolean => {
+    return true; // Always enable pay salary button
   };
 
   const processedStaff = useMemo(() => {
@@ -142,9 +199,8 @@ export default function AdminStaff() {
     return (contextStaff || []).map(s => {
       if (!s) return null;
 
-      // Calculate today's attendance status
       const todayAttendance = (contextAttendance || []).find(a => a.staffId === s.id && a.date === todayStr);
-      let attendanceStatus = s.attendanceStatus; // Keep manual update if present
+      let attendanceStatus = s.attendanceStatus;
 
       if (todayAttendance) {
         attendanceStatus = todayAttendance.status === 'present' ? 'Present' :
@@ -158,11 +214,12 @@ export default function AdminStaff() {
         ...s,
         pendingSalary: amountDue,
         salaryStatus: salStatus,
-        isPaymentDue: paymentDue, // Add this new field
+        isPaymentDue: paymentDue,
         nextSalaryDate: calculateNextSalaryDate(s),
-        ...(attendanceStatus && { attendanceStatus })
+        attendanceStatus: attendanceStatus,
+        todayAttendanceRecord: todayAttendance
       };
-    }).filter(Boolean) as (Staff & { isPaymentDue: boolean })[];
+    }).filter(Boolean) as (Staff & { isPaymentDue: boolean; todayAttendanceRecord?: Attendance })[];
   }, [contextStaff, contextAttendance, getSalaryStatus]);
 
   const filteredStaff = useMemo(() => {
@@ -179,11 +236,7 @@ export default function AdminStaff() {
   const stats = useMemo(() => {
     const totalStaff = processedStaff.length;
     const activeStaff = processedStaff.filter(s => s.status === 'Active').length;
-
-    // Sum only non-negative pending amounts (getSalaryStatus already clamps, but extra safety)
     const totalPendingSalary = processedStaff.reduce((sum, s) => sum + Math.max(0, s.pendingSalary || 0), 0);
-
-    // Total Disbursements = sum of all salary payment records (source of truth)
     const totalPaidSalary = (contextPayments || []).reduce((sum, p) => {
       const amount = parseFloat(String(p.amount));
       return sum + (isNaN(amount) || amount < 0 ? 0 : amount);
@@ -197,9 +250,7 @@ export default function AdminStaff() {
   const durations = useMemo(() => Array.from(new Set(processedStaff.map(s => s.salaryDuration).filter(Boolean))), [processedStaff]);
 
   const handleStaffSubmit = async (staffData: Partial<Staff>) => {
-    // Validation: Prevent creating staff with empty names
     if (!staffData.name || staffData.name.trim() === '') {
-      console.error('Blocked attempt to create staff member with empty name');
       toast.error('Staff name is required');
       return;
     }
@@ -207,7 +258,6 @@ export default function AdminStaff() {
     const salaryAmount = Number(staffData.salary) || 0;
     const joinDate = staffData.joinDate || new Date().toISOString().split('T')[0];
 
-    // Check for duplicate name
     const isDuplicateName = contextStaff.some(s =>
       s.name.toLowerCase().trim() === (staffData.name || '').toLowerCase().trim() &&
       (!isEditing || s.id !== selectedStaff?.id)
@@ -232,10 +282,7 @@ export default function AdminStaff() {
           updatedAt: new Date().toISOString()
         } as Staff;
       } else {
-        // Generate name-based ID (slugified)
         const nameSlug = (staffData.name || '').trim().toLowerCase().replace(/\s+/g, '-');
-
-        // Ensure uniqueness by checking existing staff
         let uniqueId = nameSlug;
         if (contextStaff.some(s => s.id === uniqueId)) {
           uniqueId = `${nameSlug}-${Date.now().toString().slice(-4)}`;
@@ -263,38 +310,65 @@ export default function AdminStaff() {
         } as Staff;
       }
 
-      // Update using DataContext's updateLocal (handles State → IndexedDB → Firebase)
       await updateLocal('staff', updatedStaff);
-
       toast.success(isEditing ? 'Staff updated successfully' : 'Staff added to directory');
 
     } catch (error) {
       console.error('Staff operation failed:', error);
       toast.error('Failed to save staff information');
     } finally {
-      // Always close the modal and reset selection
       setShowStaffForm(false);
       setSelectedStaff(null);
     }
   };
 
   const handleDeleteStaff = async (staffMember: Staff) => {
-    if (!window.confirm(`Are you sure you want to remove ${staffMember.name}?`)) return;
+    // Show detailed confirmation
+    const attendanceCount = contextAttendance.filter(a => a.staffId === staffMember.id).length;
+    const paymentCount = contextPayments.filter(p => p.staffId === staffMember.id).length;
+    const transactionCount = transactions.filter(t => t.staffId === staffMember.id && t.type === 'Salary').length;
+    
+    const confirmMessage = 
+        `⚠️ WARNING: Deleting "${staffMember.name}" will permanently remove:\n\n` +
+        `📊 Staff Record: ${staffMember.name}\n` +
+        `📅 Attendance Records: ${attendanceCount} day(s)\n` +
+        `💰 Salary Payments: ${paymentCount} payment(s)\n` +
+        `💳 Transactions: ${transactionCount} transaction(s)\n` +
+        `📝 Linked Expenses: ${paymentCount} expense(s)\n\n` +
+        `This action CANNOT be undone!\n\n` +
+        `Are you absolutely sure you want to delete this staff member?`;
+    
+    if (!window.confirm(confirmMessage)) return;
 
     try {
-      // 1. Update LOCAL immediately (State + IndexedDB)
-      // This makes the card disappear instantly
-      await deleteLocal('staff', staffMember.id);
-
-      toast.success(`${staffMember.name} removed from record`);
+      setLoading(true);
+      
+      const success = await deleteStaffWithAllRecords(staffMember);
+      
+      if (success) {
+        setShowStaffDetails(null);
+        setShowPaySalary(null);
+        setShowAttendanceModal(null);
+        setShowActivityModal(null);
+        setIsHistoryOpen(false);
+        setSelectedStaffForHistory(null);
+        
+        toast.success(`${staffMember.name} and all associated records deleted`);
+      }
     } catch (error) {
       console.error('Delete operation failed:', error);
-      toast.error('Failed to remove staff member');
+      toast.error('Failed to delete staff member');
+    } finally {
+      setLoading(false);
     }
   };
 
   const handlePaySalary = async (staffMember: Staff, paymentData: any) => {
     const timestamp = new Date().toISOString();
+    const paymentDate = paymentData.paymentDate || timestamp.split('T')[0];
+    const paymentTime = paymentData.paymentTime || timestamp.split('T')[1].slice(0, 8);
+    const fullPaymentDateTime = `${paymentDate}T${paymentTime}`;
+
     try {
       const expenseId = `exp-sal-${Date.now()}`;
 
@@ -307,7 +381,10 @@ export default function AdminStaff() {
         type: 'Salary',
         method: paymentData.paymentMethod,
         notes: paymentData.notes,
-        expenseId: expenseId
+        expenseId: expenseId,
+        paymentDate: paymentDate,
+        paymentTime: paymentTime,
+        fullPaymentDateTime: fullPaymentDateTime
       };
 
       const newExpense: Expense = {
@@ -321,7 +398,10 @@ export default function AdminStaff() {
         status: 'paid',
         isRecurring: false,
         createdAt: timestamp,
-        updatedAt: timestamp
+        updatedAt: timestamp,
+        paymentDate: paymentDate,
+        paymentTime: paymentTime,
+        fullPaymentDateTime: fullPaymentDateTime
       };
 
       const newSalaryPayment: any = {
@@ -332,11 +412,12 @@ export default function AdminStaff() {
         date: timestamp,
         method: paymentData.paymentMethod,
         notes: paymentData.notes,
-        month: paymentData.month || new Date().toLocaleString('default', { month: 'long', year: 'numeric' })
+        month: paymentData.month || new Date().toLocaleString('default', { month: 'long', year: 'numeric' }),
+        paymentDate: paymentDate,
+        paymentTime: paymentTime,
+        fullPaymentDateTime: fullPaymentDateTime
       };
 
-      // pendingSalary on staffMember here is already the COMPUTED value from getSalaryStatus (amountDue).
-      // Subtracting the payment from it gives the leftover. Clamp at 0 so it never goes negative.
       const rawPending = (staffMember.pendingSalary || 0);
       const newPendingBalance = Math.max(0, rawPending - paymentData.amount);
 
@@ -344,18 +425,15 @@ export default function AdminStaff() {
         ...staffMember,
         totalPaid: (staffMember.totalPaid || 0) + paymentData.amount,
         totalEarned: (staffMember.totalEarned || 0) + paymentData.amount,
-        // Store 0 if fully paid; positive remainder if partial
         pendingSalary: newPendingBalance,
-        lastSalaryDate: timestamp.split('T')[0],
-        lastPaidDate: timestamp,
+        lastSalaryDate: paymentDate,
+        lastPaidDate: fullPaymentDateTime,
         updatedAt: timestamp,
         salaryStatus: newPendingBalance > 0 ? 'Pending' : 'Paid'
       };
 
-      // 1. OPTIMISTIC UI: Close modal immediately
       setShowPaySalary(null);
 
-      // 2. Perform updates via updateLocal (handles State, IndexedDB, and Firebase sync)
       await Promise.all([
         updateLocal('transactions', newTransaction),
         updateLocal('expenses', newExpense),
@@ -363,7 +441,8 @@ export default function AdminStaff() {
         updateLocal('salaryPayments', newSalaryPayment)
       ]);
 
-      toast.success(`Salary Payment recorded for ${staffMember.name}`);
+      toast.success(`Salary Payment recorded for ${staffMember.name} on ${paymentDate} at ${paymentTime}`);
+
     } catch (error) {
       console.error('Payment processing failed:', error);
       toast.error('Failed to process payment');
@@ -383,19 +462,17 @@ export default function AdminStaff() {
         staffId: staffMember.id,
         date: attData.date,
         status: attData.status as 'present' | 'absent' | 'leave',
-        notes: attData.notes
+        notes: attData.notes,
+        time: attData.time,
+        timestamp: attData.timestamp
       };
 
       const todayStr = new Date().toISOString().split('T')[0];
       const isToday = attData.date === todayStr;
 
-      // 1. OPTIMISTIC UI: Close modal immediately
       setShowAttendanceModal(null);
-
-      // 2. Use centralized context function (Handles State + Local DB + Background Sync)
       await updateAttendance(newAtt);
 
-      // 3. Success Feedback
       toast.success(isToday
         ? `Marked ${staffMember.name} as ${newAtt.status} for today`
         : `Attendance updated for ${attData.date}`
@@ -430,14 +507,14 @@ export default function AdminStaff() {
           <p className="text-muted-foreground font-medium">Manage clinic personnel, payroll, and attendance</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <Button
+          {/* <Button
             variant="outline"
             onClick={handleDownloadReport}
             className="gap-2 border-gray-200 hover:bg-gray-50 h-11 px-6 font-bold rounded-xl"
           >
             <Download className="w-5 h-5" />
             Export Report
-          </Button>
+          </Button> */}
           <Button
             onClick={() => { setSelectedStaff(null); setIsEditing(false); setShowStaffForm(true); }}
             className="gap-2 bg-primary hover:bg-primary/90 shadow-md h-11 px-6 font-bold rounded-xl"
@@ -536,11 +613,16 @@ export default function AdminStaff() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredStaff?.map((staffMember) => (
             <Card key={staffMember.id} className="group hover:shadow-xl transition-all border-none shadow-md overflow-hidden bg-white">
-              <div className={`h-1.5 w-full ${staffMember.status === 'Active' ? 'bg-green-500' : 'bg-red-500'}`} />
+              <div className={`h-1.5 w-full ${
+                staffMember.attendanceStatus === 'Present' ? 'bg-green-500' :
+                staffMember.attendanceStatus === 'Absent' ? 'bg-red-500' :
+                staffMember.attendanceStatus === 'Leave' ? 'bg-yellow-500' :
+                'bg-gray-300'
+              }`} />
               <CardContent className="p-6">
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors pointer-cursor" onClick={() => setShowActivityModal(staffMember)}>
+                    <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors cursor-pointer" onClick={() => setShowActivityModal(staffMember)}>
                       <UserCog className="w-6 h-6 text-primary" />
                     </div>
                     <div>
@@ -575,6 +657,26 @@ export default function AdminStaff() {
                   <div className="flex items-center gap-3 text-sm font-medium text-gray-600">
                     <Calendar className="w-4 h-4 text-muted-foreground" /> Joined: {staffMember.joinDate ? new Date(staffMember.joinDate).toLocaleDateString() : 'No Date Provided'}
                   </div>
+                  
+                  <div className="flex items-center justify-between pt-2 pb-1">
+                    <div className="flex items-center gap-2">
+                      {getAttendanceIcon(staffMember.attendanceStatus)}
+                      <span className="text-xs font-semibold text-muted-foreground">Today's Attendance:</span>
+                    </div>
+                    <Badge 
+                      variant="outline"
+                      className={cn(
+                        "font-bold text-xs px-3 py-1",
+                        staffMember.attendanceStatus === 'Present' && "bg-green-50 text-green-700 border-green-200",
+                        staffMember.attendanceStatus === 'Absent' && "bg-red-50 text-red-700 border-red-200",
+                        staffMember.attendanceStatus === 'Leave' && "bg-yellow-50 text-yellow-700 border-yellow-200",
+                        !staffMember.attendanceStatus && "bg-gray-50 text-gray-600 border-gray-200"
+                      )}
+                    >
+                      {staffMember.attendanceStatus || 'Not Marked'}
+                    </Badge>
+                  </div>
+                  
                   <div className="pt-3 border-t grid grid-cols-2 gap-4">
                     <div>
                       <p className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Base Salary</p>
@@ -590,21 +692,14 @@ export default function AdminStaff() {
 
                   <div className="flex flex-col gap-3 pt-4 border-t mt-4">
                     <div className="flex items-center justify-between gap-3">
-                      {!staffMember.isPaymentDue ? (
-                        <div className="flex items-center gap-2 text-green-600 bg-green-50 px-4 py-2 rounded-xl border border-green-100 flex-1 justify-center shadow-sm">
-                          <CheckCircle2 className="w-4 h-4" />
-                          <span className="text-xs font-black uppercase tracking-widest">Paid</span>
-                        </div>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-10 gap-2 font-bold border-primary/20 text-primary hover:bg-primary hover:text-white shadow-sm active:scale-95 transition-all flex-1 rounded-xl"
-                          onClick={() => setShowPaySalary(staffMember)}
-                        >
-                          <Wallet className="w-4 h-4" /> Pay Salary
-                        </Button>
-                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-10 gap-2 font-bold border-primary/20 text-primary hover:bg-primary hover:text-white shadow-sm active:scale-95 transition-all flex-1 rounded-xl"
+                        onClick={() => setShowPaySalary(staffMember)}
+                      >
+                        <Wallet className="w-4 h-4" /> Pay Salary
+                      </Button>
                     </div>
 
                     <div className="grid grid-cols-4 gap-2">
@@ -668,7 +763,7 @@ export default function AdminStaff() {
       {/* Modals */}
       <StaffFormModal
         open={showStaffForm}
-        onClose={() => { setShowStaffForm(false); setSelectedStaff(null); }}
+        onClose={() => { setShowStaffForm(false); setSelectedStaff(null); setIsEditing(false); }}
         onSubmit={handleStaffSubmit}
         staff={selectedStaff}
         isEditing={isEditing}
@@ -687,6 +782,10 @@ export default function AdminStaff() {
         staff={showAttendanceModal}
         existingAttendance={contextAttendance || []}
         onSubmit={handleMarkAttendance}
+        onDelete={async (attendanceId) => {
+          await deleteLocal('attendance', attendanceId);
+          toast.success("Attendance record deleted");
+        }}
       />
 
       <StaffDetailsModal

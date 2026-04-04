@@ -6,7 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Lock, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { getFromLocal } from '@/services/indexedDbUtils';
+// import { getFromLocal } from '@/services/expireindexedDbUtils_OLDs';
+import { dbManager, STORE_CONFIGS, getKeyPath } from '@/lib/indexedDB';
 import { updateUserPasswordLocally } from '@/services/authService';
 
 interface AdminChangePasswordProps {
@@ -36,7 +37,7 @@ export default function AdminChangePassword({ userId }: AdminChangePasswordProps
 
         try {
             // 2. Verify Current Password against IndexedDB
-            const storedUser = await getFromLocal('users', userId) as any;
+            const storedUser = await dbManager.getFromLocal('users', userId) as any;
             if (!storedUser || storedUser.password !== currentPassword) {
                 toast.error('Current password is incorrect');
                 setIsSubmitting(false);

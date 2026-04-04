@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   UserPlus,
   Search,
@@ -18,14 +18,13 @@ import {
   Activity,
   AlertCircle,
   CheckCircle,
-  XCircle,
   Users,
   RefreshCw,
   Eye,
   CreditCard,
   FileText,
   Plus,
-  Clock // Added for 'Add to Waiting' button
+  Clock
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -45,25 +44,27 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Patient, QueueItem, Bill } from '@/types';
+import { Patient, QueueItem, Bill, Transaction } from '@/types';
 import { toast } from 'sonner';
 import PatientFormModal from '@/components/modals/PatientFormModal';
 import PatientDetailsModal from '@/components/modals/PatientDetailsModal';
-import { deleteFromLocal } from '@/services/indexedDbUtils';
-import { smartSync, smartDelete } from '@/services/syncService';
-import { formatCurrency } from '@/lib/utils';
 import { useData } from '@/context/DataContext';
 import { format, parseISO } from 'date-fns';
+import { deleteDoc, doc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 export default function OperatorPatients() {
   const {
     patients: contextPatients,
     queue: contextQueue,
     bills: contextBills,
+    transactions: contextTransactions,
     sales: contextSales,
     loading: contextLoading,
     deleteLocal,
-    updateLocal
+    updateLocal,
+    refreshCollection,
+    deletePatientWithAllRecords,
   } = useData();
 
   // State Management
@@ -85,11 +86,398 @@ export default function OperatorPatients() {
   const [selectedPatientHistory, setSelectedPatientHistory] = useState<{
     queueHistory: QueueItem[];
     bills: Bill[];
-  }>({ queueHistory: [], bills: [] });
+    transactions: Transaction[];
+    preReceiveTotal: number;
+  }>({ queueHistory: [], bills: [], transactions: [], preReceiveTotal: 0 });
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
   const patientsPerPage = 10;
+
+  // Calculate pre-receive total for a patient
+  const getPatientPreReceiveTotal = useCallback((patientId: string, patientNumber: string, patientName: string) => {
+    const preReceiveTransactions = (contextTransactions || []).filter(t =>
+      t.type === 'pre_receive' &&
+      (t.patientId === patientId || t.patientNumber === patientNumber || t.patientName === patientName)
+    );
+    return preReceiveTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+  }, [contextTransactions]);
+
+  // Comprehensive delete function for patient with all records
+  // const deletePatientWithAllRecords = async (patient: Patient): Promise<boolean> => {
+  //   console.log(`[deletePatientWithAllRecords] Deleting patient: ${patient.name}`);
+  //   console.log(`[deletePatientWithAllRecords] Patient ID: ${patient.id}`);
+  //   console.log(`[deletePatientWithAllRecords] Patient Number: ${patient.patientNumber}`);
+
+  //   try {
+  //     // Import Firebase and dbManager
+  //     const { dbManager } = await import('@/lib/indexedDB');
+  //     const { db } = await import('@/lib/firebase');
+  //     const { deleteDoc, doc } = await import('firebase/firestore');
+
+  //     // Fetch directly from IndexedDB
+  //     const allQueueItems = await dbManager.getFromLocal('queue') || [];
+  //     const allBills = await dbManager.getFromLocal('bills') || [];
+  //     const allTransactions = await dbManager.getFromLocal('transactions') || [];
+
+  //     // CRITICAL: Match by ALL possible fields
+  //     const patientQueueItems = allQueueItems.filter((q: any) => {
+  //       const matchById = q.patientId === patient.id;
+  //       const matchByNumber = q.patientNumber === patient.patientNumber;
+  //       const matchByName = q.patientName === patient.name;
+  //       return matchById || matchByNumber || matchByName;
+  //     });
+
+  //     const patientBills = allBills.filter((b: any) => {
+  //       const matchById = b.patientId === patient.id;
+  //       const matchByNumber = b.patientNumber === patient.patientNumber;
+  //       return matchById || matchByNumber;
+  //     });
+
+  //     const patientTransactions = allTransactions.filter((t: any) => {
+  //       const matchById = t.patientId === patient.id;
+  //       const matchByNumber = t.patientNumber === patient.patientNumber;
+  //       const matchByName = t.patientName === patient.name;
+  //       return matchById || matchByNumber || matchByName;
+  //     });
+
+  //     console.log(`[deletePatientWithAllRecords] Found: 
+  //     - ${patientQueueItems.length} queue items
+  //     - ${patientBills.length} bills
+  //     - ${patientTransactions.length} transactions`);
+
+  //     // Delete all queue items (Local + Firebase)
+  //     for (const item of patientQueueItems) {
+  //       try {
+  //         // Local delete
+  //         await deleteLocal('queue', item.id);
+  //         console.log(`✅ Deleted queue locally: ${item.id}`);
+
+  //         // Direct Firebase delete
+  //         try {
+  //           await deleteDoc(doc(db, 'queue', item.id));
+  //           console.log(`✅ Deleted queue from Firebase: ${item.id}`);
+  //         } catch (firebaseErr) {
+  //           console.log(`Firebase delete failed for ${item.id}:`, firebaseErr);
+  //         }
+  //       } catch (err) {
+  //         console.error(`Failed to delete queue ${item.id}:`, err);
+  //       }
+  //     }
+
+  //     // Delete all bills (Local + Firebase)
+  //     for (const bill of patientBills) {
+  //       try {
+  //         await deleteLocal('bills', bill.id);
+  //         console.log(`✅ Deleted bill locally: ${bill.id}`);
+
+  //         try {
+  //           await deleteDoc(doc(db, 'bills', bill.id));
+  //           console.log(`✅ Deleted bill from Firebase: ${bill.id}`);
+  //         } catch (firebaseErr) {
+  //           console.log(`Firebase delete failed for bill ${bill.id}:`, firebaseErr);
+  //         }
+  //       } catch (err) {
+  //         console.error(`Failed to delete bill ${bill.id}:`, err);
+  //       }
+  //     }
+
+  //     // Delete all transactions (Local + Firebase)
+  //     for (const txn of patientTransactions) {
+  //       try {
+  //         await deleteLocal('transactions', txn.id);
+  //         console.log(`✅ Deleted transaction locally: ${txn.id}`);
+
+  //         try {
+  //           await deleteDoc(doc(db, 'transactions', txn.id));
+  //           console.log(`✅ Deleted transaction from Firebase: ${txn.id}`);
+  //         } catch (firebaseErr) {
+  //           console.log(`Firebase delete failed for transaction ${txn.id}:`, firebaseErr);
+  //         }
+  //       } catch (err) {
+  //         console.error(`Failed to delete transaction ${txn.id}:`, err);
+  //       }
+  //     }
+
+  //     // Delete patient (Local + Firebase)
+  //     await deleteLocal('patients', patient.id);
+  //     console.log(`✅ Deleted patient locally: ${patient.id}`);
+
+  //     try {
+  //       await deleteDoc(doc(db, 'patients', patient.id));
+  //       console.log(`✅ Deleted patient from Firebase: ${patient.id}`);
+  //     } catch (firebaseErr) {
+  //       console.log(`Firebase delete failed for patient:`, firebaseErr);
+  //     }
+
+  //     // Force refresh collections
+  //     await refreshCollection('queue');
+  //     await refreshCollection('bills');
+  //     await refreshCollection('transactions');
+  //     await refreshCollection('patients');
+
+  //     toast.success(`${patient.name} and all associated records deleted successfully from local and cloud`);
+  //     return true;
+
+  //   } catch (error) {
+  //     console.error('[deletePatientWithAllRecords] Error:', error);
+  //     toast.error(`Failed to delete ${patient.name}. Please try again.`);
+  //     return false;
+  //   }
+  // };
+
+  // const deletePatientWithAllRecords = async (
+  //   patient: Patient,
+  //   setFilteredPatients: React.Dispatch<React.SetStateAction<Patient[]>>
+  // ): Promise<boolean> => {
+  //   console.log(`[deletePatientWithAllRecords] Deleting patient: ${patient.name}`);
+  //   console.log(`[deletePatientWithAllRecords] Patient ID: ${patient.id}`);
+  //   console.log(`[deletePatientWithAllRecords] Patient Number: ${patient.patientNumber}`);
+
+  //   try {
+  //     const { dbManager } = await import('@/lib/indexedDB');
+  //     const { db } = await import('@/lib/firebase');
+  //     const { deleteDoc, doc } = await import('firebase/firestore');
+
+  //     // ============================================
+  //     // STEP 1: Fetch all data from IndexedDB
+  //     // ============================================
+  //     const allQueueItems = await dbManager.getFromLocal('queue') || [];
+  //     const allBills = await dbManager.getFromLocal('bills') || [];
+  //     const allTransactions = await dbManager.getFromLocal('transactions') || [];
+
+  //     // Match by ALL possible fields
+  //     const patientQueueItems = allQueueItems.filter((q: any) => {
+  //       return q.patientId === patient.id ||
+  //         q.patientNumber === patient.patientNumber ||
+  //         q.patientName === patient.name;
+  //     });
+
+  //     const patientBills = allBills.filter((b: any) => {
+  //       return b.patientId === patient.id || b.patientNumber === patient.patientNumber;
+  //     });
+
+  //     const patientTransactions = allTransactions.filter((t: any) => {
+  //       return t.patientId === patient.id ||
+  //         t.patientNumber === patient.patientNumber ||
+  //         t.patientName === patient.name;
+  //     });
+
+  //     console.log(`Found: ${patientQueueItems.length} queue, ${patientBills.length} bills, ${patientTransactions.length} transactions`);
+
+  //     // ============================================
+  //     // STEP 2: FIRST DELETE FROM LOCAL (IndexedDB)
+  //     // ============================================
+  //     console.log('🗑️ Deleting from LOCAL first...');
+
+  //     // Delete queue items locally
+  //     for (const item of patientQueueItems) {
+  //       try {
+  //         await deleteLocal('queue', item.id);
+  //         console.log(`✅ Deleted queue locally: ${item.id}`);
+  //       } catch (err) {
+  //         console.error(`Failed to delete queue ${item.id}:`, err);
+  //       }
+  //     }
+
+  //     // Delete bills locally
+  //     for (const bill of patientBills) {
+  //       try {
+  //         await deleteLocal('bills', bill.id);
+  //         console.log(`✅ Deleted bill locally: ${bill.id}`);
+  //       } catch (err) {
+  //         console.error(`Failed to delete bill ${bill.id}:`, err);
+  //       }
+  //     }
+
+  //     // Delete transactions locally
+  //     for (const txn of patientTransactions) {
+  //       try {
+  //         await deleteLocal('transactions', txn.id);
+  //         console.log(`✅ Deleted transaction locally: ${txn.id}`);
+  //       } catch (err) {
+  //         console.error(`Failed to delete transaction ${txn.id}:`, err);
+  //       }
+  //     }
+
+  //     // Delete patient locally
+  //     await deleteLocal('patients', patient.id);
+  //     console.log(`✅ Deleted patient locally: ${patient.id}`);
+
+  //     setFilteredPatients(prev => prev.filter(p => p.id !== patient.id));
+
+  //     // ============================================
+  //     // STEP 3: SAVE DELETED RECORDS FOR SYNC (if Firebase fails)
+  //     // ============================================
+  //     const pendingDeletes = {
+  //       patientId: patient.id,
+  //       patientNumber: patient.patientNumber,
+  //       patientName: patient.name,
+  //       queueItems: patientQueueItems.map(i => i.id),
+  //       bills: patientBills.map(b => b.id),
+  //       transactions: patientTransactions.map(t => t.id),
+  //       timestamp: new Date().toISOString()
+  //     };
+
+  //     localStorage.setItem('pending_firebase_deletes', JSON.stringify(pendingDeletes));
+  //     console.log('📝 Saved pending deletes for Firebase sync');
+
+  //     // ============================================
+  //     // STEP 4: THEN DELETE FROM FIREBASE (if online)
+  //     // ============================================
+  //     let firebaseSuccess = true;
+  //     const failedDeletes: string[] = [];
+
+  //     console.log('☁️ Deleting from Firebase...');
+
+  //     // Delete queue items from Firebase
+  //     for (const item of patientQueueItems) {
+  //       try {
+  //         await deleteDoc(doc(db, 'queue', item.id));
+  //         console.log(`✅ Deleted queue from Firebase: ${item.id}`);
+  //       } catch (firebaseErr) {
+  //         console.log(`❌ Firebase delete failed for queue ${item.id}:`, firebaseErr);
+  //         failedDeletes.push(`queue/${item.id}`);
+  //         firebaseSuccess = false;
+  //       }
+  //     }
+
+  //     // Delete bills from Firebase
+  //     for (const bill of patientBills) {
+  //       try {
+  //         await deleteDoc(doc(db, 'bills', bill.id));
+  //         console.log(`✅ Deleted bill from Firebase: ${bill.id}`);
+  //       } catch (firebaseErr) {
+  //         console.log(`❌ Firebase delete failed for bill ${bill.id}:`, firebaseErr);
+  //         failedDeletes.push(`bills/${bill.id}`);
+  //         firebaseSuccess = false;
+  //       }
+  //     }
+
+  //     // Delete transactions from Firebase
+  //     for (const txn of patientTransactions) {
+  //       try {
+  //         await deleteDoc(doc(db, 'transactions', txn.id));
+  //         console.log(`✅ Deleted transaction from Firebase: ${txn.id}`);
+  //       } catch (firebaseErr) {
+  //         console.log(`❌ Firebase delete failed for transaction ${txn.id}:`, firebaseErr);
+  //         failedDeletes.push(`transactions/${txn.id}`);
+  //         firebaseSuccess = false;
+  //       }
+  //     }
+
+  //     // Delete patient from Firebase
+  //     try {
+  //       await deleteDoc(doc(db, 'patients', patient.id));
+  //       console.log(`✅ Deleted patient from Firebase: ${patient.id}`);
+  //     } catch (firebaseErr) {
+  //       console.log(`❌ Firebase delete failed for patient:`, firebaseErr);
+  //       failedDeletes.push(`patients/${patient.id}`);
+  //       firebaseSuccess = false;
+  //     }
+
+  //     // ============================================
+  //     // STEP 5: UPDATE SYNC STATUS
+  //     // ============================================
+  //     if (!firebaseSuccess) {
+  //       console.log(`⚠️ Some Firebase deletes failed. ${failedDeletes.length} items pending sync.`);
+  //       localStorage.setItem('pending_firebase_deletes', JSON.stringify({
+  //         ...pendingDeletes,
+  //         failedItems: failedDeletes,
+  //         retryCount: 1
+  //       }));
+  //       toast.warning(`${patient.name} deleted locally. Some cloud deletes pending. Will sync when online.`);
+  //     } else {
+  //       // All Firebase deletes successful
+  //       localStorage.removeItem('pending_firebase_deletes');
+  //       console.log('✅ All Firebase deletes successful!');
+  //       toast.success(`${patient.name} deleted successfully from local and cloud`);
+  //     }
+
+  //     return true;
+
+  //   } catch (error) {
+  //     console.error('[deletePatientWithAllRecords] Error:', error);
+  //     toast.error(`Failed to delete ${patient.name}. Please try again.`);
+  //     return false;
+  //   }
+  // };
+
+  // Function to sync pending Firebase deletes when back online
+  const syncPendingFirebaseDeletes = async () => {
+    const pendingData = localStorage.getItem('pending_firebase_deletes');
+    if (!pendingData) return;
+
+    try {
+      const pending = JSON.parse(pendingData);
+      console.log('🔄 Syncing pending Firebase deletes...', pending);
+
+      const { db } = await import('@/lib/firebase');
+      const { deleteDoc, doc } = await import('firebase/firestore');
+
+      let allSuccess = true;
+
+      // Try to delete patient again
+      try {
+        await deleteDoc(doc(db, 'patients', pending.patientId));
+        console.log(`✅ Synced patient delete: ${pending.patientId}`);
+      } catch (err) {
+        console.log(`Patient already deleted or not found: ${pending.patientId}`);
+      }
+
+      // Try to delete queue items
+      for (const queueId of pending.queueItems) {
+        try {
+          await deleteDoc(doc(db, 'queue', queueId));
+          console.log(`✅ Synced queue delete: ${queueId}`);
+        } catch (err) {
+          console.log(`Queue item ${queueId} already deleted`);
+        }
+      }
+
+      // Try to delete bills
+      for (const billId of pending.bills) {
+        try {
+          await deleteDoc(doc(db, 'bills', billId));
+          console.log(`✅ Synced bill delete: ${billId}`);
+        } catch (err) {
+          console.log(`Bill ${billId} already deleted`);
+        }
+      }
+
+      // Try to delete transactions
+      for (const txnId of pending.transactions) {
+        try {
+          await deleteDoc(doc(db, 'transactions', txnId));
+          console.log(`✅ Synced transaction delete: ${txnId}`);
+        } catch (err) {
+          console.log(`Transaction ${txnId} already deleted`);
+        }
+      }
+
+      // Clear pending deletes after successful sync
+      localStorage.removeItem('pending_firebase_deletes');
+      toast.success('Pending cloud deletes synced successfully');
+
+    } catch (error) {
+      console.error('Sync pending deletes error:', error);
+    }
+  };
+
+  // Add online event listener
+  useEffect(() => {
+    const handleOnline = () => {
+      console.log('🟢 Back online! Syncing pending deletes...');
+      syncPendingFirebaseDeletes();
+    };
+
+    window.addEventListener('online', handleOnline);
+
+    // Also check on component mount
+    syncPendingFirebaseDeletes();
+
+    return () => window.removeEventListener('online', handleOnline);
+  }, []);
 
   // Filter patients when search or filters change or context data updates
   useEffect(() => {
@@ -110,7 +498,6 @@ export default function OperatorPatients() {
         const term = searchTerm.toLowerCase().trim();
         result = result.filter(patient => {
           if (!patient) return false;
-
           const nameMatch = patient.name?.toLowerCase().includes(term) || false;
           const phoneMatch = patient.phone?.toLowerCase().includes(term) || false;
           const patientNumberMatch = patient.patientNumber?.toLowerCase().includes(term) || false;
@@ -178,8 +565,16 @@ export default function OperatorPatients() {
     }
   }, [contextPatients, searchTerm, statusFilter, balanceFilter, dateFilter]);
 
+  useEffect(() => {
+    const deletedPatients = JSON.parse(localStorage.getItem('deleted_patients') || '[]');
+    if (deletedPatients.length > 0) {
+      setFilteredPatients(prev => prev.filter(p => !deletedPatients.includes(p.id)));
+    }
+  }, [contextPatients]);
+
+
   // Derived Stats
-  const stats = React.useMemo(() => {
+  const stats = useMemo(() => {
     try {
       if (!contextPatients || !Array.isArray(contextPatients)) {
         return {
@@ -188,14 +583,16 @@ export default function OperatorPatients() {
           pendingBalance: 0,
           totalVisits: 0,
           totalRevenue: 0,
-          creditPatients: 0
+          creditPatients: 0,
+          totalPreReceive: 0
         };
       }
 
-      // Calculate Revenue from Bills and Sales for accuracy
       const treatmentRevenue = (contextBills || []).reduce((sum, b) => sum + (Number(b.amountPaid) || 0), 0);
       const salesRevenue = (contextSales || []).reduce((sum, s) => sum + (Number(s.total || s.amount || s.totalPrice || 0)), 0);
+      const preReceiveTotal = (contextTransactions || []).filter(t => t.type === 'pre_receive').reduce((sum, t) => sum + (t.amount || 0), 0);
       const totalRevenue = treatmentRevenue + salesRevenue;
+      console.log(contextTransactions)
 
       return {
         total: contextPatients.length,
@@ -203,7 +600,8 @@ export default function OperatorPatients() {
         pendingBalance: contextPatients.reduce((sum, p) => sum + (p?.pendingBalance || 0), 0),
         totalVisits: (contextQueue || []).filter(q => q.status === 'completed').length,
         totalRevenue: totalRevenue,
-        creditPatients: contextPatients.filter(p => p && (p.pendingBalance || 0) < 0).length
+        creditPatients: contextPatients.filter(p => p && (p.pendingBalance || 0) < 0).length,
+        totalPreReceive: preReceiveTotal
       };
     } catch (error) {
       console.error('Error calculating stats:', error);
@@ -213,15 +611,11 @@ export default function OperatorPatients() {
         pendingBalance: 0,
         totalVisits: 0,
         totalRevenue: 0,
-        creditPatients: 0
+        creditPatients: 0,
+        totalPreReceive: 0
       };
     }
-  }, [contextPatients, contextBills, contextQueue, contextSales]);
-
-  // Handle search (controlled by searchTerm state)
-  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearchTerm(e.target.value);
-  };
+  }, [contextPatients, contextBills, contextQueue, contextSales, contextTransactions]);
 
   // Handle add new patient
   const handleAddPatient = () => {
@@ -235,32 +629,82 @@ export default function OperatorPatients() {
     setShowPatientForm(true);
   };
 
-  // Handle delete patient
+  // Handle delete patient with all records
+  // const handleDeletePatient = async (patient: Patient) => {
+  //   if (!patient || !patient.id) return;
+
+  //   const queueCount = (contextQueue || []).filter(q => q.patientId === patient.id || q.patientNumber === patient.patientNumber).length;
+  //   const billsCount = (contextBills || []).filter(b => b.patientId === patient.id || b.patientNumber === patient.patientNumber).length;
+  //   const transactionCount = (contextTransactions || []).filter(t => t.patientId === patient.id || t.patientName === patient.name).length;
+
+  //   const confirmMessage =
+  //     `⚠️⚠️⚠️ PERMANENT DELETE WARNING ⚠️⚠️⚠️\n\n` +
+  //     `Deleting "${patient.name}" (${patient.patientNumber}) will permanently remove:\n\n` +
+  //     `📊 Patient Record: ${patient.name}\n` +
+  //     `📅 Queue History: ${queueCount} record(s)\n` +
+  //     `💰 Bills: ${billsCount} bill(s)\n` +
+  //     `💳 Transactions: ${transactionCount} transaction(s)\n` +
+  //     `💵 Pre-receive Payments: Any pre-receive payments will also be deleted\n\n` +
+  //     `This will also delete from CLOUD (Firebase) and cannot be recovered!\n\n` +
+  //     `Are you absolutely sure you want to delete this patient?`;
+
+  //   if (!confirm(confirmMessage)) return;
+
+  //   try {
+  //     setSyncingPatientId(patient.id);
+  //      const success = await deletePatientWithAllRecords(patient, setFilteredPatients);
+
+  //     if (success) {
+  //       if (selectedPatient?.id === patient.id) {
+  //         setShowPatientDetails(false);
+  //         setSelectedPatient(null);
+  //       }
+  //       toast.success(`${patient.name} and all records deleted from local and cloud`);
+  //     }
+  //   } catch (error) {
+  //     console.error('Error deleting patient:', error);
+  //     toast.error('Failed to delete patient');
+  //   } finally {
+  //     setSyncingPatientId(null);
+  //   }
+  // };
+
   const handleDeletePatient = async (patient: Patient) => {
     if (!patient || !patient.id) return;
 
-    if (!confirm(`Are you sure you want to delete patient ${patient.name} (${patient.patientNumber})?\nThis action cannot be undone.`)) {
-      return;
-    }
+    const queueCount = (contextQueue || []).filter(q => q.patientId === patient.id || q.patientNumber === patient.patientNumber).length;
+    const billsCount = (contextBills || []).filter(b => b.patientId === patient.id || b.patientNumber === patient.patientNumber).length;
+    const transactionCount = (contextTransactions || []).filter(t => t.patientId === patient.id || t.patientName === patient.name).length;
+
+    const confirmMessage = `⚠️⚠️⚠️ PERMANENT DELETE WARNING ⚠️⚠️⚠️\n\n` +
+      `Deleting "${patient.name}" (${patient.patientNumber}) will permanently remove:\n\n` +
+      `📊 Patient Record: ${patient.name}\n` +
+      `📅 Queue History: ${queueCount} record(s)\n` +
+      `💰 Bills: ${billsCount} bill(s)\n` +
+      `💳 Transactions: ${transactionCount} transaction(s)\n\n` +
+      `Are you absolutely sure?`;
+
+    if (!confirm(confirmMessage)) return;
 
     try {
-      // 1. Local-first delete (State + IndexedDB Updates UI instantly)
-      await deleteLocal('patients', patient.id);
+      setSyncingPatientId(patient.id);
 
-      // 2. Background Firebase delete (non-blocking)
-      smartDelete('patients', patient.id).catch(err => {
-        console.error('Background delete failed:', err);
-      });
+      // ✅ USE DATACONTEXT's delete function - NOT your custom one
+      const success = await deletePatientWithAllRecords(patient);
 
-      toast.success(`Patient ${patient.name} removed successfully`);
-
-      if (selectedPatient?.id === patient.id) {
-        setShowPatientDetails(false);
-        setSelectedPatient(null);
+      if (success) {
+        if (selectedPatient?.id === patient.id) {
+          setShowPatientDetails(false);
+          setSelectedPatient(null);
+        }
+        // UI automatically updates because DataContext handles state
+        toast.success(`${patient.name} and all records deleted`);
       }
     } catch (error) {
       console.error('Error deleting patient:', error);
       toast.error('Failed to delete patient');
+    } finally {
+      setSyncingPatientId(null);
     }
   };
 
@@ -269,7 +713,6 @@ export default function OperatorPatients() {
     if (!patient) return;
 
     try {
-      // 1. Get today's queue to calculate next token
       const today = new Date();
       const todayString = today.toDateString();
       const todayQueueItems = (contextQueue || []).filter(item => {
@@ -286,7 +729,6 @@ export default function OperatorPatients() {
         ? Math.max(...todayQueueItems.map(q => q.tokenNumber)) + 1
         : 1;
 
-      // 2. Create queue item
       const queueItemData = {
         id: `Q-${Date.now()}`,
         patientId: patient.id,
@@ -306,7 +748,6 @@ export default function OperatorPatients() {
         previousPending: patient.pendingBalance || 0
       } as QueueItem;
 
-      // 3. Save to local (State + IndexedDB)
       await updateLocal('queue', queueItemData);
       toast.success(`${patient.name} added to Waiting (Token #${nextToken})`);
     } catch (error) {
@@ -317,47 +758,45 @@ export default function OperatorPatients() {
 
   // Handle save patient
   const handleSavePatient = (patientData: any) => {
-    // Note: PatientFormModal now handles updateLocal and smartSync internally
-    // for immediate UI feedback and non-blocking submission.
     setSelectedPatient(null);
     setShowPatientForm(false);
   };
 
-  // Handle view patient details - derived from context
+  // Handle view patient details
   const handleViewPatientDetails = (patient: Patient) => {
     if (!patient) return;
 
     setSelectedPatient(patient);
 
     try {
-      // Filter history from context data
       const queueHistory = (contextQueue || [])
-        .filter(item => item && item.patientNumber === patient.patientNumber)
+        .filter(item => item && (item.patientId === patient.id || item.patientNumber === patient.patientNumber))
         .sort((a, b) => new Date(b.checkInTime || 0).getTime() - new Date(a.checkInTime || 0).getTime());
 
       const patientBills = (contextBills || [])
-        .filter(bill => bill && bill.patientId === patient.patientNumber)
+        .filter(bill => bill && (bill.patientId === patient.id || bill.patientNumber === patient.patientNumber))
         .sort((a, b) => new Date(b.createdDate || 0).getTime() - new Date(a.createdDate || 0).getTime());
+
+      const patientTransactions = (contextTransactions || [])
+        .filter(t => t && (t.patientId === patient.id || t.patientNumber === patient.patientNumber || t.patientName === patient.name))
+        .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+
+      const preReceiveTotal = patientTransactions
+        .filter(t => t.type === 'pre_receive')
+        .reduce((sum, t) => sum + (t.amount || 0), 0);
 
       setSelectedPatientHistory({
         queueHistory,
-        bills: patientBills
+        bills: patientBills,
+        transactions: patientTransactions,
+        preReceiveTotal
       });
       setShowPatientDetails(true);
     } catch (error) {
       console.error('Error loading patient history:', error);
-      setSelectedPatientHistory({ queueHistory: [], bills: [] });
+      setSelectedPatientHistory({ queueHistory: [], bills: [], transactions: [], preReceiveTotal: 0 });
       setShowPatientDetails(true);
     }
-  };
-
-  // Handle local recalculate (no cloud sync button needed)
-  const handleRecalculateStats = async (patient: Patient) => {
-    if (!patient) return;
-
-    toast.info(`Recalculating ${patient.name} local stats...`);
-    // Calculation logic stays local
-    toast.success(`${patient.name} stats updated`);
   };
 
   // Handle export data
@@ -370,12 +809,13 @@ export default function OperatorPatients() {
 
       const headers = [
         'Patient ID', 'Name', 'Phone', 'Email', 'Age', 'Gender',
-        'Address', 'Registration Date', 'Total Visits',
-        'Total Paid', 'Pending Balance', 'Status'
+        'Address', 'Registration Date', 'Total Visits', 'Total Paid',
+        'Pending Balance', 'Pre-receive Total', 'Status'
       ];
 
       const csvData = filteredPatients.map(p => {
         if (!p) return [];
+        const preReceiveTotal = getPatientPreReceiveTotal(p.id, p.patientNumber, p.name);
         return [
           p.patientNumber || 'N/A',
           p.name || 'N/A',
@@ -388,6 +828,7 @@ export default function OperatorPatients() {
           p.totalVisits || 0,
           p.totalPaid || 0,
           p.pendingBalance || 0,
+          preReceiveTotal,
           p.isActive !== false ? 'Active' : 'Inactive'
         ];
       }).filter(row => row.length > 0);
@@ -428,23 +869,12 @@ export default function OperatorPatients() {
   // Safe date formatting
   const safeFormatDate = (dateString: string | undefined | null): string => {
     if (!dateString) return 'N/A';
-
     try {
       const date = parseISO(dateString);
-      if (isNaN(date.getTime())) {
-        return 'Invalid Date';
-      }
+      if (isNaN(date.getTime())) return 'N/A';
       return format(date, 'MMM dd, yyyy');
     } catch (error) {
-      try {
-        const date = new Date(dateString);
-        if (isNaN(date.getTime())) {
-          return 'N/A';
-        }
-        return format(date, 'MMM dd, yyyy');
-      } catch {
-        return 'N/A';
-      }
+      return 'N/A';
     }
   };
 
@@ -538,15 +968,16 @@ export default function OperatorPatients() {
   const totalPages = Math.ceil(filteredPatients.length / patientsPerPage);
 
   // Memoized row component
-  const PatientRow = React.memo(({ patient, onEdit, onDelete, onViewDetails, onRecalculate, onAddToWaiting }: {
+  const PatientRow = React.memo(({ patient, onEdit, onDelete, onViewDetails, onAddToWaiting, isSyncing }: {
     patient: Patient;
     onEdit: (p: Patient) => void;
     onDelete: (p: Patient) => void;
     onViewDetails: (p: Patient) => void;
-    onRecalculate: (p: Patient) => void;
     onAddToWaiting: (p: Patient) => void;
+    isSyncing: boolean;
   }) => {
     if (!patient) return null;
+    const preReceiveTotal = getPatientPreReceiveTotal(patient.id, patient.patientNumber, patient.name);
 
     return (
       <TableRow key={patient.id} className="hover:bg-gray-50 transition-colors">
@@ -568,6 +999,11 @@ export default function OperatorPatients() {
         <TableCell>
           <div className="flex flex-col gap-1">
             {getPendingDisplay(patient)}
+            {preReceiveTotal > 0 && (
+              <Badge variant="outline" className="text-[10px] border-purple-200 bg-purple-50 text-purple-700">
+                Pre-receive: {formatCurrency(preReceiveTotal)}
+              </Badge>
+            )}
             {getStatusBadge(patient)}
           </div>
         </TableCell>
@@ -579,6 +1015,7 @@ export default function OperatorPatients() {
               className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
               onClick={() => onViewDetails(patient)}
               title="View Details"
+              disabled={isSyncing}
             >
               <Eye className="w-4 h-4" />
             </Button>
@@ -588,6 +1025,7 @@ export default function OperatorPatients() {
               className="h-8 px-2 text-green-600 border-green-200 hover:bg-green-50 hover:text-green-700 gap-1"
               onClick={() => onAddToWaiting(patient)}
               title="Add to Waiting"
+              disabled={isSyncing}
             >
               <Clock className="w-3.5 h-3.5" />
             </Button>
@@ -597,15 +1035,17 @@ export default function OperatorPatients() {
               className="h-8 w-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
               onClick={() => onEdit(patient)}
               title="Edit Patient"
+              disabled={isSyncing}
             >
               <Edit className="w-4 h-4" />
             </Button>
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 text-red-400 hover:text-red-600 hover:bg-red-50"
+              className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50"
               onClick={() => onDelete(patient)}
               title="Delete Patient"
+              disabled={isSyncing}
             >
               <Trash2 className="w-4 h-4" />
             </Button>
@@ -643,13 +1083,18 @@ export default function OperatorPatients() {
         <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"
-            onClick={handleExportData}
+            onClick={syncPendingFirebaseDeletes}
             className="gap-2"
-            disabled={contextLoading}
+            title="Sync pending cloud deletes"
           >
-            <Download className="w-4 h-4" />
-            Generate Report
+            <RefreshCw className="w-4 h-4" />
+            Sync Pending
           </Button>
+          {localStorage.getItem('pending_firebase_deletes') && (
+            <Badge variant="destructive" className="ml-2">
+              Pending Sync
+            </Badge>
+          )}
           <Button
             onClick={handleAddPatient}
             className="gap-2"
@@ -662,7 +1107,7 @@ export default function OperatorPatients() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white border rounded-lg p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
@@ -673,7 +1118,7 @@ export default function OperatorPatients() {
           </div>
         </div>
 
-        <div className="bg-white border rounded-lg p-4 shadow-sm">
+        {/* <div className="bg-white border rounded-lg p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
               <div className="text-2xl font-bold">{stats.active}</div>
@@ -681,7 +1126,7 @@ export default function OperatorPatients() {
             </div>
             <CheckCircle className="w-8 h-8 text-green-500" />
           </div>
-        </div>
+        </div> */}
 
         <div className="bg-white border rounded-lg p-4 shadow-sm">
           <div className="flex items-center justify-between">
@@ -693,7 +1138,7 @@ export default function OperatorPatients() {
           </div>
         </div>
 
-        <div className="bg-white border rounded-lg p-4 shadow-sm">
+        {/* <div className="bg-white border rounded-lg p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
               <div className="text-2xl font-bold">{stats.totalVisits}</div>
@@ -701,7 +1146,7 @@ export default function OperatorPatients() {
             </div>
             <Activity className="w-8 h-8 text-purple-500" />
           </div>
-        </div>
+        </div> */}
 
         <div className="bg-white border rounded-lg p-4 shadow-sm">
           <div className="flex items-center justify-between">
@@ -710,6 +1155,16 @@ export default function OperatorPatients() {
               <div className="text-sm text-gray-600">Total Revenue</div>
             </div>
             <DollarSign className="w-8 h-8 text-green-500" />
+          </div>
+        </div>
+
+        <div className="bg-white border rounded-lg p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-2xl font-bold">{formatCurrency(stats.totalPreReceive)}</div>
+              <div className="text-sm text-gray-600">Pre-receive Total</div>
+            </div>
+            <CreditCard className="w-8 h-8 text-purple-500" />
           </div>
         </div>
       </div>
@@ -723,7 +1178,7 @@ export default function OperatorPatients() {
               placeholder="Search by name, phone, ID, email..."
               className="pl-9"
               value={searchTerm}
-              onChange={handleSearch}
+              onChange={(e) => setSearchTerm(e.target.value)}
               disabled={contextLoading}
             />
           </div>
@@ -830,8 +1285,8 @@ export default function OperatorPatients() {
                       onEdit={handleEditPatient}
                       onDelete={handleDeletePatient}
                       onViewDetails={handleViewPatientDetails}
-                      onRecalculate={handleRecalculateStats}
                       onAddToWaiting={handleAddToWaiting}
+                      isSyncing={syncingPatientId === patient.id}
                     />
                   ))
                 )}
@@ -840,105 +1295,99 @@ export default function OperatorPatients() {
           </div>
 
           {/* Pagination */}
-          {
-            filteredPatients.length > 0 && (
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-white border rounded-lg p-4 shadow-sm">
-                <div className="text-sm text-muted-foreground">
-                  Showing {indexOfFirstPatient + 1} to {Math.min(indexOfLastPatient, filteredPatients.length)} of {filteredPatients.length} entries
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                    disabled={currentPage === 1}
-                    className="h-8 w-8 p-0"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </Button>
-                  <div className="flex items-center gap-1">
-                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                      let pageNum;
-                      if (totalPages <= 5) {
-                        pageNum = i + 1;
-                      } else if (currentPage <= 3) {
-                        pageNum = i + 1;
-                      } else if (currentPage >= totalPages - 2) {
-                        pageNum = totalPages - 4 + i;
-                      } else {
-                        pageNum = currentPage - 2 + i;
-                      }
-
-                      return (
-                        <Button
-                          key={pageNum}
-                          variant={currentPage === pageNum ? "default" : "outline"}
-                          size="sm"
-                          onClick={() => setCurrentPage(pageNum)}
-                          className="h-8 w-8 p-0"
-                        >
-                          {pageNum}
-                        </Button>
-                      );
-                    })}
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                    disabled={currentPage === totalPages}
-                    className="h-8 w-8 p-0"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </Button>
-                </div>
+          {filteredPatients.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-white border rounded-lg p-4 shadow-sm">
+              <div className="text-sm text-muted-foreground">
+                Showing {indexOfFirstPatient + 1} to {Math.min(indexOfLastPatient, filteredPatients.length)} of {filteredPatients.length} entries
               </div>
-            )
-          }
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  disabled={currentPage === 1}
+                  className="h-8 w-8 p-0"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum;
+                    if (totalPages <= 5) {
+                      pageNum = i + 1;
+                    } else if (currentPage <= 3) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i;
+                    } else {
+                      pageNum = currentPage - 2 + i;
+                    }
+                    return (
+                      <Button
+                        key={pageNum}
+                        variant={currentPage === pageNum ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setCurrentPage(pageNum)}
+                        className="h-8 w-8 p-0"
+                      >
+                        {pageNum}
+                      </Button>
+                    );
+                  })}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                  disabled={currentPage === totalPages}
+                  className="h-8 w-8 p-0"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          )}
         </>
-      )
-      }
+      )}
 
       {/* Patient Form Modal */}
-      {
-        showPatientForm && (
-          <PatientFormModal
-            open={showPatientForm}
-            onClose={() => {
-              setShowPatientForm(false);
-              setSelectedPatient(null);
-            }}
-            onSubmit={handleSavePatient}
-            patient={selectedPatient}
-            isEditing={!!selectedPatient}
-            mode="patient"
-            existingPatients={contextPatients}
-            title={selectedPatient ? 'Edit Patient' : 'Add New Patient'}
-            loading={saving}
-          />
-        )
-      }
+      {showPatientForm && (
+        <PatientFormModal
+          open={showPatientForm}
+          onClose={() => {
+            setShowPatientForm(false);
+            setSelectedPatient(null);
+          }}
+          onSubmit={handleSavePatient}
+          patient={selectedPatient}
+          isEditing={!!selectedPatient}
+          mode="patient"
+          existingPatients={contextPatients}
+          title={selectedPatient ? 'Edit Patient' : 'Add New Patient'}
+          loading={saving}
+        />
+      )}
 
       {/* Patient Details Modal */}
-      {
-        showPatientDetails && selectedPatient && (
-          <PatientDetailsModal
-            patient={selectedPatient}
-            patientInfo={selectedPatient}
-            queueHistory={selectedPatientHistory.queueHistory}
-            bills={selectedPatientHistory.bills}
-            onClose={() => {
-              setShowPatientDetails(false);
-              setSelectedPatient(null);
-            }}
-            onEdit={() => {
-              setShowPatientDetails(false);
-              setShowPatientForm(true);
-            }}
-            onDelete={() => handleDeletePatient(selectedPatient)}
-          />
-        )
-      }
-    </div >
+      {showPatientDetails && selectedPatient && (
+        <PatientDetailsModal
+          patient={selectedPatient}
+          patientInfo={selectedPatient}
+          queueHistory={selectedPatientHistory.queueHistory}
+          bills={selectedPatientHistory.bills}
+          transactions={selectedPatientHistory.transactions}
+          preReceiveTotal={selectedPatientHistory.preReceiveTotal}
+          onClose={() => {
+            setShowPatientDetails(false);
+            setSelectedPatient(null);
+          }}
+          onEdit={() => {
+            setShowPatientDetails(false);
+            setShowPatientForm(true);
+          }}
+          onDelete={() => handleDeletePatient(selectedPatient)}
+        />
+      )}
+    </div>
   );
 }

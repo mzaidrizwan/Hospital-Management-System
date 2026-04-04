@@ -44,8 +44,9 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { InventoryFormModal } from '@/components/modals/InventoryFormModal';
 
 // IndexedDB Utilities
-import { saveToLocal, getFromLocal, deleteFromLocal, openDB } from '@/services/indexedDbUtils';
+// import { saveToLocal, getFromLocal, deleteFromLocal, openDB } from '@/services/expireindexedDbUtils_OLDs';
 import { smartSync, smartDelete } from '@/services/syncService';
+import { dbManager, STORE_CONFIGS, getKeyPath } from '@/lib/indexedDB';
 
 const categories = ['Materials', 'Supplies', 'Anesthetics', 'Instruments', 'Equipment', 'Medications'];
 
@@ -140,7 +141,7 @@ export default function AdminInventory() {
 
     try {
       // 1. Delete from IndexedDB immediately
-      await deleteFromLocal('inventory', id);
+      await dbManager.deleteFromLocal('inventory', id);
 
       // 2. Manually update context state for instant UI update
       setInventory(prev => prev.filter(i => i.id !== id));
@@ -239,7 +240,7 @@ export default function AdminInventory() {
       }
 
       // 2. Delete the sale record
-      await deleteFromLocal('sales', sale.id);
+      await dbManager.deleteFromLocal('sales', sale.id);
       setSales(prev => prev.filter(s => s.id !== sale.id));
 
       // 3. Background sync
@@ -258,7 +259,7 @@ export default function AdminInventory() {
 
     try {
       // Delete the expense record
-      await deleteFromLocal('expenses', purchase.id);
+      await dbManager.deleteFromLocal('expenses', purchase.id);
 
       // Background sync
       smartDelete('expenses', purchase.id).catch(err => console.error('Background delete failed:', err));

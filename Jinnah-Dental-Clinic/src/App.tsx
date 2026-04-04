@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { HashRouter, Routes, Route, Navigate } from "react-router-dom";  // ← CHANGE HERE
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { DataProvider, useData } from "@/context/DataContext";
 import { LoginModal } from "@/components/auth/LoginModal";
@@ -36,9 +36,6 @@ function AuthenticatedApp() {
   const { isShutdown } = useData();
 
   useSecurity();
-
-  // console.log("🔍 AuthenticatedApp - isShutdown:", isShutdown);
-  // console.log("🔍 localStorage force_shutdown:", localStorage.getItem('force_shutdown'));
 
   if (isShutdown) {
     return (
@@ -99,7 +96,7 @@ function AuthenticatedApp() {
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
-      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>  {/* ← CHANGE HERE */}
         <AuthProvider>
           <DataProvider>
             <Toaster />
@@ -107,7 +104,7 @@ const App = () => (
             <AuthenticatedApp />
           </DataProvider>
         </AuthProvider>
-      </BrowserRouter>
+      </HashRouter>
     </TooltipProvider>
   </QueryClientProvider>
 );
