@@ -45,6 +45,7 @@ interface DataContextType {
     transactions: any[];
     purchases: any[];
     roles: any[];
+    patientTransactions: PatientTransaction[];
     loading: boolean;
     isOnline: boolean;
     licenseStatus: 'valid' | 'expired' | 'missing' | 'checking';
@@ -74,6 +75,7 @@ interface DataContextType {
     setSalaryPayments: React.Dispatch<React.SetStateAction<SalaryPayment[]>>;
     setPurchases: React.Dispatch<React.SetStateAction<any[]>>;
     setRoles: React.Dispatch<React.SetStateAction<any[]>>;
+    setPatientTransactions: React.Dispatch<React.SetStateAction<PatientTransaction[]>>;
     updateAttendance: (record: Attendance) => Promise<Attendance>;
     updatePatientStatus: (patientId: string, status: string, additionalData?: Partial<Patient>) => Promise<Patient>;
     handleMovePatient: (patientId: string, action: 'start' | 'complete' | 'back', currentStatus: string) => Promise<Patient>;
@@ -2448,10 +2450,21 @@ export function DataProvider({ children }: { children: ReactNode }) {
             return matched;
         });
 
+        // Appointments
+        const patientAppointments = appointments.filter(a => a.patientId === patient.id);
+
+        // Patient Transactions (Financial History)
+        const patientFinancialHistory = patientTransactions.filter(t => 
+            t.patientId === patient.id || 
+            t.patientNumber === patient.patientNumber
+        );
+
         console.log(`[deletePatientWithAllRecords] SUMMARY:`);
         console.log(`  - Queue items: ${patientQueueItems.length}`);
         console.log(`  - Bills: ${patientBills.length}`);
         console.log(`  - Transactions: ${patientTransactions.length}`);
+        console.log(`  - Appointments: ${patientAppointments.length}`);
+        console.log(`  - Financial Txns: ${patientFinancialHistory.length}`);
 
         // ============================================
         // STEP 2: Delete all queue items
@@ -2478,14 +2491,38 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
 
         // ============================================
-        // STEP 4: Delete all transactions (including payments)
+        // STEP 4: Delete all transactions
         // ============================================
         for (const txn of patientTransactions) {
             try {
                 await deleteLocal('transactions', txn.id);
-                console.log(`✅ Deleted transaction: ${txn.id} (${txn.type}: ${txn.amount})`);
+                console.log(`✅ Deleted transaction: ${txn.id}`);
             } catch (err) {
-                console.error(`❌ Failed to delete transaction ${txn.id}:`, err);
+                console.error(`❌ Failed transaction ${txn.id}:`, err);
+            }
+        }
+
+        // ============================================
+        // STEP 4.1: Delete all appointments
+        // ============================================
+        for (const appt of patientAppointments) {
+            try {
+                await deleteLocal('appointments', appt.id);
+                console.log(`✅ Deleted appointment: ${appt.id}`);
+            } catch (err) {
+                console.error(`❌ Failed appointment ${appt.id}:`, err);
+            }
+        }
+
+        // ============================================
+        // STEP 4.2: Delete financial history
+        // ============================================
+        for (const ptxn of patientFinancialHistory) {
+            try {
+                await deleteLocal('patientTransactions', ptxn.id);
+                console.log(`✅ Deleted ptxn: ${ptxn.id}`);
+            } catch (err) {
+                console.error(`❌ Failed ptxn ${ptxn.id}:`, err);
             }
         }
 
@@ -2506,7 +2543,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
 
         // ============================================
-        // STEP 7: Update all React states
+        // STEP 7: Update all React states to ensure UI is clean
         // ============================================
         setPatients(prev => {
             const filtered = prev.filter(p => p.id !== patient.id);
@@ -2517,8 +2554,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
         setQueue(prev => {
             const filtered = prev.filter(q =>
                 q.patientId !== patient.id &&
-                q.patientNumber !== patient.patientNumber &&
-                q.patientName !== patient.name
+                q.patientNumber?.toString() !== patient.patientNumber?.toString() &&
+                q.patientName?.toLowerCase().trim() !== patient.name?.toLowerCase().trim()
             );
             console.log(`🔄 Queue state: ${prev.length} -> ${filtered.length}`);
             return filtered;
@@ -2527,7 +2564,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         setBills(prev => {
             const filtered = prev.filter(b =>
                 b.patientId !== patient.id &&
-                b.patientNumber !== patient.patientNumber
+                b.patientNumber?.toString() !== patient.patientNumber?.toString()
             );
             console.log(`🔄 Bills state: ${prev.length} -> ${filtered.length}`);
             return filtered;
@@ -2536,19 +2573,32 @@ export function DataProvider({ children }: { children: ReactNode }) {
         setTransactions(prev => {
             const filtered = prev.filter(t =>
                 t.patientId !== patient.id &&
-                t.patientNumber !== patient.patientNumber &&
-                t.patientName !== patient.name
+                t.patientNumber?.toString() !== patient.patientNumber?.toString() &&
+                t.patientName?.toLowerCase().trim() !== patient.name?.toLowerCase().trim()
             );
             console.log(`🔄 Transactions state: ${prev.length} -> ${filtered.length}`);
             return filtered;
         });
 
-        // Also update filteredPatients in OperatorPatients if needed
-        // This will be handled by the component's own state
+        setAppointments(prev => {
+            const filtered = prev.filter(a => 
+                a.patientId !== patient.id
+            );
+            console.log(`🔄 Appointments state: ${prev.length} -> ${filtered.length}`);
+            return filtered;
+        });
+
+        setPatientTransactions(prev => {
+            const filtered = (prev || []).filter(t => 
+                t.patientId !== patient.id && 
+                t.patientNumber?.toString() !== patient.patientNumber?.toString()
+            );
+            console.log(`🔄 Patient Transactions state: ${(prev || []).length} -> ${filtered.length}`);
+            return filtered;
+        });
 
         console.log(`[deletePatientWithAllRecords] ========== COMPLETE ==========`);
-        toast.success(`${patient.name} and all ${patientQueueItems.length} queue items, ${patientBills.length} bills, ${patientTransactions.length} transactions deleted successfully`);
-        console.log(debugPatientRecords(patient))
+        toast.success(`${patient.name} and all related records deleted successfully`);
         return true;
 
     } catch (error) {
@@ -2557,7 +2607,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         return false;
     }
 
-}, [queue, bills, transactions, deleteLocal, setPatients, setQueue, setBills, setTransactions]);
+}, [queue, bills, transactions, appointments, patientTransactions, deleteLocal, setPatients, setQueue, setBills, setTransactions, setAppointments, setPatientTransactions]);
 
     const debugPatientRecords = useCallback((patient: Patient) => {
     console.log(`[DEBUG] Checking records for patient: ${patient.name} (${patient.id})`);
@@ -2733,6 +2783,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             patients, queue, appointments, staff, salaryPayments, attendance,
             inventory, sales, expenses, bills, treatments, clinicSettings,
             transactions, purchases, roles, loading, isOnline,
+            patientTransactions,
             licenseStatus, licenseDaysLeft,
             licenseKey, licenseExpiryDate, isShutdown,
             updateLocal, deleteLocal, addItem, refreshCollection,
@@ -2740,6 +2791,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             setPatients, setQueue, setAppointments, setStaff, setInventory,
             setSales, setExpenses, setBills, setTreatments, setAttendance, setSalaryPayments,
             setTransactions, setPurchases, setRoles,
+            setPatientTransactions,
             updateAttendance,
             updatePatientStatus,
             handleMovePatient,

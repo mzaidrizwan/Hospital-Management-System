@@ -41,6 +41,7 @@ import StaffDetailsModal from '@/components/modals/StaffDetailsModal';
 import PaySalaryModal from '@/components/modals/PaySalaryModal';
 import AttendanceModal from '@/components/modals/AttendanceModal';
 import StaffActivityModal from '@/components/staff/StaffActivityModal';
+import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
 import { Staff, SalaryPayment, Attendance, Transaction, Expense } from '@/types';
 
 import { cn } from '@/lib/utils';
@@ -128,6 +129,12 @@ export default function AdminStaff() {
   const [isEditing, setIsEditing] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [selectedStaffForHistory, setSelectedStaffForHistory] = useState<Staff | null>(null);
+
+  // Delete Confirmation Modal
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [staffToDelete, setStaffToDelete] = useState<Staff | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteConfirmMessage, setDeleteConfirmMessage] = useState<React.ReactNode>(null);
 
   // Comprehensive delete function for staff with all related records
   const deleteStaffWithAllRecords = async (staffMember: Staff): Promise<boolean> => {
@@ -322,28 +329,40 @@ export default function AdminStaff() {
     }
   };
 
-  const handleDeleteStaff = async (staffMember: Staff) => {
+  const handleDeleteStaff = (staffMember: Staff) => {
+    if (!staffMember) return;
+
     // Show detailed confirmation
     const attendanceCount = contextAttendance.filter(a => a.staffId === staffMember.id).length;
     const paymentCount = contextPayments.filter(p => p.staffId === staffMember.id).length;
     const transactionCount = transactions.filter(t => t.staffId === staffMember.id && t.type === 'Salary').length;
     
-    const confirmMessage = 
-        `⚠️ WARNING: Deleting "${staffMember.name}" will permanently remove:\n\n` +
-        `📊 Staff Record: ${staffMember.name}\n` +
-        `📅 Attendance Records: ${attendanceCount} day(s)\n` +
-        `💰 Salary Payments: ${paymentCount} payment(s)\n` +
-        `💳 Transactions: ${transactionCount} transaction(s)\n` +
-        `📝 Linked Expenses: ${paymentCount} expense(s)\n\n` +
-        `This action CANNOT be undone!\n\n` +
-        `Are you absolutely sure you want to delete this staff member?`;
-    
-    if (!window.confirm(confirmMessage)) return;
+    const message = (
+      <div className="space-y-3 text-left">
+        <p className="font-bold text-red-600">This action will permanently remove all associated data.</p>
+        <div className="bg-gray-50 p-3 rounded-xl space-y-1 border border-gray-100">
+          <p className="flex justify-between"><span>👤 Staff Name:</span> <span className="font-bold">{staffMember.name}</span></p>
+          <p className="flex justify-between"><span>📅 Attendance:</span> <span>{attendanceCount} record(s)</span></p>
+          <p className="flex justify-between"><span>💰 Payments:</span> <span>{paymentCount} record(s)</span></p>
+          <p className="flex justify-between"><span>💳 Transactions:</span> <span>{transactionCount} record(s)</span></p>
+          <p className="flex justify-between"><span>📝 Expenses:</span> <span>{paymentCount} record(s)</span></p>
+        </div>
+        <p className="text-center font-bold pt-2">Are you sure you want to delete this staff member?</p>
+      </div>
+    );
+
+    setDeleteConfirmMessage(message);
+    setStaffToDelete(staffMember);
+    setShowDeleteConfirm(true);
+  };
+
+  const handleConfirmDeleteStaff = async () => {
+    if (!staffToDelete) return;
 
     try {
-      setLoading(true);
+      setIsDeleting(true);
       
-      const success = await deleteStaffWithAllRecords(staffMember);
+      const success = await deleteStaffWithAllRecords(staffToDelete);
       
       if (success) {
         setShowStaffDetails(null);
@@ -352,14 +371,14 @@ export default function AdminStaff() {
         setShowActivityModal(null);
         setIsHistoryOpen(false);
         setSelectedStaffForHistory(null);
-        
-        toast.success(`${staffMember.name} and all associated records deleted`);
+        setShowDeleteConfirm(false);
+        setStaffToDelete(null);
       }
     } catch (error) {
       console.error('Delete operation failed:', error);
       toast.error('Failed to delete staff member');
     } finally {
-      setLoading(false);
+      setIsDeleting(false);
     }
   };
 
@@ -817,6 +836,15 @@ export default function AdminStaff() {
           setSelectedStaffForHistory(null);
         }}
         staff={selectedStaffForHistory}
+      />
+
+      <DeleteConfirmationModal
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        onConfirm={handleConfirmDeleteStaff}
+        title="Permanently Delete Staff?"
+        description={deleteConfirmMessage}
+        isDeleting={isDeleting}
       />
     </div>
   );

@@ -52,6 +52,7 @@ import { useData } from '@/context/DataContext';
 import { format, parseISO } from 'date-fns';
 import { deleteDoc, doc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
 
 export default function OperatorPatients() {
   const {
@@ -59,6 +60,8 @@ export default function OperatorPatients() {
     queue: contextQueue,
     bills: contextBills,
     transactions: contextTransactions,
+    appointments: contextAppointments,
+    patientTransactions: contextPatientTransactions,
     sales: contextSales,
     loading: contextLoading,
     deleteLocal,
@@ -89,6 +92,12 @@ export default function OperatorPatients() {
     transactions: Transaction[];
     preReceiveTotal: number;
   }>({ queueHistory: [], bills: [], transactions: [], preReceiveTotal: 0 });
+
+  // Delete Confirmation
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [patientToDelete, setPatientToDelete] = useState<Patient | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteConfirmMessage, setDeleteConfirmMessage] = useState<React.ReactNode>(null);
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -669,41 +678,57 @@ export default function OperatorPatients() {
   //   }
   // };
 
-  const handleDeletePatient = async (patient: Patient) => {
+  const handleDeletePatient = (patient: Patient) => {
     if (!patient || !patient.id) return;
 
     const queueCount = (contextQueue || []).filter(q => q.patientId === patient.id || q.patientNumber === patient.patientNumber).length;
     const billsCount = (contextBills || []).filter(b => b.patientId === patient.id || b.patientNumber === patient.patientNumber).length;
     const transactionCount = (contextTransactions || []).filter(t => t.patientId === patient.id || t.patientName === patient.name).length;
+    const appointmentCount = (contextAppointments || []).filter(a => a.patientId === patient.id).length;
+    const financialCount = (contextPatientTransactions || []).filter(t => t.patientId === patient.id || t.patientNumber === patient.patientNumber).length;
 
-    const confirmMessage = `⚠️⚠️⚠️ PERMANENT DELETE WARNING ⚠️⚠️⚠️\n\n` +
-      `Deleting "${patient.name}" (${patient.patientNumber}) will permanently remove:\n\n` +
-      `📊 Patient Record: ${patient.name}\n` +
-      `📅 Queue History: ${queueCount} record(s)\n` +
-      `💰 Bills: ${billsCount} bill(s)\n` +
-      `💳 Transactions: ${transactionCount} transaction(s)\n\n` +
-      `Are you absolutely sure?`;
+    const message = (
+      <div className="space-y-3 text-left">
+        <p className="font-bold text-red-600">This action is permanent and cannot be undone.</p>
+        <div className="bg-gray-50 p-3 rounded-lg space-y-1 border border-gray-100">
+          <p className="flex justify-between"><span>📊 Patient Record:</span> <span className="font-bold">{patient.name}</span></p>
+          <p className="flex justify-between"><span>📅 Queue History:</span> <span>{queueCount} record(s)</span></p>
+          <p className="flex justify-between"><span>💰 Bills:</span> <span>{billsCount} bill(s)</span></p>
+          <p className="flex justify-between"><span>💳 Transactions:</span> <span>{transactionCount} record(s)</span></p>
+          <p className="flex justify-between"><span>📆 Appointments:</span> <span>{appointmentCount} record(s)</span></p>
+          <p className="flex justify-between"><span>💵 Financial History:</span> <span>{financialCount} record(s)</span></p>
+        </div>
+        <p className="text-center font-bold pt-2">Are you sure you want to proceed?</p>
+      </div>
+    );
 
-    if (!confirm(confirmMessage)) return;
+    setDeleteConfirmMessage(message);
+    setPatientToDelete(patient);
+    setShowDeleteConfirm(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!patientToDelete) return;
 
     try {
-      setSyncingPatientId(patient.id);
+      setIsDeleting(true);
+      setSyncingPatientId(patientToDelete.id);
 
-      // ✅ USE DATACONTEXT's delete function - NOT your custom one
-      const success = await deletePatientWithAllRecords(patient);
+      const success = await deletePatientWithAllRecords(patientToDelete);
 
       if (success) {
-        if (selectedPatient?.id === patient.id) {
+        if (selectedPatient?.id === patientToDelete.id) {
           setShowPatientDetails(false);
           setSelectedPatient(null);
         }
-        // UI automatically updates because DataContext handles state
-        toast.success(`${patient.name} and all records deleted`);
+        setShowDeleteConfirm(false);
+        setPatientToDelete(null);
       }
     } catch (error) {
       console.error('Error deleting patient:', error);
       toast.error('Failed to delete patient');
     } finally {
+      setIsDeleting(false);
       setSyncingPatientId(null);
     }
   };
@@ -1388,6 +1413,15 @@ export default function OperatorPatients() {
           onDelete={() => handleDeletePatient(selectedPatient)}
         />
       )}
+
+      <DeleteConfirmationModal
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        onConfirm={handleConfirmDelete}
+        title="Permanently Delete Patient?"
+        description={deleteConfirmMessage}
+        isDeleting={isDeleting}
+      />
     </div>
   );
 }
