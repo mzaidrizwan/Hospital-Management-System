@@ -513,6 +513,89 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 };
             }
 
+            // SPECIAL CASCADE FOR EXPENSE UPDATES
+            if (collectionName === 'expenses' && enrichedData.id) {
+                const oldExpense = (expenses || []).find(e => e.id === enrichedData.id);
+                if (oldExpense) {
+                    if (enrichedData.category === 'salary') {
+                        const oldAmount = Number(oldExpense.amount) || 0;
+                        const newAmount = Number(enrichedData.amount) || 0;
+                        const diff = newAmount - oldAmount;
+
+                        if (diff !== 0) {
+                            console.log(`[updateLocal] Salary amount changed by ${diff}. Cascading...`);
+                            const staffId = enrichedData.staffId || (oldExpense as any).staffId;
+                            if (staffId) {
+                                const staffItem = (staff || []).find(s => s.id === staffId);
+                                if (staffItem) {
+                                    const updatedStaff = {
+                                        ...staffItem,
+                                        totalPaid: Math.max(0, (staffItem.totalPaid || 0) + diff),
+                                        totalEarned: Math.max(0, (staffItem.totalEarned || 0) + diff),
+                                        pendingSalary: Math.max(0, (staffItem.pendingSalary || 0) - diff),
+                                        updatedAt: new Date().toISOString()
+                                    };
+                                    await dbManager.saveToLocal('staff', updatedStaff);
+                                    setStaff(prev => prev.map(s => s.id === updatedStaff.id ? updatedStaff : s));
+                                    backgroundFirebaseSync('staff', updatedStaff);
+                                }
+                            }
+                            // Update related transaction
+                            const relatedTxn = (transactions || []).find(t => t.expenseId === enrichedData.id);
+                            if (relatedTxn) {
+                                const updatedTxn = { ...relatedTxn, amount: newAmount, updatedAt: new Date().toISOString() };
+                                await dbManager.saveToLocal('transactions', updatedTxn);
+                                setTransactions(prev => prev.map(t => t.id === updatedTxn.id ? updatedTxn : t));
+                                backgroundFirebaseSync('transactions', updatedTxn);
+                            }
+                            // Update related salary payment
+                            const relatedPay = (salaryPayments || []).find(p => (p as any).expenseId === enrichedData.id);
+                            if (relatedPay) {
+                                const updatedPay = { ...relatedPay, amount: newAmount, updatedAt: new Date().toISOString() };
+                                await dbManager.saveToLocal('salaryPayments', updatedPay);
+                                setSalaryPayments(prev => prev.map(p => p.id === updatedPay.id ? updatedPay : p));
+                                backgroundFirebaseSync('salaryPayments', updatedPay);
+                            }
+                        }
+                    } else if (enrichedData.category === 'inventory') {
+                        const oldUnits = Number((oldExpense as any).units) || 0;
+                        const newUnits = Number(enrichedData.units) || 0;
+                        const unitDiff = newUnits - oldUnits;
+
+                        if (unitDiff !== 0) {
+                            console.log(`[updateLocal] Inventory units changed by ${unitDiff}. Cascading...`);
+                            const invItemId = enrichedData.inventoryItemId || (oldExpense as any).inventoryItemId;
+                            if (invItemId) {
+                                const invItem = (inventory || []).find(i => i.id === invItemId);
+                                if (invItem) {
+                                    const updatedInv = {
+                                        ...invItem,
+                                        quantity: Math.max(0, (invItem.quantity || 0) + unitDiff),
+                                        updatedAt: new Date().toISOString()
+                                    };
+                                    await dbManager.saveToLocal('inventory', updatedInv);
+                                    setInventory(prev => prev.map(i => i.id === updatedInv.id ? updatedInv : i));
+                                    backgroundFirebaseSync('inventory', updatedInv);
+                                }
+                            }
+                            // Update related purchase record
+                            const relatedPurchase = (purchases || []).find(p => p.id === enrichedData.id || (p as any).itemId === invItemId);
+                            if (relatedPurchase) {
+                                const updatedPurchase = { 
+                                    ...relatedPurchase, 
+                                    quantity: newUnits, 
+                                    totalCost: Number(enrichedData.amount),
+                                    updatedAt: new Date().toISOString() 
+                                };
+                                await dbManager.saveToLocal('purchases', updatedPurchase);
+                                setPurchases(prev => prev.map(p => p.id === updatedPurchase.id ? updatedPurchase : p));
+                                backgroundFirebaseSync('purchases', updatedPurchase);
+                            }
+                        }
+                    }
+                }
+            }
+
             // 1. Update App State (Immediate UI feedback)
             const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
             if (setter) {
@@ -534,7 +617,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             console.error(`[updateLocal] Error in ${collectionName}:`, error);
             throw error;
         }
-    }, [stateSetterMap]);
+    }, [stateSetterMap, backgroundFirebaseSync, expenses, staff, transactions, salaryPayments, inventory, purchases]);
 
     /**
      * NEW: Optimistic update for queue items - FIRE AND FORGET version
@@ -771,6 +854,87 @@ export function DataProvider({ children }: { children: ReactNode }) {
         try {
             console.log(`[deleteLocal] Starting for ${collectionName}:`, id);
 
+            // SPECIAL CASCADE FOR EXPENSES (Salary & Inventory)
+            if (collectionName === 'expenses') {
+                const expenseToDelete = (expenses || []).find(e => e.id === id);
+                if (expenseToDelete && expenseToDelete.category === 'salary') {
+                    console.log(`[deleteLocal] Cascading for Salary Expense:`, id);
+                    
+                    // 1. Revert Staff totals
+                    const relatedTxn = (transactions || []).find(t => 
+                        t.expenseId === id || 
+                        (t.type === 'Salary' && t.staffId === (expenseToDelete as any).staffId && Number(t.amount) === Number(expenseToDelete.amount))
+                    );
+                    
+                    if (relatedTxn && relatedTxn.staffId) {
+                        const amount = Number(expenseToDelete.amount) || 0;
+                        const staffItem = (staff || []).find(s => s.id === relatedTxn.staffId);
+                        
+                        if (staffItem) {
+                            const updatedStaff = {
+                                ...staffItem,
+                                totalPaid: Math.max(0, (staffItem.totalPaid || 0) - amount),
+                                totalEarned: Math.max(0, (staffItem.totalEarned || 0) - amount),
+                                pendingSalary: (staffItem.pendingSalary || 0) + amount,
+                                updatedAt: new Date().toISOString()
+                            };
+                            // We use background sync and local update but skip the recursive deleteLocal call for safety
+                            await dbManager.saveToLocal('staff', updatedStaff);
+                            setStaff(prev => prev.map(s => s.id === updatedStaff.id ? updatedStaff : s));
+                            backgroundFirebaseSync('staff', updatedStaff);
+                            console.log(`[deleteLocal] Reverted staff totals for ${staffItem.name}`);
+                        }
+                        
+                        // 2. Delete related transaction (Non-recursive manually)
+                        await dbManager.deleteFromLocal('transactions', relatedTxn.id);
+                        setTransactions(prev => prev.filter(t => t.id !== relatedTxn.id));
+                        backgroundFirebaseSync('transactions', { id: relatedTxn.id, _deleted: true });
+                    }
+                    
+                    // 3. Delete related salary payment
+                    const relatedPay = (salaryPayments || []).find(p => 
+                        (p as any).expenseId === id || 
+                        (p.staffId === (relatedTxn?.staffId || (expenseToDelete as any).staffId) && Number(p.amount) === Number(expenseToDelete.amount))
+                    );
+                    
+                    if (relatedPay) {
+                        await dbManager.deleteFromLocal('salaryPayments', relatedPay.id);
+                        setSalaryPayments(prev => prev.filter(p => p.id !== relatedPay.id));
+                        backgroundFirebaseSync('salaryPayments', { id: relatedPay.id, _deleted: true });
+                    }
+                } else if (expenseToDelete && expenseToDelete.category === 'inventory') {
+                    console.log(`[deleteLocal] Cascading for Inventory Expense:`, id);
+                    
+                    const invItemId = (expenseToDelete as any).inventoryItemId;
+                    if (invItemId) {
+                        const invItem = (inventory || []).find(i => i.id === invItemId);
+                        if (invItem) {
+                            const units = Number((expenseToDelete as any).units) || 0;
+                            const updatedInv = {
+                                ...invItem,
+                                quantity: Math.max(0, (invItem.quantity || 0) - units),
+                                updatedAt: new Date().toISOString()
+                            };
+                            await dbManager.saveToLocal('inventory', updatedInv);
+                            setInventory(prev => prev.map(i => i.id === updatedInv.id ? updatedInv : i));
+                            backgroundFirebaseSync('inventory', updatedInv);
+                            console.log(`[deleteLocal] Reverted inventory quantity for ${invItem.name}`);
+                        }
+                    }
+                    
+                    // Delete related purchase record
+                    const relatedPurchase = (purchases || []).find(p => 
+                        p.id === id || 
+                        ((p as any).itemId === invItemId && Number(p.totalCost) === Number(expenseToDelete.amount))
+                    );
+                    if (relatedPurchase) {
+                        await dbManager.deleteFromLocal('purchases', relatedPurchase.id);
+                        setPurchases(prev => prev.filter(p => p.id !== relatedPurchase.id));
+                        backgroundFirebaseSync('purchases', { id: relatedPurchase.id, _deleted: true });
+                    }
+                }
+            }
+
             // 1. STEP 1: Update React State immediately (Fast)
             const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
             if (setter) {
@@ -797,7 +961,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             console.error(`Error deleting from ${collectionName}:`, error);
             throw error;
         }
-    }, [stateSetterMap, backgroundFirebaseSync]);
+    }, [stateSetterMap, backgroundFirebaseSync, expenses, transactions, staff, salaryPayments, inventory, purchases]);
 
     /**
      * Add item - FIRE AND FORGET version (main fix for sticky toast)

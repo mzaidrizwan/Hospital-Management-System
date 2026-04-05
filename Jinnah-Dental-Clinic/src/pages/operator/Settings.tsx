@@ -17,6 +17,7 @@ import {
   Info
 } from 'lucide-react';
 import { LicenseModal } from '@/components/modals/LicenseModal';
+import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
 import { cn } from "@/lib/utils";
 
 import { Button } from '@/components/ui/button';
@@ -66,6 +67,13 @@ export default function OperatorSettings() {
   const [userInfo, setUserInfo] = useState<UserType | null>(null);
   const [showLicenseModal, setShowLicenseModal] = useState(false);
   const [newRoleTitle, setNewRoleTitle] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteDialogConfig, setDeleteDialogConfig] = useState<{
+    title: string;
+    description: React.ReactNode;
+    onConfirm: () => Promise<void>;
+  } | null>(null);
 
 
 
@@ -116,15 +124,29 @@ export default function OperatorSettings() {
   };
 
   const handleDeleteTreatment = async (treatment: Treatment) => {
-    if (confirm(`Delete treatment "${treatment.name}"?`)) {
-      try {
-        await deleteLocal('treatments', treatment.id);
-        toast.success(`Treatment "${treatment.name}" deleted`);
-      } catch (error) {
-        console.error('Failed to delete treatment:', error);
-        toast.error('Failed to delete treatment');
+    setDeleteDialogConfig({
+      title: `Delete Treatment?`,
+      description: (
+        <div className="space-y-2">
+          <p>Are you sure you want to delete <span className="font-bold">"{treatment.name}"</span>?</p>
+          <p className="text-sm text-red-600">This will remove it from the master treatment list.</p>
+        </div>
+      ),
+      onConfirm: async () => {
+        try {
+          setIsDeleting(true);
+          await deleteLocal('treatments', treatment.id);
+          toast.success(`Treatment "${treatment.name}" deleted`);
+          setShowDeleteConfirm(false);
+        } catch (error) {
+          console.error('Failed to delete treatment:', error);
+          toast.error('Failed to delete treatment');
+        } finally {
+          setIsDeleting(false);
+        }
       }
-    }
+    });
+    setShowDeleteConfirm(true);
   };
 
   const handleSaveTreatment = async (treatmentData: any) => {
@@ -159,15 +181,24 @@ export default function OperatorSettings() {
     }
   };
 
-  const handleDeleteRole = async (id: string) => {
-    if (confirm("Are you sure you want to delete this role?")) {
-      try {
-        await deleteLocal('roles', id);
-        toast.success("Role deleted");
-      } catch (error) {
-        toast.error("Failed to delete role");
+  const handleDeleteRole = async (id: string, title?: string) => {
+    setDeleteDialogConfig({
+      title: "Delete Staff Role?",
+      description: `Are you sure you want to delete the role "${title || 'this role'}"? Internal staff records with this role may need manual updates.`,
+      onConfirm: async () => {
+        try {
+          setIsDeleting(true);
+          await deleteLocal('roles', id);
+          toast.success("Role deleted");
+          setShowDeleteConfirm(false);
+        } catch (error) {
+          toast.error("Failed to delete role");
+        } finally {
+          setIsDeleting(false);
+        }
       }
-    }
+    });
+    setShowDeleteConfirm(true);
   };
 
   return (
@@ -322,7 +353,7 @@ export default function OperatorSettings() {
                             <Button
                               variant="ghost"
                               size="icon"
-                              onClick={() => handleDeleteRole(role.id)}
+                              onClick={() => handleDeleteRole(role.id, role.title)}
                               className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -372,6 +403,15 @@ export default function OperatorSettings() {
           />
         )
       }
+
+      <DeleteConfirmationModal
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        onConfirm={deleteDialogConfig?.onConfirm || (async () => { })}
+        title={deleteDialogConfig?.title || "Are you sure?"}
+        description={deleteDialogConfig?.description || "This action cannot be undone."}
+        isDeleting={isDeleting}
+      />
     </div >
   );
 }

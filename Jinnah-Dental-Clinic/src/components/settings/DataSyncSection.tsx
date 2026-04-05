@@ -5,6 +5,8 @@ import { Download, Upload, AlertTriangle, CloudDownload, RefreshCw, Database, Tr
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/context/AuthContext';
 import { toast } from 'sonner';
+import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
+import { useState } from 'react';
 
 export default function DataSyncSection() {
     const {
@@ -18,6 +20,9 @@ export default function DataSyncSection() {
     } = useData();
     const { user } = useAuth();
 
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>, collectionName: string) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -30,37 +35,58 @@ export default function DataSyncSection() {
         e.target.value = ''; // Reset
     };
 
-    const handleClearDatabase = async () => {
-        if (confirm("WARNING: This will delete ALL local data (Patients, Staff, Expenses, Settings). Are you sure?")) {
-            if (confirm("Cloud data will remain safe in Firebase, but automatic fetching will be DISABLED. Proceed?")) {
-                try {
-                    toast.loading("Clearing local database and disabling auto-sync...", { id: 'wipe-data' });
+    const handleConfirmWipe = async () => {
+        try {
+            setIsDeleting(true);
+            toast.loading("Clearing local database and disabling auto-sync...", { id: 'wipe-data' });
 
-                    // 1. Disable Auto-Sync FIRST to prevent listeners from re-fetching
-                    setAutoSyncEnabled(false);
+            // 1. Disable Auto-Sync FIRST to prevent listeners from re-fetching
+            setAutoSyncEnabled(false);
 
-                    const stores = [
-                        'patients', 'staff', 'expenses', 'clinicSettings',
-                        'queue', 'appointments', 'inventory', 'sales',
-                        'bills', 'treatments', 'roles', 'salaryPayments',
-                        'attendance', 'transactions', 'purchases'
-                    ];
+            const stores = [
+                'patients', 'staff', 'expenses', 'clinicSettings',
+                'queue', 'appointments', 'inventory', 'sales',
+                'bills', 'treatments', 'roles', 'salaryPayments',
+                'attendance', 'transactions', 'purchases'
+            ];
 
-                    for (const store of stores) {
-                        await clearDataStore(store);
-                    }
-
-                    toast.success("Local data cleared and Auto-Sync disabled.", { id: 'wipe-data' });
-
-                    // Optional: reload to ensure clean state
-                    setTimeout(() => window.location.reload(), 1500);
-                } catch (error) {
-                    console.error("Wipe failed:", error);
-                    toast.error("Failed to clear local data.", { id: 'wipe-data' });
-                }
+            for (const store of stores) {
+                await clearDataStore(store);
             }
+
+            toast.success("Local data cleared and Auto-Sync disabled.", { id: 'wipe-data' });
+            setShowDeleteConfirm(false);
+
+            // Optional: reload to ensure clean state
+            setTimeout(() => window.location.reload(), 1500);
+        } catch (error) {
+            console.error("Wipe failed:", error);
+            toast.error("Failed to clear local data.", { id: 'wipe-data' });
+        } finally {
+            setIsDeleting(false);
         }
     };
+
+    const deleteMessage = (
+        <div className="space-y-3 text-left">
+            <p className="font-bold text-red-600 italic uppercase">⚠️ Critical Action: Full Database Wipe ⚠️</p>
+            <div className="bg-red-50 p-4 rounded-xl space-y-2 border border-red-100 text-red-900 text-sm">
+                <p className="font-bold">This will permanently remove ALL local data including:</p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                    <li>👥 All Patients & Their Histories</li>
+                    <li>👔 All Staff Members & Attendance</li>
+                    <li>💰 All Bills, Payments & Transactions</li>
+                    <li>📦 All Inventory & Sales</li>
+                    <li>⚙️ All Clinic Settings & Roles</li>
+                </ul>
+            </div>
+            <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 text-blue-900 text-xs">
+                <p className="font-bold mb-1 underline">Recovery Note:</p>
+                <p>Cloud data remains safe in Firebase, but <strong>Auto-Sync will be disabled</strong> and the application will reload with a fresh state.</p>
+            </div>
+            <p className="text-center font-bold pt-2">Are you absolutely sure you want to WIPE EVERYTHING?</p>
+        </div>
+    );
 
     const toggleAutoSync = () => {
         setAutoSyncEnabled(!autoSyncEnabled);
@@ -150,7 +176,7 @@ export default function DataSyncSection() {
                         </div>
                         <Button
                             variant="destructive"
-                            onClick={handleClearDatabase}
+                            onClick={() => setShowDeleteConfirm(true)}
                             className="font-bold gap-2"
                         >
                             <Trash2 className="w-4 h-4" />
@@ -159,6 +185,15 @@ export default function DataSyncSection() {
                     </div>
                 </CardContent>
             </Card>
+
+            <DeleteConfirmationModal
+                open={showDeleteConfirm}
+                onOpenChange={setShowDeleteConfirm}
+                onConfirm={handleConfirmWipe}
+                title="WIPE ENTIRE DATABASE?"
+                description={deleteMessage}
+                isDeleting={isDeleting}
+            />
         </div>
     );
 }

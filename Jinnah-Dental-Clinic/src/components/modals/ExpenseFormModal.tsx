@@ -9,30 +9,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 
 
-// Types
-type ExpenseCategory =
-  | 'rent' | 'salary' | 'supplies' | 'utilities' | 'equipment'
-  | 'medication' | 'maintenance' | 'inventory' | 'marketing'
-  | 'insurance' | 'professional_fees' | 'travel' | 'office_supplies'
-  | 'software' | 'other';
-type PaymentMethod = 'cash' | 'card' | 'bank_transfer' | 'cheque' | 'online';
+import {
+  Expense,
+  ExpenseCategory,
+  PaymentMethod
+} from '@/types';
 
-interface Expense {
-  id: string;
-  title: string;
-  amount: number;
-  category: ExpenseCategory;
-  paymentMethod: PaymentMethod;
-  date: string;
-  description: string;
-  vendor?: string;
-  receiptNumber?: string;
-  status: 'paid' | 'pending' | 'cancelled';
-  createdAt: string;
-  updatedAt: string;
-  paidBy?: string;
-  attachment?: string;
-}
+// Local Expense interface removed in favor of @/types/index.ts
 
 // IndexedDB Utilities
 // import { saveToLocal, openDB } from '@/services/expireindexedDbUtils_OLDs';
@@ -57,7 +40,8 @@ const paymentMethodOptions: { value: PaymentMethod; label: string }[] = [
   { value: 'card', label: 'Card' },
   { value: 'bank_transfer', label: 'Bank Transfer' },
   { value: 'cheque', label: 'Cheque' },
-  { value: 'online', label: 'Online' }
+  { value: 'online', label: 'Online' },
+  { value: 'wallet', label: 'Wallet' }
 ];
 
 // Status options
@@ -92,7 +76,15 @@ export default function ExpenseFormModal({
     vendor: '',
     receiptNumber: '',
     status: 'pending' as 'paid' | 'pending' | 'cancelled',
-    paidBy: ''
+    paidBy: '',
+    // Hidden fields for cascading updates
+    staffId: '',
+    inventoryItemId: '',
+    units: '',
+    fullPaymentDateTime: '',
+    paymentDate: '',
+    paymentTime: '',
+    expenseId: '' // Linked ID if needed
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [dbInitialized, setDbInitialized] = useState(false);
@@ -118,12 +110,20 @@ export default function ExpenseFormModal({
         amount: expense.amount?.toString() || '',
         category: expense.category || 'rent',
         paymentMethod: expense.paymentMethod || 'cash',
-        date: expense.date ? expense.date.split('T')[0] : new Date().toISOString().split('T')[0],
+        date: expense.date ? (expense.date.includes('T') ? expense.date.split('T')[0] : expense.date) : new Date().toISOString().split('T')[0],
         description: expense.description || '',
         vendor: expense.vendor || '',
         receiptNumber: expense.receiptNumber || '',
         status: expense.status || 'pending',
-        paidBy: expense.paidBy || ''
+        paidBy: expense.paidBy || '',
+        // Preserve extra fields
+        staffId: (expense as any).staffId || '',
+        inventoryItemId: (expense as any).inventoryItemId || '',
+        units: (expense as any).units?.toString() || '',
+        fullPaymentDateTime: (expense as any).fullPaymentDateTime || '',
+        paymentDate: (expense as any).paymentDate || '',
+        paymentTime: (expense as any).paymentTime || '',
+        expenseId: (expense as any).expenseId || ''
       });
     } else {
       // Reset form for new expense
@@ -137,7 +137,14 @@ export default function ExpenseFormModal({
         vendor: '',
         receiptNumber: '',
         status: 'pending',
-        paidBy: ''
+        paidBy: '',
+        staffId: '',
+        inventoryItemId: '',
+        units: '',
+        fullPaymentDateTime: '',
+        paymentDate: '',
+        paymentTime: '',
+        expenseId: ''
       });
     }
   }, [expense]);
@@ -409,6 +416,48 @@ export default function ExpenseFormModal({
               />
             </div>
           </div>
+
+          {/* Conditional Inventory/Salary Fields */}
+          {(formData.category === 'inventory' || formData.category === 'salary') && (
+            <div className="p-3 bg-blue-50/50 rounded-lg border border-blue-100 space-y-3">
+              <p className="text-xs font-bold text-blue-700 uppercase tracking-widest">
+                {formData.category === 'inventory' ? 'Inventory Details' : 'Salary Details'}
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                {formData.category === 'inventory' && (
+                  <div>
+                    <Label htmlFor="units">Units Purchased</Label>
+                    <Input
+                      id="units"
+                      name="units"
+                      type="number"
+                      value={formData.units}
+                      onChange={handleChange}
+                      placeholder="Number of units"
+                      disabled={isSubmitting}
+                    />
+                  </div>
+                )}
+                {formData.category === 'salary' && (
+                  <div>
+                    <Label htmlFor="staffId">Staff ID (Link)</Label>
+                    <Input
+                      id="staffId"
+                      name="staffId"
+                      value={formData.staffId}
+                      onChange={handleChange}
+                      placeholder="Staff identifier"
+                      disabled={isSubmitting}
+                      readOnly={isEditing} // Prevent changing link after creation for safety
+                    />
+                  </div>
+                )}
+              </div>
+              <p className="text-[10px] text-blue-600 italic">
+                Editing these values will automatically update corresponding {formData.category} records.
+              </p>
+            </div>
+          )}
 
           {/* Description */}
           <div>

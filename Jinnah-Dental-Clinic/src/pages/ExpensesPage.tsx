@@ -23,6 +23,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import ExpenseFormModal from '@/components/modals/ExpenseFormModal';
+import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
 
 // Auth Context
 import { useAuth } from '@/context/AuthContext';
@@ -108,6 +109,9 @@ export default function ExpensesPage() {
     const [currentPage, setCurrentPage] = useState(1);
     const [selectedCategory, setSelectedCategory] = useState<ExpenseCategory | 'all'>('all');
     const [selectedStatus, setSelectedStatus] = useState<Expense['status'] | 'all'>('all');
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [expenseToDelete, setExpenseToDelete] = useState<Expense | null>(null);
     const itemsPerPage = 8;
     const isLoading = loading;
 
@@ -169,20 +173,30 @@ export default function ExpensesPage() {
         setShowExpenseForm(true);
     };
 
-    const handleDeleteExpense = async (expense: Expense, e: React.MouseEvent) => {
+    const handleDeleteExpense = (expense: Expense, e: React.MouseEvent) => {
         e.stopPropagation();
         if (user?.role !== 'operator' && user?.role !== 'admin') {
             toast.error('Unauthorized access');
             return;
         }
-        if (confirm(`Are you sure you want to delete expense "${expense.title}"?`)) {
-            try {
-                await deleteLocal('expenses', expense.id);
-                toast.success(`Expense "${expense.title}" deleted successfully`);
-            } catch (error) {
-                console.error('Error deleting expense:', error);
-                toast.error('Failed to delete expense');
-            }
+        setExpenseToDelete(expense);
+        setShowDeleteConfirm(true);
+    };
+
+    const handleConfirmDelete = async () => {
+        if (!expenseToDelete) return;
+        
+        try {
+            setIsDeleting(true);
+            await deleteLocal('expenses', expenseToDelete.id);
+            toast.success(`Expense "${expenseToDelete.title}" deleted successfully`);
+            setShowDeleteConfirm(false);
+            setExpenseToDelete(null);
+        } catch (error) {
+            console.error('Error deleting expense:', error);
+            toast.error('Failed to delete expense');
+        } finally {
+            setIsDeleting(false);
         }
     };
 
@@ -608,6 +622,32 @@ export default function ExpensesPage() {
                     isEditing={isEditing}
                 />
             )}
+
+            <DeleteConfirmationModal
+                open={showDeleteConfirm}
+                onOpenChange={setShowDeleteConfirm}
+                onConfirm={handleConfirmDelete}
+                title="Delete Expense?"
+                description={
+                    <div className="space-y-3">
+                        <p>Are you sure you want to delete expense <span className="font-bold text-red-600">"{expenseToDelete?.title}"</span>?</p>
+                        {expenseToDelete && (
+                            <div className="bg-gray-50 p-3 rounded-lg border text-sm space-y-1">
+                                <p className="flex justify-between"><span>Amount:</span> <span className="font-bold">{formatCurrency(expenseToDelete.amount)}</span></p>
+                                <p className="flex justify-between">
+                                    <span>Category:</span> 
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${(categoryLabels[expenseToDelete.category] || categoryLabels.other).color}`}>
+                                        {(categoryLabels[expenseToDelete.category] || categoryLabels.other).label}
+                                    </span>
+                                </p>
+                                <p className="flex justify-between"><span>Date:</span> <span>{formatDate(expenseToDelete.date)}</span></p>
+                            </div>
+                        )}
+                        <p className="text-sm text-gray-500 italic pb-2">This action is permanent and will be removed from financial reports.</p>
+                    </div>
+                }
+                isDeleting={isDeleting}
+            />
         </div>
     );
 }

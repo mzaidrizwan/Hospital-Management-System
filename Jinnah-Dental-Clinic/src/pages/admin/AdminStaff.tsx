@@ -408,6 +408,7 @@ export default function AdminStaff() {
 
       const newExpense: Expense = {
         id: expenseId,
+        staffId: staffMember.id,
         title: `Staff Salary: ${staffMember.name}`,
         amount: paymentData.amount,
         category: 'salary',
@@ -425,6 +426,7 @@ export default function AdminStaff() {
 
       const newSalaryPayment: any = {
         id: `sp-${Date.now()}`,
+        expenseId: expenseId,
         staffId: staffMember.id,
         staffName: staffMember.name,
         amount: paymentData.amount,

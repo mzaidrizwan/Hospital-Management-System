@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Settings, Shield, Database, Plus, Edit, Trash2, Download, Upload, CloudDownload, Key, ShieldCheck, ShieldAlert, Lock, Calendar, Info, RefreshCw, Briefcase, UserPlus } from 'lucide-react';
 import { LicenseModal } from '@/components/modals/LicenseModal';
+import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
 import { cn } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -28,6 +29,13 @@ export default function AdminSettings() {
   const [editingTreatment, setEditingTreatment] = useState<Treatment | null>(null);
   const [activeTab, setActiveTab] = useState('general');
   const [newRoleTitle, setNewRoleTitle] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteDialogConfig, setDeleteDialogConfig] = useState<{
+    title: string;
+    description: React.ReactNode;
+    onConfirm: () => Promise<void>;
+  } | null>(null);
 
   const handleAddTreatment = () => {
     setEditingTreatment(null);
@@ -40,15 +48,29 @@ export default function AdminSettings() {
   };
 
   const handleDeleteTreatment = async (id: string, name: string) => {
-    if (confirm(`Are you sure you want to delete treatment "${name}"?`)) {
-      try {
-        await deleteLocal('treatments', id);
-        toast.success(`Treatment "${name}" deleted`);
-      } catch (error) {
-        console.error('Failed to delete treatment:', error);
-        toast.error('Failed to delete treatment');
+    setDeleteDialogConfig({
+      title: `Delete Treatment?`,
+      description: (
+        <div className="space-y-2">
+          <p>Are you sure you want to delete <span className="font-bold">"{name}"</span>?</p>
+          <p className="text-sm text-red-600">This will remove it from the master treatment list.</p>
+        </div>
+      ),
+      onConfirm: async () => {
+        try {
+          setIsDeleting(true);
+          await deleteLocal('treatments', id);
+          toast.success(`Treatment "${name}" deleted`);
+          setShowDeleteConfirm(false);
+        } catch (error) {
+          console.error('Failed to delete treatment:', error);
+          toast.error('Failed to delete treatment');
+        } finally {
+          setIsDeleting(false);
+        }
       }
-    }
+    });
+    setShowDeleteConfirm(true);
   };
 
   const handleSaveTreatment = async (data: any) => {
@@ -84,15 +106,24 @@ export default function AdminSettings() {
     }
   };
 
-  const handleDeleteRole = async (id: string) => {
-    if (confirm("Are you sure you want to delete this role?")) {
-      try {
-        await deleteLocal('roles', id);
-        toast.success("Role deleted");
-      } catch (error) {
-        toast.error("Failed to delete role");
+  const handleDeleteRole = async (id: string, title?: string) => {
+    setDeleteDialogConfig({
+      title: "Delete Staff Role?",
+      description: `Are you sure you want to delete the role "${title || 'this role'}"? Internal staff records with this role may need manual updates.`,
+      onConfirm: async () => {
+        try {
+          setIsDeleting(true);
+          await deleteLocal('roles', id);
+          toast.success("Role deleted");
+          setShowDeleteConfirm(false);
+        } catch (error) {
+          toast.error("Failed to delete role");
+        } finally {
+          setIsDeleting(false);
+        }
       }
-    }
+    });
+    setShowDeleteConfirm(true);
   };
 
   return (
@@ -267,7 +298,7 @@ export default function AdminSettings() {
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                onClick={() => handleDeleteRole(role.id)}
+                                onClick={() => handleDeleteRole(role.id, role.title)}
                                 className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50"
                               >
                                 <Trash2 className="w-4 h-4" />
@@ -324,6 +355,15 @@ export default function AdminSettings() {
         onSubmit={handleSaveTreatment}
         treatment={editingTreatment}
         isEditing={!!editingTreatment}
+      />
+
+      <DeleteConfirmationModal
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        onConfirm={deleteDialogConfig?.onConfirm || (async () => { })}
+        title={deleteDialogConfig?.title || "Are you sure?"}
+        description={deleteDialogConfig?.description || "This action cannot be undone."}
+        isDeleting={isDeleting}
       />
     </div >
   );
