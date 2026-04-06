@@ -18,7 +18,8 @@ import {
     CheckCircle,
     AlertTriangle,
     X,
-    Download
+    Download,
+    Save
 } from 'lucide-react';
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/context/AuthContext';
@@ -34,6 +35,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { format } from 'date-fns';
 import { InventoryFormModal } from '@/components/modals/InventoryFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
 import { toast } from 'sonner';
 import { smartSync, smartDelete } from '@/services/syncService';
 // import { deleteFromLocal } from '@/services/expireindexedDbUtils_OLDs';
@@ -51,6 +53,7 @@ export default function SharedInventory() {
         setSales,
         setPurchases,
         updateLocal,
+        deleteLocal,
         exportToCSV
     } = useData();
     const { user } = useAuth();
@@ -67,10 +70,27 @@ export default function SharedInventory() {
     const [isSellDialogOpen, setIsSellDialogOpen] = useState(false);
     const [selectedItemForSale, setSelectedItemForSale] = useState<any>(null);
 
+    // Purchase Edit states
+    const [isEditPurchaseDialogOpen, setIsEditPurchaseDialogOpen] = useState(false);
+    const [editingPurchase, setEditingPurchase] = useState<any>(null);
+    const [editPurchaseQuantity, setEditPurchaseQuantity] = useState(1);
+    const [editPurchasePrice, setEditPurchasePrice] = useState(0);
+    const [isProcessingPurchaseEdit, setIsProcessingPurchaseEdit] = useState(false);
+
     // Sale specific states
     const [saleQuantity, setSaleQuantity] = useState(1);
     const [saleNotes, setSaleNotes] = useState('');
     const [isProcessingSale, setIsProcessingSale] = useState(false);
+
+    // Delete Modal states
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [deleteConfig, setDeleteConfig] = useState<{
+        id: string;
+        title: string;
+        description: React.ReactNode;
+        type: 'item' | 'purchase';
+    } | null>(null);
 
     // Filtered logic
     const filteredInventory = useMemo(() => {
@@ -116,15 +136,37 @@ export default function SharedInventory() {
         setIsEditDialogOpen(true);
     };
 
-    const handleDeleteItem = async (id: string) => {
-        if (!window.confirm('Delete this item from record?')) return;
+    const handleDeleteItem = (id: string) => {
+        const item = contextInventory?.find(i => i && i.id === id);
+        setDeleteConfig({
+            id,
+            type: 'item',
+            title: "Delete Stock Item?",
+            description: `Are you sure you want to remove "${item?.name || 'this item'}" from the inventory records? This action is permanent.`
+        });
+        setShowDeleteConfirm(true);
+    };
+
+    const handleConfirmDelete = async () => {
+        if (!deleteConfig) return;
+        setIsDeleting(true);
+
         try {
-            await dbManager.deleteFromLocal('inventory', id);
-            setInventory(prev => prev.filter(i => i.id !== id));
-            smartDelete('inventory', id);
-            toast.success("Item removed");
+            if (deleteConfig.type === 'item') {
+                await dbManager.deleteFromLocal('inventory', deleteConfig.id);
+                setInventory(prev => prev.filter(i => i.id !== deleteConfig.id));
+                smartDelete('inventory', deleteConfig.id);
+                toast.success("Item removed");
+            } else {
+                await deleteLocal('purchases', deleteConfig.id);
+                toast.success("Purchase record voided and stock adjusted");
+            }
+            setShowDeleteConfirm(false);
         } catch (err) {
-            toast.error("Failed to delete");
+            toast.error(`Failed to ${deleteConfig.type === 'item' ? 'delete' : 'void'} record`);
+        } finally {
+            setIsDeleting(false);
+            setDeleteConfig(null);
         }
     };
 
@@ -185,16 +227,52 @@ export default function SharedInventory() {
     };
 
     // Purchase Handlers
-    const handleDeletePurchase = async (id: string) => {
-        if (!window.confirm('Void this purchase record? (This will not affect stock)')) return;
+    const handleEditPurchase = (purchase: any) => {
+        setEditingPurchase(purchase);
+        setEditPurchaseQuantity(purchase.quantity);
+        setEditPurchasePrice(purchase.buyingPrice);
+        setIsEditPurchaseDialogOpen(true);
+    };
+
+    const handleConfirmPurchaseEdit = async () => {
+        if (!editingPurchase) return;
+        setIsProcessingPurchaseEdit(true);
+
+        const updatedPurchase = {
+            ...editingPurchase,
+            quantity: Number(editPurchaseQuantity),
+            buyingPrice: Number(editPurchasePrice),
+            totalCost: Number(editPurchaseQuantity) * Number(editPurchasePrice),
+            updatedAt: new Date().toISOString()
+        };
+
         try {
-            await dbManager.deleteFromLocal('purchases', id);
-            setPurchases(prev => prev.filter(p => p.id !== id));
-            smartDelete('purchases', id);
-            toast.success("Purchase record voided");
+            await updateLocal('purchases', updatedPurchase);
+            setIsEditPurchaseDialogOpen(false);
+            setEditingPurchase(null);
+            toast.success("Purchase record updated and stock adjusted");
         } catch (err) {
-            toast.error("Failed to delete record");
+            console.error('Purchase edit failed:', err);
+            toast.error("Failed to update purchase");
+        } finally {
+            setIsProcessingPurchaseEdit(false);
         }
+    };
+
+    const handleDeletePurchase = (id: string) => {
+        const purchase = purchases?.find(p => p && p.id === id);
+        setDeleteConfig({
+            id,
+            type: 'purchase',
+            title: "Void Purchase Record?",
+            description: (
+                <div className="space-y-2">
+                    <p>Are you sure you want to void the purchase for <span className="font-bold text-red-600">"{purchase?.name || purchase?.title || 'this item'}"</span>?</p>
+                    <p className="text-sm text-gray-500 italic">This will automatically revert the stock addition from your inventory status.</p>
+                </div>
+            )
+        });
+        setShowDeleteConfirm(true);
     };
 
     const handleExportSales = () => {
@@ -421,7 +499,7 @@ export default function SharedInventory() {
                                                 <TableCell className="text-right font-black text-primary">{formatCurrency(p.totalCost || (p.quantity * p.buyingPrice))}</TableCell>
                                                 <TableCell className="text-right">
                                                     <div className="flex gap-1 justify-end">
-                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => {/* Edit Purchase would go here */ }}>
+                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => handleEditPurchase(p)}>
                                                             <Edit className="w-4 h-4" />
                                                         </Button>
                                                         <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDeletePurchase(p.id)}>
@@ -472,6 +550,64 @@ export default function SharedInventory() {
                     )}
                 </DialogContent>
             </Dialog>
+
+            <Dialog open={isEditPurchaseDialogOpen} onOpenChange={setIsEditPurchaseDialogOpen}>
+                <DialogContent className="max-w-md rounded-2xl">
+                    <DialogHeader>
+                        <DialogTitle className="text-xl font-black">Edit Purchase Record</DialogTitle>
+                    </DialogHeader>
+                    {editingPurchase && (
+                        <div className="space-y-4 py-4">
+                            <div className="bg-muted p-4 rounded-xl">
+                                <span className="text-sm font-bold uppercase text-muted-foreground block mb-1">Item</span>
+                                <span className="text-lg font-black">{editingPurchase.name}</span>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-1.5">
+                                    <Label className="text-xs font-bold uppercase text-muted-foreground">Quantity Purchased</Label>
+                                    <Input 
+                                        type="number" 
+                                        value={editPurchaseQuantity} 
+                                        onChange={(e) => setEditPurchaseQuantity(parseInt(e.target.value) || 0)} 
+                                        className="h-12 text-lg font-black" 
+                                    />
+                                </div>
+                                <div className="space-y-1.5">
+                                    <Label className="text-xs font-bold uppercase text-muted-foreground">Unit Cost (Rs.)</Label>
+                                    <Input 
+                                        type="number" 
+                                        value={editPurchasePrice} 
+                                        onChange={(e) => setEditPurchasePrice(parseFloat(e.target.value) || 0)} 
+                                        className="h-12 text-lg font-black" 
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="bg-primary/5 p-4 rounded-xl border border-primary/10 flex justify-between items-baseline">
+                                <span className="text-xs font-bold uppercase">Total Purchase Cost:</span>
+                                <span className="text-2xl font-black text-primary">{formatCurrency(editPurchaseQuantity * editPurchasePrice)}</span>
+                            </div>
+
+                            <DialogFooter>
+                                <Button variant="ghost" onClick={() => setIsEditPurchaseDialogOpen(false)}>Cancel</Button>
+                                <Button onClick={handleConfirmPurchaseEdit} disabled={isProcessingPurchaseEdit} className="font-bold shadow-md shadow-primary/20">
+                                    {isProcessingPurchaseEdit ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />} Save Changes
+                                </Button>
+                            </DialogFooter>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
+
+            <DeleteConfirmationModal
+                open={showDeleteConfirm}
+                onOpenChange={setShowDeleteConfirm}
+                onConfirm={handleConfirmDelete}
+                title={deleteConfig?.title || "Are you sure?"}
+                description={deleteConfig?.description || "This action cannot be undone."}
+                isDeleting={isDeleting}
+            />
         </div>
     );
 }

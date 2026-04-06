@@ -442,6 +442,9 @@ export interface Expense {
   paymentTime?: string;
   paymentDate?: string;
   fullPaymentDateTime?: string;
+  inventoryItemId?: string;
+  units?: number | string;
+  purchaseId?: string;
 }
 
 export interface ExpenseReport {

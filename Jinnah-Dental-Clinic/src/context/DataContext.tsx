@@ -578,18 +578,114 @@ export function DataProvider({ children }: { children: ReactNode }) {
                                     backgroundFirebaseSync('inventory', updatedInv);
                                 }
                             }
-                            // Update related purchase record
-                            const relatedPurchase = (purchases || []).find(p => p.id === enrichedData.id || (p as any).itemId === invItemId);
+                            
+                            // Update related purchase record using purchaseId link
+                            const purchaseId = enrichedData.purchaseId || (oldExpense as any).purchaseId;
+                            const relatedPurchase = (purchases || []).find(p => 
+                                (purchaseId && p.id === purchaseId) || 
+                                p.id === enrichedData.id || 
+                                ((p as any).itemId === invItemId && Number(p.totalCost) === Number(oldExpense.amount))
+                            );
+
                             if (relatedPurchase) {
                                 const updatedPurchase = { 
                                     ...relatedPurchase, 
                                     quantity: newUnits, 
                                     totalCost: Number(enrichedData.amount),
+                                    buyingPrice: Number(enrichedData.amount) / (newUnits || 1),
                                     updatedAt: new Date().toISOString() 
                                 };
                                 await dbManager.saveToLocal('purchases', updatedPurchase);
                                 setPurchases(prev => prev.map(p => p.id === updatedPurchase.id ? updatedPurchase : p));
                                 backgroundFirebaseSync('purchases', updatedPurchase);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // NEW: SPECIAL CASCADE FOR PURCHASE UPDATES
+            if (collectionName === 'purchases' && enrichedData.id) {
+                const oldPurchase = (purchases || []).find(p => p.id === enrichedData.id);
+                if (oldPurchase) {
+                    const oldUnits = Number(oldPurchase.quantity) || 0;
+                    const newUnits = Number(enrichedData.quantity) || 0;
+                    const unitDiff = newUnits - oldUnits;
+                    
+                    const oldBuyPrice = Number(oldPurchase.buyingPrice) || 0;
+                    const newBuyPrice = Number(enrichedData.buyingPrice) || 0;
+                    const priceChanged = oldBuyPrice !== newBuyPrice;
+
+                    const invItemId = enrichedData.itemId || oldPurchase.itemId;
+
+                    if (unitDiff !== 0 || priceChanged) {
+                        console.log(`[updateLocal] Purchase adjusted. Diff: ${unitDiff}, PriceChanged: ${priceChanged}. Cascading...`);
+                        
+                        if (invItemId) {
+                            const invItem = (inventory || []).find(i => i.id === invItemId);
+                            if (invItem) {
+                                let updatedInv = { ...invItem };
+                                
+                                if (unitDiff !== 0) {
+                                    updatedInv.quantity = Math.max(0, (invItem.quantity || 0) + unitDiff);
+                                }
+                                
+                                if (priceChanged) {
+                                    updatedInv.buyingPrice = newBuyPrice;
+                                    
+                                    // Cascade price change to Sales History (Profit calculation)
+                                    const relatedSales = (sales || []).filter(s => s.itemId === invItemId);
+                                    if (relatedSales.length > 0) {
+                                        console.log(`[updateLocal] Updating ${relatedSales.length} sales records with new buying price...`);
+                                        for (const sale of relatedSales) {
+                                            const updatedSale = {
+                                                ...sale,
+                                                buyingPrice: newBuyPrice,
+                                                updatedAt: new Date().toISOString()
+                                            };
+                                            await dbManager.saveToLocal('sales', updatedSale);
+                                            backgroundFirebaseSync('sales', updatedSale);
+                                        }
+                                        // Update state once
+                                        setSales(prev => prev.map(s => s.itemId === invItemId ? { ...s, buyingPrice: newBuyPrice } : s));
+                                    }
+                                }
+
+                                updatedInv.updatedAt = new Date().toISOString();
+                                await dbManager.saveToLocal('inventory', updatedInv);
+                                setInventory(prev => prev.map(i => i.id === updatedInv.id ? updatedInv : i));
+                                backgroundFirebaseSync('inventory', updatedInv);
+                            }
+                        }
+
+                        // Update related Expense
+                        const relatedExpense = (expenses || []).find(e => 
+                            e.id === enrichedData.id || 
+                            (e.inventoryItemId === invItemId && Number(e.amount) === Number(oldPurchase.totalCost))
+                        );
+                        if (relatedExpense) {
+                            const updatedExpense = {
+                                ...relatedExpense,
+                                amount: Number(enrichedData.totalCost),
+                                units: newUnits,
+                                unitPrice: newBuyPrice,
+                                updatedAt: new Date().toISOString()
+                            };
+                            await dbManager.saveToLocal('expenses', updatedExpense);
+                            setExpenses(prev => prev.map(e => e.id === updatedExpense.id ? updatedExpense : e));
+                            backgroundFirebaseSync('expenses', updatedExpense);
+
+                            // Update related transaction
+                            const relatedTxn = (transactions || []).find(t => t.expenseId === relatedExpense.id);
+                            if (relatedTxn) {
+                                const updatedTxn = { 
+                                    ...relatedTxn, 
+                                    amount: Number(enrichedData.totalCost), 
+                                    updatedAt: new Date().toISOString() 
+                                };
+                                await dbManager.saveToLocal('transactions', updatedTxn);
+                                setTransactions(prev => prev.map(t => t.id === updatedTxn.id ? updatedTxn : t));
+                                backgroundFirebaseSync('transactions', updatedTxn);
                             }
                         }
                     }
@@ -906,31 +1002,124 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     console.log(`[deleteLocal] Cascading for Inventory Expense:`, id);
                     
                     const invItemId = (expenseToDelete as any).inventoryItemId;
+                    const purchaseId = (expenseToDelete as any).purchaseId;
+
+                    // 1. Revert Inventory quantity
                     if (invItemId) {
                         const invItem = (inventory || []).find(i => i.id === invItemId);
                         if (invItem) {
                             const units = Number((expenseToDelete as any).units) || 0;
-                            const updatedInv = {
-                                ...invItem,
-                                quantity: Math.max(0, (invItem.quantity || 0) - units),
-                                updatedAt: new Date().toISOString()
-                            };
-                            await dbManager.saveToLocal('inventory', updatedInv);
-                            setInventory(prev => prev.map(i => i.id === updatedInv.id ? updatedInv : i));
-                            backgroundFirebaseSync('inventory', updatedInv);
-                            console.log(`[deleteLocal] Reverted inventory quantity for ${invItem.name}`);
+                            const newQuantity = Math.max(0, (invItem.quantity || 0) - units);
+                            
+                            // Check if this was the ONLY purchase for this item. 
+                            // If so, delete the item entirely ("as if it was never there")
+                            const otherPurchases = (purchases || []).filter(p => 
+                                p.itemId === invItemId && 
+                                p.id !== purchaseId && 
+                                p.id !== id
+                            );
+
+                            if (otherPurchases.length === 0 && newQuantity === 0) {
+                                console.log(`[deleteLocal] Deleting entire inventory item as this was its only purchase.`);
+                                await dbManager.deleteFromLocal('inventory', invItemId);
+                                setInventory(prev => prev.filter(i => i.id !== invItemId));
+                                backgroundFirebaseSync('inventory', { id: invItemId, _deleted: true });
+                            } else {
+                                const updatedInv = {
+                                    ...invItem,
+                                    quantity: newQuantity,
+                                    updatedAt: new Date().toISOString()
+                                };
+                                await dbManager.saveToLocal('inventory', updatedInv);
+                                setInventory(prev => prev.map(i => i.id === updatedInv.id ? updatedInv : i));
+                                backgroundFirebaseSync('inventory', updatedInv);
+                            }
                         }
                     }
                     
-                    // Delete related purchase record
+                    // 2. Delete related purchase record
                     const relatedPurchase = (purchases || []).find(p => 
+                        (purchaseId && p.id === purchaseId) || 
                         p.id === id || 
                         ((p as any).itemId === invItemId && Number(p.totalCost) === Number(expenseToDelete.amount))
                     );
+
                     if (relatedPurchase) {
                         await dbManager.deleteFromLocal('purchases', relatedPurchase.id);
                         setPurchases(prev => prev.filter(p => p.id !== relatedPurchase.id));
                         backgroundFirebaseSync('purchases', { id: relatedPurchase.id, _deleted: true });
+                    }
+                }
+            }
+
+            // NEW: SPECIAL CASCADE FOR PURCHASE DELETIONS
+            if (collectionName === 'purchases') {
+                const purchaseToDelete = (purchases || []).find(p => p.id === id);
+                if (purchaseToDelete) {
+                    console.log(`[deleteLocal] Cascading for Purchase Record:`, id);
+                    const invItemId = purchaseToDelete.itemId;
+                    const units = Number(purchaseToDelete.quantity) || 0;
+
+                    // 1. Revert Inventory quantity or fully delete item
+                    if (invItemId) {
+                        const invItem = (inventory || []).find(i => i.id === invItemId);
+                        if (invItem) {
+                            const newQuantity = Math.max(0, (invItem.quantity || 0) - units);
+                            
+                            // Check if this was the ONLY purchase for this item. 
+                            // If so, delete the item and its sales entirely ("as if it was never there")
+                            const otherPurchases = (purchases || []).filter(p => p.itemId === invItemId && p.id !== id);
+
+                            if (otherPurchases.length === 0) {
+                                console.log(`[deleteLocal] Deleting entire inventory item and sales history as this was its only purchase.`);
+                                
+                                // A. Delete the item
+                                await dbManager.deleteFromLocal('inventory', invItemId);
+                                setInventory(prev => prev.filter(i => i.id !== invItemId));
+                                backgroundFirebaseSync('inventory', { id: invItemId, _deleted: true });
+
+                                // B. Delete ALL sales history for this item
+                                const itemSales = (sales || []).filter(s => s.itemId === invItemId);
+                                if (itemSales.length > 0) {
+                                    console.log(`[deleteLocal] Wiping ${itemSales.length} sales records for item ${invItemId}`);
+                                    for (const sale of itemSales) {
+                                        await dbManager.deleteFromLocal('sales', sale.id);
+                                        backgroundFirebaseSync('sales', { id: sale.id, _deleted: true });
+                                    }
+                                    setSales(prev => prev.filter(s => s.itemId !== invItemId));
+                                }
+                            } else {
+                                // Just update quantity
+                                const updatedInv = {
+                                    ...invItem,
+                                    quantity: newQuantity,
+                                    updatedAt: new Date().toISOString()
+                                };
+                                await dbManager.saveToLocal('inventory', updatedInv);
+                                setInventory(prev => prev.map(i => i.id === updatedInv.id ? updatedInv : i));
+                                backgroundFirebaseSync('inventory', updatedInv);
+                            }
+                        }
+                    }
+
+                    // 2. Delete related Expense
+                    const relatedExpense = (expenses || []).find(e => 
+                        e.id === id || 
+                        (e.purchaseId === id) ||
+                        (e.inventoryItemId === invItemId && Number(e.amount) === Number(purchaseToDelete.totalCost))
+                    );
+                    if (relatedExpense) {
+                        await dbManager.deleteFromLocal('expenses', relatedExpense.id);
+                        setExpenses(prev => prev.filter(e => e.id !== relatedExpense.id));
+                        backgroundFirebaseSync('expenses', { id: relatedExpense.id, _deleted: true });
+                        
+                        // Also delete related transaction if exists
+                        const relatedTxn = (transactions || []).find(t => t.expenseId === relatedExpense.id);
+                        if (relatedTxn) {
+                            await dbManager.deleteFromLocal('transactions', relatedTxn.id);
+                            setTransactions(prev => prev.filter(t => t.id !== relatedTxn.id));
+                            backgroundFirebaseSync('transactions', { id: relatedTxn.id, _deleted: true });
+                        }
                     }
                 }
             }
@@ -1004,7 +1193,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     };
                     await updateLocal('purchases', purchaseRecord);
 
-                    // 2. Create the general expense
+                    // 2. Create the general expense with a direct link to the purchase
                     await addItem('expenses', {
                         title: `Stock Purchase: ${result.name}`,
                         amount: totalExpense,
@@ -1012,6 +1201,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         date: new Date().toISOString(),
                         description: `Automatically created from inventory addition: ${result.name}`,
                         inventoryItemId: result.id,
+                        purchaseId: purchaseRecord.id, // CRITICAL: Store the link
                         units: quantity,
                         unitPrice: buyingPrice,
                         status: 'paid',

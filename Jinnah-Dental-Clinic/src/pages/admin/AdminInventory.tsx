@@ -42,6 +42,7 @@ import { useAuth } from '@/context/AuthContext';
 
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { InventoryFormModal } from '@/components/modals/InventoryFormModal';
+import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
 
 // IndexedDB Utilities
 // import { saveToLocal, getFromLocal, deleteFromLocal, openDB } from '@/services/expireindexedDbUtils_OLDs';
@@ -68,6 +69,8 @@ export default function AdminInventory() {
     setInventory,
     setSales,
     updateLocal,
+    deleteLocal,
+    exportToCSV,
     exportSalesHistoryToCSV
   } = useData();
   const { user } = useAuth();
@@ -83,6 +86,17 @@ export default function AdminInventory() {
   const [saleQuantity, setSaleQuantity] = useState(1);
   const [saleNotes, setSaleNotes] = useState('');
   const [isProcessingSale, setIsProcessingSale] = useState(false);
+
+  // Delete Modal states
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteConfig, setDeleteConfig] = useState<{
+    id?: string;
+    data?: any;
+    title: string;
+    description: React.ReactNode;
+    type: 'item' | 'sale' | 'purchase';
+  } | null>(null);
 
   // Edit sale states
   const [isEditSaleDialogOpen, setIsEditSaleDialogOpen] = useState(false);
@@ -136,25 +150,50 @@ export default function AdminInventory() {
     setIsEditDialogOpen(true);
   };
 
-  const handleDeleteItem = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this item?')) return;
+  const handleDeleteItem = (id: string) => {
+    const item = contextInventory?.find(i => i && i.id === id);
+    setDeleteConfig({
+      id,
+      type: 'item',
+      title: "Delete Inventory Item?",
+      description: `Are you sure you want to permanently remove "${item?.name || 'this item'}" from inventory? This action cannot be undone.`
+    });
+    setShowDeleteConfirm(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteConfig) return;
+    setIsDeleting(true);
 
     try {
-      // 1. Delete from IndexedDB immediately
-      await dbManager.deleteFromLocal('inventory', id);
-
-      // 2. Manually update context state for instant UI update
-      setInventory(prev => prev.filter(i => i.id !== id));
-
-      // 3. Background Sync (No await)
-      smartDelete('inventory', id).catch(err => {
-        console.error('Background delete sync failed:', err);
-      });
-
-      toast.success("Item removed from inventory.");
+      if (deleteConfig.type === 'item') {
+        const id = deleteConfig.id!;
+        await deleteLocal('inventory', id);
+        toast.success("Item removed from inventory.");
+      } else if (deleteConfig.type === 'sale') {
+        const sale = deleteConfig.data;
+        const inventoryItem = contextInventory.find(item => item.id === sale.itemId);
+        if (inventoryItem) {
+          const updatedItem = {
+            ...inventoryItem,
+            quantity: (inventoryItem.quantity || 0) + (sale.quantity || 0)
+          };
+          await updateLocal('inventory', updatedItem);
+        }
+        await deleteLocal('sales', sale.id);
+        toast.success(`Sale deleted and ${sale.quantity} unit(s) restored`);
+      } else if (deleteConfig.type === 'purchase') {
+        const purchase = deleteConfig.data;
+        await deleteLocal('expenses', purchase.id);
+        toast.success('Purchase record deleted');
+      }
+      setShowDeleteConfirm(false);
     } catch (error) {
-      console.error('Delete failed:', error);
-      toast.error("Failed to delete item.");
+      console.error('Delete operation failed:', error);
+      toast.error(`Failed to delete ${deleteConfig.type}.`);
+    } finally {
+      setIsDeleting(false);
+      setDeleteConfig(null);
     }
   };
 
@@ -224,54 +263,30 @@ export default function AdminInventory() {
   };
 
   // Delete sale record and restore inventory
-  const handleDeleteSale = async (sale: any) => {
-    if (!window.confirm(`Delete this sale of ${sale.quantity} unit(s) of ${sale.itemName}?`)) return;
-
-    try {
-      // 1. Find and update the inventory item (restore quantity)
-      const inventoryItem = contextInventory.find(item => item.id === sale.itemId);
-      if (inventoryItem) {
-        const updatedItem = {
-          ...inventoryItem,
-          quantity: inventoryItem.quantity + sale.quantity
-        };
-        await updateLocal('inventory', updatedItem);
-        setInventory(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
-      }
-
-      // 2. Delete the sale record
-      await dbManager.deleteFromLocal('sales', sale.id);
-      setSales(prev => prev.filter(s => s.id !== sale.id));
-
-      // 3. Background sync
-      smartDelete('sales', sale.id).catch(err => console.error('Background delete failed:', err));
-
-      toast.success(`Sale deleted and ${sale.quantity} unit(s) restored to inventory`);
-    } catch (error) {
-      console.error('Error deleting sale:', error);
-      toast.error('Failed to delete sale');
-    }
+  const handleDeleteSale = (sale: any) => {
+    setDeleteConfig({
+      data: sale,
+      type: 'sale',
+      title: "Void Sale Transaction?",
+      description: (
+        <div className="space-y-2">
+          <p>Are you sure you want to delete the sale record for <span className="font-bold">"{sale.itemName}"</span> ({sale.quantity} units)?</p>
+          <p className="text-sm text-gray-500 italic">This will restore the sold quantity back to your inventory stock.</p>
+        </div>
+      )
+    });
+    setShowDeleteConfirm(true);
   };
 
   // Delete purchase record (expense)
-  const handleDeletePurchase = async (purchase: any) => {
-    if (!window.confirm(`Delete this purchase record for ${purchase.title}?`)) return;
-
-    try {
-      // Delete the expense record
-      await dbManager.deleteFromLocal('expenses', purchase.id);
-
-      // Background sync
-      smartDelete('expenses', purchase.id).catch(err => console.error('Background delete failed:', err));
-
-      toast.success('Purchase record deleted');
-
-      // Refresh to update the list
-      window.location.reload();
-    } catch (error) {
-      console.error('Error deleting purchase:', error);
-      toast.error('Failed to delete purchase record');
-    }
+  const handleDeletePurchase = (purchase: any) => {
+    setDeleteConfig({
+      data: purchase,
+      type: 'purchase',
+      title: "Delete Purchase Record?",
+      description: `Are you sure you want to delete the purchase record for "${purchase.title}"? This is an expense record and won't automatically revert stock.`
+    });
+    setShowDeleteConfirm(true);
   };
 
   // Open edit sale dialog
@@ -421,7 +436,7 @@ export default function AdminInventory() {
                 <SelectTrigger className="w-[180px] h-10 shadow-sm">
                   <SelectValue placeholder="All Categories" />
                 </SelectTrigger>
-                <SelectContent position="popper" className="max-h-60 overflow-y-auto">
+                <SelectContent className="max-h-60 overflow-y-auto">
                   <SelectItem value="All">All Categories</SelectItem>
                   {categories.map(category => (
                     <SelectItem key={category} value={category}>{category}</SelectItem>
@@ -439,6 +454,15 @@ export default function AdminInventory() {
               )}
             </div>
           </div>
+
+      <DeleteConfirmationModal
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        onConfirm={handleConfirmDelete}
+        title={deleteConfig?.title || "Are you sure?"}
+        description={deleteConfig?.description || "This action cannot be undone."}
+        isDeleting={isDeleting}
+      />
 
           <Card className="border-none shadow-md overflow-hidden bg-white">
             <CardContent className="p-0">

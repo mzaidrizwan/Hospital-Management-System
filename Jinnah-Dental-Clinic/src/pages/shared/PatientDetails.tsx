@@ -24,11 +24,15 @@ import { useData } from '@/context/DataContext';
 import { Patient, QueueItem } from '@/types';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
 
 export default function PatientDetails() {
-    const { patients, queue, deleteLocal, exportToCSV, addItem } = useData();
+    const { patients, queue, deleteLocal, exportToCSV, addItem, deletePatientWithAllRecords } = useData();
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [patientToDelete, setPatientToDelete] = useState<Patient | null>(null);
 
     // Display ALL patients from the store - NO FILTERS
     const displayedPatients = useMemo(() => {
@@ -62,15 +66,25 @@ export default function PatientDetails() {
         toast.success(`${patient.name} sent to Waiting section`, { duration: 2000 });
     };
 
-    const handleDeletePatient = async (patient: Patient) => {
-        if (!window.confirm(`Are you sure you want to delete ${patient.name}?`)) return;
+    const handleDeletePatient = (patient: Patient) => {
+        setPatientToDelete(patient);
+        setShowDeleteConfirm(true);
+    };
 
+    const handleConfirmDelete = async () => {
+        if (!patientToDelete) return;
+        
         try {
-            await deleteLocal('patients', patient.id);
-            toast.success(`${patient.name} has been removed`);
+            setIsDeleting(true);
+            await deletePatientWithAllRecords(patientToDelete);
+            toast.success(`${patientToDelete.name} and all associated records removed successfully`);
+            setShowDeleteConfirm(false);
+            setPatientToDelete(null);
         } catch (error) {
             console.error('Delete failed:', error);
             toast.error('Failed to delete patient');
+        } finally {
+            setIsDeleting(false);
         }
     };
 
@@ -321,6 +335,29 @@ export default function PatientDetails() {
                     ))}
                 </div>
             )}
+
+            <DeleteConfirmationModal
+                open={showDeleteConfirm}
+                onOpenChange={setShowDeleteConfirm}
+                onConfirm={handleConfirmDelete}
+                title="Delete Patient Record?"
+                description={
+                    <div className="space-y-3">
+                        <p>Are you sure you want to delete <span className="font-bold text-red-600">{patientToDelete?.name}</span>?</p>
+                        <div className="bg-red-50 p-3 rounded-lg border border-red-100 text-xs text-red-600 space-y-1">
+                            <p className="font-bold uppercase tracking-widest">⚠️ Critical Warning:</p>
+                            <p>This will permanently erase ALL associated data for this patient including:</p>
+                            <ul className="list-disc list-inside ml-2">
+                                <li>Medical Activity History</li>
+                                <li>Queue & Appointment Records</li>
+                                <li>Financial Transactions & Bills</li>
+                            </ul>
+                        </div>
+                        <p className="text-sm text-gray-500 italic pb-2">This action cannot be undone and will affect clinic reports.</p>
+                    </div>
+                }
+                isDeleting={isDeleting}
+            />
         </div>
     );
 }

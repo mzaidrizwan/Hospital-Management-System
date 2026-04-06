@@ -9,6 +9,7 @@ import { QueueItem } from '@/types';
 import { toast } from 'sonner';
 import { Clock, Activity, CheckCircle, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
+import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
 
 export default function Bill() {
     const { queue, patients, updateQueueItemOptimistic, updateLocal, deleteLocal, loading, staff, treatments } = useData();
@@ -18,6 +19,9 @@ export default function Bill() {
     const [showTreatmentModal, setShowTreatmentModal] = useState(false);
     const [selectedPatient, setSelectedPatient] = useState<QueueItem | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [patientToDelete, setPatientToDelete] = useState<QueueItem | null>(null);
 
     // Handle status updates using the centralized handleMovePatient function
     const handleUpdateStatus = async (id: string, newStatus: 'waiting' | 'in_treatment' | 'completed') => {
@@ -71,14 +75,24 @@ export default function Bill() {
         }
     };
 
-    const handleDelete = async (item: QueueItem) => {
-        if (confirm(`Are you sure you want to remove ${item.patientName} from the billing queue?`)) {
-            try {
-                await deleteLocal('queue', item.id);
-                toast.success('Patient removed from queue');
-            } catch (error) {
-                toast.error('Failed to remove patient');
-            }
+    const handleDelete = (item: QueueItem) => {
+        setPatientToDelete(item);
+        setShowDeleteConfirm(true);
+    };
+
+    const handleConfirmDelete = async () => {
+        if (!patientToDelete) return;
+
+        try {
+            setIsDeleting(true);
+            await deleteLocal('queue', patientToDelete.id);
+            toast.success('Patient removed from queue');
+            setShowDeleteConfirm(false);
+            setPatientToDelete(null);
+        } catch (error) {
+            toast.error('Failed to remove patient');
+        } finally {
+            setIsDeleting(false);
         }
     };
 
@@ -419,6 +433,20 @@ Contact Us: 0347 1887181
                     doctors={presentDoctors}
                 />
             )}
+
+            <DeleteConfirmationModal
+                open={showDeleteConfirm}
+                onOpenChange={setShowDeleteConfirm}
+                onConfirm={handleConfirmDelete}
+                title="Remove from Billing?"
+                description={
+                    <div className="space-y-3">
+                        <p>Are you sure you want to remove <span className="font-bold text-red-600">{patientToDelete?.patientName}</span> from the billing queue?</p>
+                        <p className="text-sm text-gray-500 italic pb-2">This will remove their card from the current billing sections (Waiting/In Treatment/Completed).</p>
+                    </div>
+                }
+                isDeleting={isDeleting}
+            />
         </div>
     );
 }

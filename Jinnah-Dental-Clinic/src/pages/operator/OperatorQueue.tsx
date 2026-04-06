@@ -12,6 +12,7 @@ import PaymentModal from '@/components/modals/PaymentModal';
 import PatientDetailsModal from '@/components/modals/PatientDetailsModal';
 import TreatmentModal from '@/components/modals/TreatmentModal';
 import { startOfDay, endOfDay, parseISO, format } from 'date-fns';
+import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
 import { useData } from '@/context/DataContext';
 import { useAvailableDoctors } from '@/hooks/useAvailableDoctors';
 import { formatCurrency } from '@/lib/utils';
@@ -56,6 +57,10 @@ export default function OperatorQueue() {
 
   const [showCancelPrompt, setShowCancelPrompt] = useState(false);
   const [cancelItem, setCancelItem] = useState<QueueItem | null>(null);
+
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [patientToDelete, setPatientToDelete] = useState<any>(null);
 
   // Filter queue data by treatmentDate or checkInTime
   const queueData = React.useMemo(() => {
@@ -1512,20 +1517,41 @@ Contact Us: 0347 1887181
             setSelectedPatientData(null);
           }}
           onDelete={async () => {
-            if (confirm(`Remove ${showPatientDetails.patientName} from queue?`)) {
-              try {
-                await deleteLocal('queue', showPatientDetails.id);
-                toast.success(`Removed ${showPatientDetails.patientName} from queue`);
-                setShowPatientDetails(null);
-                setSelectedPatientData(null);
-              } catch (error) {
-                console.error('Error deleting queue item:', error);
-                toast.error('Failed to remove from queue');
-              }
-            }
+            setPatientToDelete(showPatientDetails);
+            setShowDeleteConfirm(true);
           }}
         />
       )}
+
+      <DeleteConfirmationModal
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        onConfirm={async () => {
+          if (!patientToDelete) return;
+          try {
+            setIsDeleting(true);
+            await deleteLocal('queue', patientToDelete.id);
+            toast.success(`Removed ${patientToDelete.patientName} from queue`);
+            setShowDeleteConfirm(false);
+            setPatientToDelete(null);
+            setShowPatientDetails(null);
+            setSelectedPatientData(null);
+          } catch (error) {
+            console.error('Error deleting queue item:', error);
+            toast.error('Failed to remove from queue');
+          } finally {
+            setIsDeleting(false);
+          }
+        }}
+        title="Remove from Queue?"
+        description={
+            <div className="space-y-3">
+                <p>Are you sure you want to remove <span className="font-bold text-red-600">{patientToDelete?.patientName}</span> from the active queue?</p>
+                <p className="text-sm text-gray-500 italic pb-2">This will remove their token and visit from today's list.</p>
+            </div>
+        }
+        isDeleting={isDeleting}
+      />
     </div>
   );
 }
