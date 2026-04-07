@@ -112,6 +112,8 @@ export default function ExpensesPage() {
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
     const [expenseToDelete, setExpenseToDelete] = useState<Expense | null>(null);
+    const [startDate, setStartDate] = useState('');
+    const [endDate, setEndDate] = useState('');
     const itemsPerPage = 8;
     const isLoading = loading;
 
@@ -128,7 +130,21 @@ export default function ExpensesPage() {
         const matchesCategory = selectedCategory === 'all' || expense.category === selectedCategory;
         const matchesStatus = selectedStatus === 'all' || expense.status === selectedStatus;
 
-        return matchesSearch && matchesCategory && matchesStatus;
+        // Date range match
+        let matchesDate = true;
+        if (startDate || endDate) {
+            const expDate = expense.date ? new Date(expense.date).getTime() : 0;
+            if (startDate) {
+                const start = new Date(startDate).setHours(0, 0, 0, 0);
+                if (expDate < start) matchesDate = false;
+            }
+            if (endDate) {
+                const end = new Date(endDate).setHours(23, 59, 59, 999);
+                if (expDate > end) matchesDate = false;
+            }
+        }
+
+        return matchesSearch && matchesCategory && matchesStatus && matchesDate;
     });
 
     // Pagination
@@ -432,6 +448,8 @@ export default function ExpensesPage() {
                             setSearchTerm('');
                             setSelectedCategory('all');
                             setSelectedStatus('all');
+                            setStartDate('');
+                            setEndDate('');
                             setCurrentPage(1);
                         }}
                     >
@@ -472,6 +490,34 @@ export default function ExpensesPage() {
                                 <option key={value} value={value}>{label}</option>
                             ))}
                         </select>
+                    </div>
+
+                    <div className="flex items-center gap-2 px-3 py-1 bg-gray-50 border rounded-lg">
+                        <Calendar className="w-4 h-4 text-gray-500" />
+                        <span className="text-xs font-bold uppercase text-muted-foreground mr-1">From:</span>
+                        <input
+                            type="date"
+                            value={startDate}
+                            onChange={(e) => {
+                                setStartDate(e.target.value);
+                                setCurrentPage(1);
+                            }}
+                            className="bg-transparent text-sm border-none focus:ring-0 cursor-pointer"
+                        />
+                    </div>
+
+                    <div className="flex items-center gap-2 px-3 py-1 bg-gray-50 border rounded-lg">
+                        <Calendar className="w-4 h-4 text-gray-500" />
+                        <span className="text-xs font-bold uppercase text-muted-foreground mr-1">To:</span>
+                        <input
+                            type="date"
+                            value={endDate}
+                            onChange={(e) => {
+                                setEndDate(e.target.value);
+                                setCurrentPage(1);
+                            }}
+                            className="bg-transparent text-sm border-none focus:ring-0 cursor-pointer"
+                        />
                     </div>
                 </div>
             </div>

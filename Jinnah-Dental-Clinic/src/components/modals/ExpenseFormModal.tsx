@@ -81,6 +81,7 @@ export default function ExpenseFormModal({
     staffId: '',
     inventoryItemId: '',
     units: '',
+    unitPrice: '',
     fullPaymentDateTime: '',
     paymentDate: '',
     paymentTime: '',
@@ -120,6 +121,7 @@ export default function ExpenseFormModal({
         staffId: (expense as any).staffId || '',
         inventoryItemId: (expense as any).inventoryItemId || '',
         units: (expense as any).units?.toString() || '',
+        unitPrice: (expense as any).unitPrice?.toString() || '',
         fullPaymentDateTime: (expense as any).fullPaymentDateTime || '',
         paymentDate: (expense as any).paymentDate || '',
         paymentTime: (expense as any).paymentTime || '',
@@ -141,6 +143,7 @@ export default function ExpenseFormModal({
         staffId: '',
         inventoryItemId: '',
         units: '',
+        unitPrice: '',
         fullPaymentDateTime: '',
         paymentDate: '',
         paymentTime: '',
@@ -148,6 +151,20 @@ export default function ExpenseFormModal({
       });
     }
   }, [expense]);
+
+  // Recalculate amount when units or unitPrice changes (for inventory category)
+  useEffect(() => {
+    if (formData.category === 'inventory') {
+      const units = parseFloat(formData.units || '0');
+      const unitPrice = parseFloat(formData.unitPrice || '0');
+      if (units >= 0 && unitPrice >= 0) {
+        const calculatedAmount = (units * unitPrice).toString();
+        if (calculatedAmount !== formData.amount) {
+          setFormData(prev => ({ ...prev, amount: calculatedAmount }));
+        }
+      }
+    }
+  }, [formData.units, formData.unitPrice, formData.category]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -425,18 +442,32 @@ export default function ExpenseFormModal({
               </p>
               <div className="grid grid-cols-2 gap-4">
                 {formData.category === 'inventory' && (
-                  <div>
-                    <Label htmlFor="units">Units Purchased</Label>
-                    <Input
-                      id="units"
-                      name="units"
-                      type="number"
-                      value={formData.units}
-                      onChange={handleChange}
-                      placeholder="Number of units"
-                      disabled={isSubmitting}
-                    />
-                  </div>
+                  <>
+                    <div>
+                      <Label htmlFor="units">Units Purchased</Label>
+                       <Input
+                          id="units"
+                          name="units"
+                          type="number"
+                          value={formData.units}
+                          onChange={handleChange}
+                          placeholder="Qty"
+                          disabled={isSubmitting}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="unitPrice">Unit Price (Rs.)</Label>
+                        <Input
+                          id="unitPrice"
+                          name="unitPrice"
+                          type="number"
+                          value={formData.unitPrice}
+                          onChange={handleChange}
+                          placeholder="Price per unit"
+                          disabled={isSubmitting}
+                        />
+                      </div>
+                  </>
                 )}
                 {formData.category === 'salary' && (
                   <div>

@@ -22,7 +22,7 @@ interface InventoryFormModalProps {
 const categories = ['Materials', 'Supplies', 'Anesthetics', 'Instruments', 'Equipment', 'Medications'];
 
 export function InventoryFormModal({ open, onOpenChange, editingItem }: InventoryFormModalProps) {
-    const { inventory, setInventory, isOnline, addItem, licenseDaysLeft } = useData();
+    const { inventory, setInventory, isOnline, addItem, updateLocal, licenseDaysLeft } = useData();
     const [item, setItem] = useState<{
         id?: string;
         name: string;
@@ -119,7 +119,11 @@ export function InventoryFormModal({ open, onOpenChange, editingItem }: Inventor
         console.log("Saving Item:", itemToSave);
 
         try {
-            await addItem('inventory', itemToSave);
+            if (editingItem) {
+                await updateLocal('inventory', itemToSave);
+            } else {
+                await addItem('inventory', itemToSave);
+            }
             onOpenChange(false);
             toast.success(editingItem ? "Item updated successfully" : "Item added successfully");
         } catch (error) {

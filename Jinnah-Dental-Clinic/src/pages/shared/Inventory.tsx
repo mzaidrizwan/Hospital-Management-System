@@ -73,8 +73,12 @@ export default function SharedInventory() {
     // Purchase Edit states
     const [isEditPurchaseDialogOpen, setIsEditPurchaseDialogOpen] = useState(false);
     const [editingPurchase, setEditingPurchase] = useState<any>(null);
-    const [editPurchaseQuantity, setEditPurchaseQuantity] = useState(1);
+    const [editPurchaseQuantity, setEditPurchaseQuantity] = useState(0);
     const [editPurchasePrice, setEditPurchasePrice] = useState(0);
+
+    const [isEditSaleDialogOpen, setIsEditSaleDialogOpen] = useState(false);
+    const [editingSale, setEditingSale] = useState<any>(null);
+    const [editSaleQuantity, setEditSaleQuantity] = useState(1);
     const [isProcessingPurchaseEdit, setIsProcessingPurchaseEdit] = useState(false);
 
     // Sale specific states
@@ -89,7 +93,7 @@ export default function SharedInventory() {
         id: string;
         title: string;
         description: React.ReactNode;
-        type: 'item' | 'purchase';
+        type: 'item' | 'purchase' | 'sale';
     } | null>(null);
 
     // Filtered logic
@@ -157,6 +161,9 @@ export default function SharedInventory() {
                 setInventory(prev => prev.filter(i => i.id !== deleteConfig.id));
                 smartDelete('inventory', deleteConfig.id);
                 toast.success("Item removed");
+            } else if (deleteConfig.type === 'sale') {
+                await deleteLocal('sales', deleteConfig.id);
+                toast.success("Sale record voided and stock adjusted");
             } else {
                 await deleteLocal('purchases', deleteConfig.id);
                 toast.success("Purchase record voided and stock adjusted");
@@ -174,8 +181,52 @@ export default function SharedInventory() {
     const handleSellItem = (item: any) => {
         setSelectedItemForSale(item);
         setSaleQuantity(1);
-        setSaleNotes('');
+        setIsProcessingSale(false);
         setIsSellDialogOpen(true);
+    };
+
+    const handleEditSale = (sale: any) => {
+        setEditingSale(sale);
+        setEditSaleQuantity(sale.quantity);
+        setIsEditSaleDialogOpen(true);
+    };
+
+    const handleConfirmEditSale = async () => {
+        if (!editingSale) return;
+        try {
+            setIsProcessingSale(true);
+            const updatedSale = {
+                ...editingSale,
+                quantity: editSaleQuantity,
+                total: editSaleQuantity * (editingSale.price || editingSale.sellingPrice || 0),
+                updatedAt: new Date().toISOString()
+            };
+            await updateLocal('sales', updatedSale);
+            toast.success("Sale record updated and stock adjusted");
+            setIsEditSaleDialogOpen(false);
+        } catch (err) {
+            toast.error("Failed to update record");
+        } finally {
+            setIsProcessingSale(false);
+        }
+    };
+
+    const handleDeleteSale = (id: string) => {
+        const sale = contextSales?.find(s => s && s.id === id);
+        setDeleteConfig({
+            id,
+            type: 'sale',
+            title: "Void Sale Record?",
+            description: (
+                <div className="space-y-2">
+                    <p>Are you sure you want to void this usage record for <strong>{sale?.itemName || 'this item'}</strong>?</p>
+                    <p className="text-sm bg-amber-50 text-amber-800 p-2 rounded border border-amber-200">
+                        This will automatically return <strong>{sale?.quantity || 0} units</strong> back to the stock level and remove the transaction from financial records.
+                    </p>
+                </div>
+            )
+        });
+        setShowDeleteConfirm(true);
     };
 
     const handleConfirmSale = async () => {
@@ -434,6 +485,7 @@ export default function SharedInventory() {
                                         <TableHead className="text-right font-bold">Total</TableHead>
                                         {isAdmin && <TableHead className="text-right font-bold text-emerald-600">Profit</TableHead>}
                                         <TableHead className="text-right font-bold">By</TableHead>
+                                        <TableHead className="text-right font-bold">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -441,7 +493,7 @@ export default function SharedInventory() {
                                         <TableRow><TableCell colSpan={isAdmin ? 6 : 5} className="text-center py-10 opacity-30">No usage recorded</TableCell></TableRow>
                                     ) : (
                                         sortedSales.map((s) => (
-                                            <TableRow key={s.id}>
+                                            <TableRow key={s.id} className="group hover:bg-muted/5 transition-colors">
                                                 <TableCell className="text-xs text-muted-foreground">{format(new Date(s.date), 'MMM dd, HH:mm')}</TableCell>
                                                 <TableCell className="font-bold">{s.itemName}</TableCell>
                                                 <TableCell className="text-center">{s.quantity}</TableCell>
@@ -452,6 +504,16 @@ export default function SharedInventory() {
                                                     </TableCell>
                                                 )}
                                                 <TableCell className="text-right text-xs uppercase font-bold text-muted-foreground">{s.soldBy}</TableCell>
+                                                <TableCell className="text-right">
+                                                    <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-all">
+                                                        <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={() => handleEditSale(s)}>
+                                                            <Edit className="w-3 h-3" />
+                                                        </Button>
+                                                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => handleDeleteSale(s.id)}>
+                                                            <Trash2 className="w-3 h-3" />
+                                                        </Button>
+                                                    </div>
+                                                </TableCell>
                                             </TableRow>
                                         ))
                                     )}
@@ -593,6 +655,43 @@ export default function SharedInventory() {
                                 <Button variant="ghost" onClick={() => setIsEditPurchaseDialogOpen(false)}>Cancel</Button>
                                 <Button onClick={handleConfirmPurchaseEdit} disabled={isProcessingPurchaseEdit} className="font-bold shadow-md shadow-primary/20">
                                     {isProcessingPurchaseEdit ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />} Save Changes
+                                </Button>
+                            </DialogFooter>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={isEditSaleDialogOpen} onOpenChange={setIsEditSaleDialogOpen}>
+                <DialogContent className="max-w-md rounded-2xl">
+                    <DialogHeader>
+                        <DialogTitle className="text-xl font-black">Edit Sale Record</DialogTitle>
+                    </DialogHeader>
+                    {editingSale && (
+                        <div className="space-y-4 py-4">
+                            <div className="bg-muted p-4 rounded-xl">
+                                <span className="text-sm font-bold uppercase text-muted-foreground block mb-1">Item</span>
+                                <span className="text-lg font-black">{editingSale.itemName}</span>
+                            </div>
+                            
+                            <div className="space-y-1.5">
+                                <Label className="text-xs font-bold uppercase text-muted-foreground">Correct Quantity Sold</Label>
+                                <Input 
+                                    type="number" 
+                                    value={editSaleQuantity} 
+                                    onChange={(e) => setEditSaleQuantity(parseInt(e.target.value) || 0)} 
+                                    className="h-12 text-lg font-black" 
+                                />
+                            </div>
+
+                            <p className="text-xs text-muted-foreground italic">
+                                * Adjusting this will automatically update the Item's Stock Status and Financial reports.
+                            </p>
+
+                            <DialogFooter className="gap-2">
+                                <Button variant="ghost" onClick={() => setIsEditSaleDialogOpen(false)}>Cancel</Button>
+                                <Button onClick={handleConfirmEditSale} disabled={isProcessingSale} className="font-bold shadow-md shadow-emerald-500/20">
+                                    {isProcessingSale ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />} Save Changes
                                 </Button>
                             </DialogFooter>
                         </div>

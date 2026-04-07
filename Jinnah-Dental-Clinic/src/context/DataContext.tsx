@@ -505,6 +505,40 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
             // Inventory specific sanitization
             if (collectionName === 'inventory') {
+                const oldItem = (inventory || []).find(i => i.id === enrichedData.id);
+                if (oldItem) {
+                    const oldPrice = Number(oldItem.buyingPrice) || 0;
+                    const newPrice = Number(enrichedData.buyingPrice) || 0;
+                    const oldQty = Number(oldItem.quantity) || 0;
+                    const newQty = Number(enrichedData.quantity) || 0;
+
+                    if (oldPrice !== newPrice || oldQty !== newQty) {
+                        console.log(`[updateLocal] Inventory item ${enrichedData.name} updated (Price ${oldPrice}->${newPrice}, Qty ${oldQty}->${newQty}). Cascading to procurement records...`);
+                        
+                        // Find the related purchase(s)
+                        const relatedPurchases = (purchases || []).filter(p => p.itemId === enrichedData.id);
+                        
+                        // If there is exactly one purchase (common case for new items), update it
+                        if (relatedPurchases.length === 1) {
+                            const mainPurchase = relatedPurchases[0];
+                            const updatedPurchase = {
+                                ...mainPurchase,
+                                quantity: newQty,
+                                buyingPrice: newPrice,
+                                totalCost: newQty * newPrice,
+                                updatedAt: new Date().toISOString()
+                            };
+                            
+                            // Important: Calling updateLocal recursively for purchases to trigger its own cascade to expenses
+                            await updateLocal('purchases', updatedPurchase);
+                        } else if (relatedPurchases.length > 1) {
+                            // If multiple purchases exist, we update the latest one's price/qty if it matches the old state
+                            // Note: This is an advanced case, but keeping it robust.
+                            console.warn("[updateLocal] Multiple purchases found for item. Cascading logic skipped to avoid ambiguous record updates.");
+                        }
+                    }
+                }
+                
                 enrichedData = {
                     ...enrichedData,
                     buyingPrice: Number(enrichedData.buyingPrice) || 0,
@@ -686,6 +720,37 @@ export function DataProvider({ children }: { children: ReactNode }) {
                                 await dbManager.saveToLocal('transactions', updatedTxn);
                                 setTransactions(prev => prev.map(t => t.id === updatedTxn.id ? updatedTxn : t));
                                 backgroundFirebaseSync('transactions', updatedTxn);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // NEW: SPECIAL CASCADE FOR SALE UPDATES
+            if (collectionName === 'sales' && enrichedData.id) {
+                const oldSale = (sales || []).find(s => s.id === enrichedData.id);
+                if (oldSale) {
+                    const oldUnits = Number(oldSale.quantity) || 0;
+                    const newUnits = Number(enrichedData.quantity) || 0;
+                    const unitDiff = newUnits - oldUnits;
+
+                    if (unitDiff !== 0) {
+                        console.log(`[updateLocal] Sale adjusted. UnitDiff: ${unitDiff}. Correcting inventory stock...`);
+                        
+                        const invItemId = enrichedData.itemId || oldSale.itemId;
+                        if (invItemId) {
+                            const invItem = (inventory || []).find(i => i.id === invItemId);
+                            if (invItem) {
+                                // If unitDiff is positive (sold more), subtract from stock. 
+                                // If negative (sold less), add back to stock.
+                                const updatedInv = {
+                                    ...invItem,
+                                    quantity: Math.max(0, (invItem.quantity || 0) - unitDiff),
+                                    updatedAt: new Date().toISOString()
+                                };
+                                await dbManager.saveToLocal('inventory', updatedInv);
+                                setInventory(prev => prev.map(i => i.id === updatedInv.id ? updatedInv : i));
+                                backgroundFirebaseSync('inventory', updatedInv);
                             }
                         }
                     }
@@ -1020,11 +1085,25 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             );
 
                             if (otherPurchases.length === 0 && newQuantity === 0) {
-                                console.log(`[deleteLocal] Deleting entire inventory item as this was its only purchase.`);
+                                console.log(`[deleteLocal] Deleting entire inventory item and sales history as this was its only purchase.`);
+                                
+                                // A. Delete the item
                                 await dbManager.deleteFromLocal('inventory', invItemId);
                                 setInventory(prev => prev.filter(i => i.id !== invItemId));
                                 backgroundFirebaseSync('inventory', { id: invItemId, _deleted: true });
+
+                                // B. Delete ALL sales history for this item
+                                const itemSales = (sales || []).filter(s => s.itemId === invItemId);
+                                if (itemSales.length > 0) {
+                                    console.log(`[deleteLocal] Wiping ${itemSales.length} sales records for item ${invItemId}`);
+                                    for (const sale of itemSales) {
+                                        await dbManager.deleteFromLocal('sales', sale.id);
+                                        backgroundFirebaseSync('sales', { id: sale.id, _deleted: true });
+                                    }
+                                    setSales(prev => prev.filter(s => s.itemId !== invItemId));
+                                }
                             } else {
+                                // Just update quantity
                                 const updatedInv = {
                                     ...invItem,
                                     quantity: newQuantity,
@@ -1124,6 +1203,31 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }
             }
 
+            // NEW: SPECIAL CASCADE FOR SALE DELETIONS
+            if (collectionName === 'sales') {
+                const saleToDelete = (sales || []).find(s => s.id === id);
+                if (saleToDelete) {
+                    console.log(`[deleteLocal] Cascading for Voided Sale:`, id);
+                    const invItemId = saleToDelete.itemId;
+                    const units = Number(saleToDelete.quantity) || 0;
+
+                    // 1. Revert Inventory quantity (add back to stock)
+                    if (invItemId) {
+                        const invItem = (inventory || []).find(i => i.id === invItemId);
+                        if (invItem) {
+                            const updatedInv = {
+                                ...invItem,
+                                quantity: (invItem.quantity || 0) + units,
+                                updatedAt: new Date().toISOString()
+                            };
+                            await dbManager.saveToLocal('inventory', updatedInv);
+                            setInventory(prev => prev.map(i => i.id === updatedInv.id ? updatedInv : i));
+                            backgroundFirebaseSync('inventory', updatedInv);
+                        }
+                    }
+                }
+            }
+
             // 1. STEP 1: Update React State immediately (Fast)
             const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
             if (setter) {
@@ -1169,11 +1273,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }
             }
 
+            // NEW: Check if item already exists to prevent duplicate auto-expenses on edits
+            const isNewItem = collectionName === 'inventory' 
+                ? !(inventory || []).some(i => i.id === newItem.id)
+                : true;
+
             // --- THE STRICT PATTERN via updateLocal ---
             const result = await updateLocal(collectionName, newItem);
 
-            // AUTO-EXPENSE LOGIC: Trigger an expense record for inventory purchases
-            if (collectionName === 'inventory') {
+            // AUTO-EXPENSE LOGIC: Trigger an expense record for NEW inventory additions only
+            if (collectionName === 'inventory' && isNewItem) {
                 const buyingPrice = Number(result.buyingPrice || 0);
                 const quantity = Number(result.quantity || 0);
                 const totalExpense = buyingPrice * quantity;
