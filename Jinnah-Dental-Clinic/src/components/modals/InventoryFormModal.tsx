@@ -19,7 +19,7 @@ interface InventoryFormModalProps {
     editingItem?: any;
 }
 
-const categories = ['Materials', 'Supplies', 'Anesthetics', 'Instruments', 'Equipment', 'Medications'];
+const categories = ['Materials', 'Supplies', 'Anesthetics', 'Instruments', 'Equipment', 'Medications', 'Other'];
 
 export function InventoryFormModal({ open, onOpenChange, editingItem }: InventoryFormModalProps) {
     const { inventory, setInventory, isOnline, addItem, updateLocal, licenseDaysLeft } = useData();

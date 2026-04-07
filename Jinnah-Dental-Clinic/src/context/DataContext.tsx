@@ -490,7 +490,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 id: data.id || (collectionName === 'clinicSettings' ? 'clinic-settings' : `${collectionName.slice(0, 3).toUpperCase()}-${Date.now()}`),
                 createdAt: data.createdAt || new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
-                lastUpdated: Date.now()
+                lastUpdated: Date.now(),
+                needsSync: true // CRITICAL: Mark as dirty immediately to prevent cloud overwrite
             };
 
             // Staff specific defaults and validation
@@ -660,12 +661,29 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             if (invItem) {
                                 let updatedInv = { ...invItem };
                                 
-                                if (unitDiff !== 0) {
-                                    updatedInv.quantity = Math.max(0, (invItem.quantity || 0) + unitDiff);
+                                // Update Layers (FIFO)
+                                let updatedLayers = Array.isArray(invItem.stockLayers) ? [...invItem.stockLayers] : [];
+                                const layerIndex = updatedLayers.findIndex((l: any) => l.purchaseId === enrichedData.id);
+                                
+                                if (layerIndex !== -1) {
+                                    updatedLayers[layerIndex] = {
+                                        ...updatedLayers[layerIndex],
+                                        quantity: Math.max(0, (Number(updatedLayers[layerIndex].quantity) || 0) + unitDiff),
+                                        buyingPrice: newBuyPrice
+                                    };
+                                } else {
+                                     // Fallback for older items without explicit layers
+                                     updatedInv.buyingPrice = newBuyPrice;
                                 }
+
+                                const activeLayer = updatedLayers.find((l: any) => l.quantity > 0) || updatedLayers[updatedLayers.length - 1];
+
+                                updatedInv.stockLayers = updatedLayers;
+                                updatedInv.quantity = Math.max(0, (Number(invItem.quantity) || 0) + unitDiff);
+                                updatedInv.buyingPrice = activeLayer?.buyingPrice || newBuyPrice;
+                                updatedInv.sellingPrice = activeLayer?.sellingPrice || invItem.sellingPrice;
                                 
                                 if (priceChanged) {
-                                    updatedInv.buyingPrice = newBuyPrice;
                                     
                                     // Cascade price change to Sales History (Profit calculation)
                                     const relatedSales = (sales || []).filter(s => s.itemId === invItemId);
@@ -1228,6 +1246,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }
             }
 
+            // ✅ STEP 0: Track deletion globally to prevent "undead" records via sync
+            const recentlyDeleted = JSON.parse(localStorage.getItem('recently_deleted_ids') || '[]');
+            if (!recentlyDeleted.includes(id)) {
+                recentlyDeleted.push(id);
+                // Keep the list manageable (last 500 deletions)
+                if (recentlyDeleted.length > 500) recentlyDeleted.shift();
+                localStorage.setItem('recently_deleted_ids', JSON.stringify(recentlyDeleted));
+            }
+
             // 1. STEP 1: Update React State immediately (Fast)
             const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
             if (setter) {
@@ -1281,41 +1308,76 @@ export function DataProvider({ children }: { children: ReactNode }) {
             // --- THE STRICT PATTERN via updateLocal ---
             const result = await updateLocal(collectionName, newItem);
 
-            // AUTO-EXPENSE LOGIC: Trigger an expense record for NEW inventory additions only
-            if (collectionName === 'inventory' && isNewItem) {
-                const buyingPrice = Number(result.buyingPrice || 0);
-                const quantity = Number(result.quantity || 0);
-                const totalExpense = buyingPrice * quantity;
+            // NEW: AUTO-TRIGGER FOR INVENTORY RESTOCKING VIA EXPENSES
+            if (collectionName === 'expenses' && newItem.category === 'inventory' && newItem.inventoryItemId) {
+                console.log(`[addItem] Auto-triggering inventory update for re-stock expense of: ${newItem.title}`);
+                const invItemId = newItem.inventoryItemId;
+                const unitsToAdd = Number(newItem.units) || 0;
+                const buyPrice = Number(newItem.unitPrice) || 0;
+                const sellPrice = Number(newItem.sellingPrice || newItem.unitPrice * 1.2); // Fallback margin
 
-                if (totalExpense > 0) {
-                    console.log(`[addItem] Auto-triggering records for inventory purchase: ${totalExpense}`);
-
-                    // 1. Create specialized purchase record
-                    const purchaseRecord = {
-                        id: `pur-${Date.now()}`,
-                        itemId: result.id,
-                        name: result.name,
-                        quantity: quantity,
-                        buyingPrice: buyingPrice,
-                        totalCost: totalExpense,
-                        date: new Date().toISOString()
+                const invItem = (inventory || []).find(i => i.id === invItemId);
+                if (invItem && unitsToAdd > 0) {
+                    // 1. Ensure Purchase Record link exists
+                    let purchaseId = newItem.purchaseId;
+                    if (!purchaseId) {
+                        const purchaseRecord = {
+                            id: `pur-${Date.now()}`,
+                            itemId: invItem.id,
+                            name: invItem.name,
+                            quantity: unitsToAdd,
+                            buyingPrice: buyPrice,
+                            totalCost: unitsToAdd * buyPrice,
+                            date: newItem.date || new Date().toISOString()
+                        };
+                        await updateLocal('purchases', purchaseRecord);
+                        purchaseId = purchaseRecord.id;
+                        result.purchaseId = purchaseId;
+                        await dbManager.saveToLocal('expenses', result);
+                    }
+                    // Create New Stock Layer (Batch)
+                    const newLayer = {
+                        id: `layer-${Date.now()}`,
+                        purchaseId: purchaseId, // LINK!
+                        quantity: unitsToAdd,
+                        buyingPrice: buyPrice,
+                        sellingPrice: sellPrice,
+                        date: newItem.date || new Date().toISOString()
                     };
-                    await updateLocal('purchases', purchaseRecord);
 
-                    // 2. Create the general expense with a direct link to the purchase
-                    await addItem('expenses', {
-                        title: `Stock Purchase: ${result.name}`,
-                        amount: totalExpense,
-                        category: "inventory",
-                        date: new Date().toISOString(),
-                        description: `Automatically created from inventory addition: ${result.name}`,
-                        inventoryItemId: result.id,
-                        purchaseId: purchaseRecord.id, // CRITICAL: Store the link
-                        units: quantity,
-                        unitPrice: buyingPrice,
-                        status: 'paid',
-                        paymentMethod: 'cash'
-                    });
+                    const currentLayers = Array.isArray(invItem.stockLayers) ? invItem.stockLayers : [];
+                    
+                    // If old system had quantity but no layers, create a legacy layer
+                    if (currentLayers.length === 0 && (Number(invItem.quantity) || 0) > 0) {
+                        currentLayers.push({
+                            id: 'legacy-layer',
+                            quantity: Number(invItem.quantity) || 0,
+                            buyingPrice: Number(invItem.buyingPrice) || 0,
+                            sellingPrice: Number(invItem.sellingPrice || invItem.price) || 0,
+                            date: invItem.createdAt || new Date().toISOString()
+                        });
+                    }
+
+                    const updatedLayers = [...currentLayers, newLayer];
+                    
+                    // The main Display Prices for the Inventory object should always reflect 
+                    // the layer currently being sold (the oldest one with quantity > 0)
+                    const activeLayer = updatedLayers.find(l => l.quantity > 0) || newLayer;
+
+                    // Update Inventory
+                    const updatedInv = {
+                        ...invItem,
+                        quantity: (Number(invItem.quantity) || 0) + unitsToAdd,
+                        stockLayers: updatedLayers,
+                        // Active Display Prices (for Stock Table & Initial Sale value)
+                        buyingPrice: activeLayer.buyingPrice,
+                        sellingPrice: activeLayer.sellingPrice,
+                        updatedAt: new Date().toISOString()
+                    };
+                    
+                    await dbManager.saveToLocal('inventory', updatedInv);
+                    setInventory(prev => prev.map(i => i.id === updatedInv.id ? updatedInv : i));
+                    backgroundFirebaseSync('inventory', updatedInv);
                 }
             }
 
@@ -2272,13 +2334,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
             // Get deleted patients from localStorage
             const deletedPatients = JSON.parse(localStorage.getItem('deleted_patients') || '[]');
 
-            // ✅ FILTER OUT DELETED PATIENTS from remote data
+            // ✅ NEW: GLOBAL DELETION FILTER
+            const recentlyDeleted = JSON.parse(localStorage.getItem('recently_deleted_ids') || '[]');
+            
             let filteredRemoteData = remoteData;
-            if (collectionName === 'patients' && deletedPatients.length > 0) {
-                filteredRemoteData = remoteData.filter(p => !deletedPatients.includes(p.id));
-                if (remoteData.length !== filteredRemoteData.length) {
-                    console.log(`[handleFirebaseUpdate] Filtered out ${remoteData.length - filteredRemoteData.length} deleted patients from ${collectionName}`);
-                }
+            
+            // Filter by BOTH specific patient list and generic list
+            filteredRemoteData = remoteData.filter(d => 
+                !recentlyDeleted.includes(d.id) && 
+                !(collectionName === 'patients' && deletedPatients.includes(d.id))
+            );
+
+            if (remoteData.length !== filteredRemoteData.length) {
+                console.log(`[handleFirebaseUpdate] Filtered out ${remoteData.length - filteredRemoteData.length} records from ${collectionName} (recently deleted).`);
             }
 
             // FIX: Handle empty remote data (collection cleared in cloud)

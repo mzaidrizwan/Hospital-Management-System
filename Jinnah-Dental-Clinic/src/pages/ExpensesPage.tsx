@@ -519,6 +519,20 @@ export default function ExpensesPage() {
                             className="bg-transparent text-sm border-none focus:ring-0 cursor-pointer"
                         />
                     </div>
+
+                    <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="h-9 px-3 text-[11px] font-black uppercase text-blue-600 hover:bg-blue-50 border-blue-200 rounded-lg shadow-sm"
+                        onClick={() => {
+                            const today = new Date().toISOString().split('T')[0];
+                            setStartDate(today);
+                            setEndDate(today);
+                            setCurrentPage(1);
+                        }}
+                    >
+                        Today
+                    </Button>
                 </div>
             </div>
 

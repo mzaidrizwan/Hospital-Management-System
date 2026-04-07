@@ -36,25 +36,29 @@ import { format } from 'date-fns';
 import { InventoryFormModal } from '@/components/modals/InventoryFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
+import { RestockModal } from '@/components/modals/RestockModal';
 import { toast } from 'sonner';
 import { smartSync, smartDelete } from '@/services/syncService';
 // import { deleteFromLocal } from '@/services/expireindexedDbUtils_OLDs';
 import { dbManager, STORE_CONFIGS, getKeyPath } from '@/lib/indexedDB';
 
-const categories = ['Materials', 'Supplies', 'Anesthetics', 'Instruments', 'Equipment', 'Medications'];
+const categories = ['Materials', 'Supplies', 'Anesthetics', 'Instruments', 'Equipment', 'Medications', 'Other'];
 
 export default function SharedInventory() {
     const {
         inventory: contextInventory,
         sales: contextSales,
         purchases,
+        expenses: contextExpenses,
         loading: dataLoading,
         setInventory,
         setSales,
         setPurchases,
+        setExpenses,
         updateLocal,
         deleteLocal,
-        exportToCSV
+        exportToCSV,
+        addItem
     } = useData();
     const { user } = useAuth();
     const isAdmin = user?.role === 'admin';
@@ -67,6 +71,8 @@ export default function SharedInventory() {
     const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
     const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
     const [editingItem, setEditingItem] = useState<any>(null);
+    const [isRestockDialogOpen, setIsRestockDialogOpen] = useState(false);
+    const [restockItem, setRestockItem] = useState<any>(null);
     const [isSellDialogOpen, setIsSellDialogOpen] = useState(false);
     const [selectedItemForSale, setSelectedItemForSale] = useState<any>(null);
 
@@ -96,6 +102,12 @@ export default function SharedInventory() {
         type: 'item' | 'purchase' | 'sale';
     } | null>(null);
 
+    // Date filtering states
+    const [salesStartDate, setSalesStartDate] = useState('');
+    const [salesEndDate, setSalesEndDate] = useState('');
+    const [purchaseStartDate, setPurchaseStartDate] = useState('');
+    const [purchaseEndDate, setPurchaseEndDate] = useState('');
+
     // Filtered logic
     const filteredInventory = useMemo(() => {
         return (contextInventory || []).filter(item => {
@@ -108,20 +120,48 @@ export default function SharedInventory() {
     }, [contextInventory, searchTerm, setSelectedCategory]);
 
     const sortedSales = useMemo(() => {
-        return [...(contextSales || [])]
-            .filter(s => s && s.itemName && !isNaN(Number(s.total)))
-            .sort((a, b) =>
-                new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
-            );
-    }, [contextSales]);
+        let filtered = [...(contextSales || [])].filter(s => s && s.itemName && !isNaN(Number(s.total)));
+        
+        if (salesStartDate) {
+            const start = new Date(salesStartDate);
+            start.setHours(0, 0, 0, 0);
+            filtered = filtered.filter(s => new Date(s.date).getTime() >= start.getTime());
+        }
+        
+        if (salesEndDate) {
+            const end = new Date(salesEndDate);
+            end.setHours(23, 59, 59, 999);
+            filtered = filtered.filter(s => new Date(s.date).getTime() <= end.getTime());
+        }
+
+        return filtered.sort((a, b) =>
+            new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+        );
+    }, [contextSales, salesStartDate, salesEndDate]);
 
     const sortedPurchases = useMemo(() => {
-        return [...(purchases || [])]
-            .filter(p => p && (p.name || p.title) && !isNaN(Number(p.totalCost || p.amount)))
-            .sort((a, b) =>
-                new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
-            );
-    }, [purchases]);
+        // DERIVE FROM EXPENSES to ensure perfect synchronization between Inventory and Finance tabs
+        // as requested by the user.
+        const inventoryExpenses = (contextExpenses || []).filter(e => e.category === 'inventory');
+        
+        let filtered = [...inventoryExpenses];
+        
+        if (purchaseStartDate) {
+            const start = new Date(purchaseStartDate);
+            start.setHours(0, 0, 0, 0);
+            filtered = filtered.filter(p => new Date(p.date || Date.now()).getTime() >= start.getTime());
+        }
+        
+        if (purchaseEndDate) {
+            const end = new Date(purchaseEndDate);
+            end.setHours(23, 59, 59, 999);
+            filtered = filtered.filter(p => new Date(p.date || Date.now()).getTime() <= end.getTime());
+        }
+
+        return filtered.sort((a, b) =>
+            new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+        );
+    }, [contextExpenses, purchaseStartDate, purchaseEndDate]);
 
     const lowStockItems = useMemo(() => {
         return (contextInventory || []).filter(item => item && Number(item.quantity || 0) < Number(item.min || 0));
@@ -138,6 +178,36 @@ export default function SharedInventory() {
     const handleEditItem = (item: any) => {
         setEditingItem(item);
         setIsEditDialogOpen(true);
+    };
+
+    const handleRestockItem = (item: any) => {
+        setRestockItem(item);
+        setIsRestockDialogOpen(true);
+    };
+
+    const handleProcessRestock = async (buyData: any) => {
+        if (!restockItem) return;
+
+        try {
+            await addItem('expenses', {
+                title: `Stock Purchase: ${restockItem.name}`,
+                amount: buyData.totalCost,
+                category: 'inventory',
+                date: buyData.date,
+                description: `Manual restock for item: ${restockItem.name}`,
+                inventoryItemId: restockItem.id,
+                units: buyData.quantity,
+                unitPrice: buyData.unitPrice,
+                sellingPrice: buyData.sellingPrice,
+                paymentMethod: buyData.paymentMethod,
+                status: 'paid'
+            });
+            setIsRestockDialogOpen(false);
+            setRestockItem(null);
+        } catch (err) {
+            console.error('Restock failed:', err);
+            throw err;
+        }
     };
 
     const handleDeleteItem = (id: string) => {
@@ -164,6 +234,10 @@ export default function SharedInventory() {
             } else if (deleteConfig.type === 'sale') {
                 await deleteLocal('sales', deleteConfig.id);
                 toast.success("Sale record voided and stock adjusted");
+            } else if (deleteConfig.type === 'purchase') {
+                // If it's a purchase derived from expense, delete the expense
+                await deleteLocal('expenses', deleteConfig.id);
+                toast.success("Purchase record and linked expense removed");
             } else {
                 await deleteLocal('purchases', deleteConfig.id);
                 toast.success("Purchase record voided and stock adjusted");
@@ -232,45 +306,82 @@ export default function SharedInventory() {
     const handleConfirmSale = async () => {
         if (!selectedItemForSale) return;
 
-        const qty = parseInt(saleQuantity.toString()) || 1;
-        if (qty <= 0 || qty > selectedItemForSale.quantity) {
+        const totalQtyToSell = parseInt(saleQuantity.toString()) || 1;
+        if (totalQtyToSell <= 0 || totalQtyToSell > (selectedItemForSale.quantity || 0)) {
             toast.error("Invalid quantity");
             return;
         }
 
         setIsProcessingSale(true);
-        const saleRecord = {
-            id: `sale-${Date.now()}`,
-            itemId: selectedItemForSale.id,
-            itemName: selectedItemForSale.name,
-            sku: selectedItemForSale.sku,
-            quantity: qty,
-            buyingPrice: selectedItemForSale.buyingPrice || 0,
-            sellingPrice: selectedItemForSale.sellingPrice || selectedItemForSale.price || 0,
-            price: selectedItemForSale.sellingPrice || selectedItemForSale.price || 0,
-            total: (selectedItemForSale.sellingPrice || selectedItemForSale.price || 0) * qty,
-            date: new Date().toISOString(),
-            notes: saleNotes,
-            soldBy: isAdmin ? "Admin" : "Operator"
-        };
-
-        const updatedItem = {
-            ...selectedItemForSale,
-            quantity: selectedItemForSale.quantity - qty
-        };
 
         try {
+            // FIFO Logic: Use Stock Layers to calculate exact prices & costs
+            const layers = Array.isArray(selectedItemForSale.stockLayers) 
+                ? JSON.parse(JSON.stringify(selectedItemForSale.stockLayers)) 
+                : [{
+                    id: 'legacy-layer',
+                    quantity: selectedItemForSale.quantity || 0,
+                    buyingPrice: selectedItemForSale.buyingPrice || 0,
+                    sellingPrice: selectedItemForSale.sellingPrice || selectedItemForSale.price || 0
+                  }];
+
+            let remainingToSell = totalQtyToSell;
+            let calculatedTotalSaleAmount = 0;
+            let calculatedTotalBuyingCost = 0;
+            
+            for (let i = 0; i < layers.length; i++) {
+                if (remainingToSell <= 0) break;
+                if (layers[i].quantity <= 0) continue;
+
+                const consume = Math.min(layers[i].quantity, remainingToSell);
+                calculatedTotalSaleAmount += (consume * (layers[i].sellingPrice || 0));
+                calculatedTotalBuyingCost += (consume * (layers[i].buyingPrice || 0));
+                
+                layers[i].quantity -= consume;
+                remainingToSell -= consume;
+            }
+
+            // Determine new principal display prices for the Inventory (from the NEXT active layer)
+            const nextActiveLayer = layers.find((l: any) => l.quantity > 0) || layers[layers.length - 1];
+
+            const saleRecord = {
+                id: `sale-${Date.now()}`,
+                itemId: selectedItemForSale.id,
+                itemName: selectedItemForSale.name,
+                sku: selectedItemForSale.sku,
+                quantity: totalQtyToSell,
+                // Calculated averages for this specific sale (for history display)
+                buyingPrice: calculatedTotalBuyingCost / totalQtyToSell,
+                sellingPrice: calculatedTotalSaleAmount / totalQtyToSell,
+                price: calculatedTotalSaleAmount / totalQtyToSell,
+                total: calculatedTotalSaleAmount,
+                date: new Date().toISOString(),
+                notes: saleNotes,
+                soldBy: isAdmin ? "Admin" : "Operator"
+            };
+
+            const updatedItem = {
+                ...selectedItemForSale,
+                quantity: (selectedItemForSale.quantity || 0) - totalQtyToSell,
+                stockLayers: layers,
+                buyingPrice: nextActiveLayer?.buyingPrice || 0,
+                sellingPrice: nextActiveLayer?.sellingPrice || 0,
+                updatedAt: new Date().toISOString()
+            };
+
             setIsSellDialogOpen(false);
 
             await Promise.all([
                 updateLocal('inventory', updatedItem),
-                updateLocal('sales', saleRecord)
+                addItem('sales', saleRecord)
             ]);
 
-            toast.success("Sale registered");
+            toast.success(`Sold ${totalQtyToSell} units for Rs. ${calculatedTotalSaleAmount}`);
+            setSaleNotes('');
+            setSaleQuantity(1);
         } catch (err) {
-            console.error('Sale operation failed:', err);
-            toast.error("Sale failed");
+            console.error('Sale failed:', err);
+            toast.error("Failed to process transaction");
         } finally {
             setIsProcessingSale(false);
             setSelectedItemForSale(null);
@@ -280,8 +391,8 @@ export default function SharedInventory() {
     // Purchase Handlers
     const handleEditPurchase = (purchase: any) => {
         setEditingPurchase(purchase);
-        setEditPurchaseQuantity(purchase.quantity);
-        setEditPurchasePrice(purchase.buyingPrice);
+        setEditPurchaseQuantity(Number(purchase.units || purchase.quantity || 0));
+        setEditPurchasePrice(Number(purchase.unitPrice || purchase.buyingPrice || 0));
         setIsEditPurchaseDialogOpen(true);
     };
 
@@ -311,15 +422,16 @@ export default function SharedInventory() {
     };
 
     const handleDeletePurchase = (id: string) => {
-        const purchase = purchases?.find(p => p && p.id === id);
+        // Now id refers to the expense ID or purchase ID
+        const purchase = sortedPurchases.find(p => p && p.id === id);
         setDeleteConfig({
             id,
             type: 'purchase',
             title: "Void Purchase Record?",
             description: (
                 <div className="space-y-2">
-                    <p>Are you sure you want to void the purchase for <span className="font-bold text-red-600">"{purchase?.name || purchase?.title || 'this item'}"</span>?</p>
-                    <p className="text-sm text-gray-500 italic">This will automatically revert the stock addition from your inventory status.</p>
+                    <p>Are you sure you want to void this procurement record for <span className="font-bold">"{purchase?.title || (purchase as any)?.name || 'this item'}"</span>?</p>
+                    <p className="text-destructive font-bold text-xs uppercase">This will also delete the linked expense entry from the finances tab.</p>
                 </div>
             )
         });
@@ -448,6 +560,13 @@ export default function SharedInventory() {
                                                     >
                                                         <Receipt className="w-4 h-4 mr-1" /> Sell
                                                     </Button>
+                                                    <Button
+                                                        variant="ghost" size="sm"
+                                                        className="text-amber-600 h-8"
+                                                        onClick={() => handleRestockItem(item)}
+                                                    >
+                                                        <ShoppingCart className="w-4 h-4 mr-1" /> Buy
+                                                    </Button>
                                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => handleEditItem(item)}>
                                                         <Edit className="w-4 h-4" />
                                                     </Button>
@@ -468,11 +587,76 @@ export default function SharedInventory() {
 
                 {/* Sales History */}
                 <TabsContent value="sales" className="space-y-6">
-                    <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-gray-100">
-                        <h2 className="text-lg font-bold">Usage History</h2>
-                        <Button variant="outline" size="sm" onClick={handleExportSales}>
-                            <Download className="w-4 h-4 mr-2" /> Export
-                        </Button>
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+                        <div className="flex items-center gap-2">
+                            <History className="w-5 h-5 text-primary" />
+                            <h2 className="text-lg font-bold">Usage History</h2>
+                        </div>
+                        
+                        <div className="flex flex-wrap items-center gap-3">
+                            <div className="flex flex-wrap items-center gap-2 bg-muted/40 p-2 rounded-xl border border-gray-100 shadow-inner">
+                                <div className="flex items-center gap-2 px-2">
+                                    <Label className="text-[10px] font-black uppercase text-muted-foreground whitespace-nowrap">From</Label>
+                                    <Input 
+                                        type="date" 
+                                        className="h-9 w-[140px] border-none bg-white shadow-sm px-2 text-xs font-bold rounded-lg focus-visible:ring-1 ring-primary/20" 
+                                        value={salesStartDate}
+                                        onChange={(e) => setSalesStartDate(e.target.value)}
+                                    />
+                                </div>
+                                <div className="hidden sm:block h-5 w-[1px] bg-muted-foreground/20 mx-1" />
+                                <div className="flex items-center gap-2 px-2">
+                                    <Label className="text-[10px] font-black uppercase text-muted-foreground whitespace-nowrap">To</Label>
+                                    <Input 
+                                        type="date" 
+                                        className="h-9 w-[140px] border-none bg-white shadow-sm px-2 text-xs font-bold rounded-lg focus-visible:ring-1 ring-primary/20" 
+                                        value={salesEndDate}
+                                        onChange={(e) => setSalesEndDate(e.target.value)}
+                                    />
+                                </div>
+                                {(salesStartDate || salesEndDate) && (
+                                    <div className="flex items-center gap-1 ml-1 mr-1">
+                                        <Button 
+                                            variant="secondary" 
+                                            size="sm" 
+                                            className="h-7 px-2 text-[10px] font-black uppercase bg-primary text-white hover:bg-primary/90 rounded-lg" 
+                                            onClick={() => { 
+                                                const today = new Date().toISOString().split('T')[0];
+                                                setSalesStartDate(today); 
+                                                setSalesEndDate(today); 
+                                            }}
+                                        >
+                                            Today
+                                        </Button>
+                                        <Button 
+                                            variant="secondary" 
+                                            size="icon" 
+                                            className="h-7 w-7 hover:text-destructive hover:bg-destructive/10 rounded-lg" 
+                                            onClick={() => { setSalesStartDate(''); setSalesEndDate(''); }}
+                                        >
+                                            <X className="w-3 h-3" />
+                                        </Button>
+                                    </div>
+                                )}
+                                {!salesStartDate && !salesEndDate && (
+                                    <Button 
+                                        variant="ghost" 
+                                        size="sm" 
+                                        className="h-7 px-2 text-[10px] font-black uppercase text-primary hover:bg-primary/10 rounded-lg ml-1" 
+                                        onClick={() => { 
+                                            const today = new Date().toISOString().split('T')[0];
+                                            setSalesStartDate(today); 
+                                            setSalesEndDate(today); 
+                                        }}
+                                    >
+                                        Today
+                                    </Button>
+                                )}
+                            </div>
+                            <Button variant="outline" size="sm" onClick={handleExportSales} className="h-10 px-4 font-bold border-gray-200 rounded-xl shadow-sm hover:bg-primary hover:text-white transition-all">
+                                <Download className="w-4 h-4 mr-2" /> Export
+                            </Button>
+                        </div>
                     </div>
                     <Card className="border-none shadow-md overflow-hidden bg-white">
                         <CardContent className="p-0">
@@ -525,13 +709,77 @@ export default function SharedInventory() {
 
                 {/* Purchasing Records */}
                 <TabsContent value="purchases" className="space-y-6">
-                    <div className="flex items-center gap-3 bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
-                        <div className="p-2 bg-primary/10 rounded-lg">
-                            <ShoppingCart className="w-5 h-5 text-primary" />
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2 bg-primary/10 rounded-lg">
+                                <ShoppingCart className="w-5 h-5 text-primary" />
+                            </div>
+                            <div>
+                                <h2 className="text-xl font-bold text-gray-900">Purchasing History</h2>
+                                <p className="text-xs text-muted-foreground font-medium">Detailed procurement log of clinic supplies</p>
+                            </div>
                         </div>
-                        <div>
-                            <h2 className="text-xl font-bold text-gray-900">Purchasing History</h2>
-                            <p className="text-xs text-muted-foreground font-medium">Detailed procurement log of clinic supplies</p>
+
+                        <div className="flex flex-wrap items-center gap-3">
+                            <div className="flex flex-wrap items-center gap-2 bg-muted/40 p-2 rounded-xl border border-gray-100 shadow-inner">
+                                <div className="flex items-center gap-2 px-2">
+                                    <span className="text-[10px] font-black uppercase text-muted-foreground whitespace-nowrap">From</span>
+                                    <Input 
+                                        type="date" 
+                                        className="h-9 w-[140px] border-none bg-white shadow-sm px-2 text-xs font-bold rounded-lg focus-visible:ring-1 ring-primary/20" 
+                                        value={purchaseStartDate}
+                                        onChange={(e) => setPurchaseStartDate(e.target.value)}
+                                    />
+                                </div>
+                                <div className="hidden sm:block h-5 w-[1px] bg-muted-foreground/20 mx-1" />
+                                <div className="flex items-center gap-2 px-2">
+                                    <span className="text-[10px] font-black uppercase text-muted-foreground whitespace-nowrap">To</span>
+                                    <Input 
+                                        type="date" 
+                                        className="h-9 w-[140px] border-none bg-white shadow-sm px-2 text-xs font-bold rounded-lg focus-visible:ring-1 ring-primary/20" 
+                                        value={purchaseEndDate}
+                                        onChange={(e) => setPurchaseEndDate(e.target.value)}
+                                    />
+                                </div>
+                                {(purchaseStartDate || purchaseEndDate) && (
+                                    <div className="flex items-center gap-1 ml-1">
+                                        <Button 
+                                            variant="secondary" 
+                                            size="sm" 
+                                            className="h-8 px-2 text-[10px] font-black uppercase bg-primary text-white hover:bg-primary/90 rounded-lg" 
+                                            onClick={() => { 
+                                                const today = new Date().toISOString().split('T')[0];
+                                                setPurchaseStartDate(today); 
+                                                setPurchaseEndDate(today); 
+                                            }}
+                                        >
+                                            Today
+                                        </Button>
+                                        <Button 
+                                            variant="secondary" 
+                                            size="icon" 
+                                            className="h-8 w-8 rounded-lg" 
+                                            onClick={() => { setPurchaseStartDate(''); setPurchaseEndDate(''); }}
+                                        >
+                                            <X className="w-4 h-4" />
+                                        </Button>
+                                    </div>
+                                )}
+                                {!purchaseStartDate && !purchaseEndDate && (
+                                    <Button 
+                                        variant="ghost" 
+                                        size="sm" 
+                                        className="h-8 px-2 text-[10px] font-black uppercase text-primary hover:bg-primary/10 rounded-lg ml-1" 
+                                        onClick={() => { 
+                                            const today = new Date().toISOString().split('T')[0];
+                                            setPurchaseStartDate(today); 
+                                            setPurchaseEndDate(today); 
+                                        }}
+                                    >
+                                        Today
+                                    </Button>
+                                )}
+                            </div>
                         </div>
                     </div>
 
@@ -552,25 +800,25 @@ export default function SharedInventory() {
                                     {sortedPurchases.length === 0 ? (
                                         <TableRow><TableCell colSpan={6} className="text-center py-10 opacity-20">No purchase history found</TableCell></TableRow>
                                     ) : (
-                                        sortedPurchases.map((p: any) => (
-                                            <TableRow key={p.id}>
-                                                <TableCell className="text-xs text-muted-foreground">{format(new Date(p.date), 'MMM dd, yyyy • HH:mm')}</TableCell>
-                                                <TableCell className="font-bold text-gray-900">{p.name || 'Stock Purchase'}</TableCell>
-                                                <TableCell className="text-center font-black">{p.quantity}</TableCell>
-                                                <TableCell className="text-right text-muted-foreground">{formatCurrency(p.buyingPrice)}</TableCell>
-                                                <TableCell className="text-right font-black text-primary">{formatCurrency(p.totalCost || (p.quantity * p.buyingPrice))}</TableCell>
-                                                <TableCell className="text-right">
-                                                    <div className="flex gap-1 justify-end">
-                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => handleEditPurchase(p)}>
-                                                            <Edit className="w-4 h-4" />
-                                                        </Button>
-                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDeletePurchase(p.id)}>
-                                                            <Trash2 className="w-4 h-4" />
-                                                        </Button>
-                                                    </div>
-                                                </TableCell>
-                                            </TableRow>
-                                        ))
+                                         sortedPurchases.map((p: any) => (
+                                             <TableRow key={p.id}>
+                                                 <TableCell className="text-xs text-muted-foreground">{format(new Date(p.date), 'MMM dd, yyyy • HH:mm')}</TableCell>
+                                                 <TableCell className="font-bold text-gray-900">{p.title?.replace('Stock Purchase: ', '') || (p as any).name || 'Stock Purchase'}</TableCell>
+                                                 <TableCell className="text-center font-black">{p.units || p.quantity}</TableCell>
+                                                 <TableCell className="text-right text-muted-foreground">{formatCurrency(p.unitPrice || p.buyingPrice)}</TableCell>
+                                                 <TableCell className="text-right font-black text-primary">{formatCurrency(p.amount || p.totalCost || (Number(p.units || p.quantity) * Number(p.unitPrice || p.buyingPrice)))}</TableCell>
+                                                 <TableCell className="text-right">
+                                                     <div className="flex gap-1 justify-end">
+                                                         <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => handleEditPurchase(p)}>
+                                                             <Edit className="w-4 h-4" />
+                                                         </Button>
+                                                         <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDeletePurchase(p.id)}>
+                                                             <Trash2 className="w-4 h-4" />
+                                                         </Button>
+                                                     </div>
+                                                 </TableCell>
+                                             </TableRow>
+                                         ))
                                     )}
                                 </TableBody>
                             </Table>
@@ -646,10 +894,11 @@ export default function SharedInventory() {
                                 </div>
                             </div>
 
-                            <div className="bg-primary/5 p-4 rounded-xl border border-primary/10 flex justify-between items-baseline">
+                             <div className="bg-primary/5 p-4 rounded-xl border border-primary/10 flex justify-between items-baseline">
                                 <span className="text-xs font-bold uppercase">Total Purchase Cost:</span>
-                                <span className="text-2xl font-black text-primary">{formatCurrency(editPurchaseQuantity * editPurchasePrice)}</span>
+                                <span className="text-2xl font-black text-primary">{formatCurrency(Number(editPurchaseQuantity || 0) * Number(editPurchasePrice || 0))}</span>
                             </div>
+
 
                             <DialogFooter>
                                 <Button variant="ghost" onClick={() => setIsEditPurchaseDialogOpen(false)}>Cancel</Button>
@@ -706,6 +955,12 @@ export default function SharedInventory() {
                 title={deleteConfig?.title || "Are you sure?"}
                 description={deleteConfig?.description || "This action cannot be undone."}
                 isDeleting={isDeleting}
+            />
+            <RestockModal 
+                isOpen={isRestockDialogOpen}
+                onClose={() => setIsRestockDialogOpen(false)}
+                item={restockItem}
+                onRestock={handleProcessRestock}
             />
         </div>
     );
