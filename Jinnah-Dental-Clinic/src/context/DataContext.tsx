@@ -54,7 +54,7 @@ interface DataContextType {
     licenseExpiryDate: string | null;
     isShutdown: boolean;
     updateLocal: (collectionName: string, data: any) => Promise<any>;
-    deleteLocal: (collectionName: string, id: string) => Promise<boolean>;
+    deleteLocal: (collectionName: string, id: string, options?: { deleteSalesHistory?: boolean }) => Promise<boolean>;
     addItem: (collectionName: string, item: any) => Promise<any>;
     refreshCollection: (collectionName: string) => Promise<void>;
     exportToCSV: (data: any[], filename: string) => void;
@@ -507,44 +507,45 @@ export function DataProvider({ children }: { children: ReactNode }) {
             // Inventory specific sanitization
             if (collectionName === 'inventory') {
                 const oldItem = (inventory || []).find(i => i.id === enrichedData.id);
+                // Preserve stockLayers explicitly if not correctly merged
+                let updatedLayers = Array.isArray(enrichedData.stockLayers) 
+                    ? [...enrichedData.stockLayers] 
+                    : (oldItem && Array.isArray(oldItem.stockLayers) ? [...oldItem.stockLayers] : []);
+                
                 if (oldItem) {
-                    const oldPrice = Number(oldItem.buyingPrice) || 0;
-                    const newPrice = Number(enrichedData.buyingPrice) || 0;
-                    const oldQty = Number(oldItem.quantity) || 0;
-                    const newQty = Number(enrichedData.quantity) || 0;
+                    const oldSellPrice = Number(oldItem.sellingPrice) || 0;
+                    const newSellPrice = Number(enrichedData.sellingPrice) || 0;
+                    const oldBuyPrice = Number(oldItem.buyingPrice) || 0;
+                    const newBuyPrice = Number(enrichedData.buyingPrice) || 0;
 
-                    if (oldPrice !== newPrice || oldQty !== newQty) {
-                        console.log(`[updateLocal] Inventory item ${enrichedData.name} updated (Price ${oldPrice}->${newPrice}, Qty ${oldQty}->${newQty}). Cascading to procurement records...`);
-                        
-                        // Find the related purchase(s)
-                        const relatedPurchases = (purchases || []).filter(p => p.itemId === enrichedData.id);
-                        
-                        // If there is exactly one purchase (common case for new items), update it
-                        if (relatedPurchases.length === 1) {
-                            const mainPurchase = relatedPurchases[0];
-                            const updatedPurchase = {
-                                ...mainPurchase,
-                                quantity: newQty,
-                                buyingPrice: newPrice,
-                                totalCost: newQty * newPrice,
-                                updatedAt: new Date().toISOString()
-                            };
-                            
-                            // Important: Calling updateLocal recursively for purchases to trigger its own cascade to expenses
-                            await updateLocal('purchases', updatedPurchase);
-                        } else if (relatedPurchases.length > 1) {
-                            // If multiple purchases exist, we update the latest one's price/qty if it matches the old state
-                            // Note: This is an advanced case, but keeping it robust.
-                            console.warn("[updateLocal] Multiple purchases found for item. Cascading logic skipped to avoid ambiguous record updates.");
-                        }
+                    // If price changed manually, push the newly specified price down to all active stock layers
+                    // so that future sales correctly use this new price.
+                    if (!enrichedData._skipPriceCascade && (oldSellPrice !== newSellPrice || oldBuyPrice !== newBuyPrice) && updatedLayers.length > 0) {
+                        console.log(`[updateLocal] Inventory price adjusted globally. Updating active stock layers. (Sell: ${oldSellPrice}->${newSellPrice})`);
+                        updatedLayers = updatedLayers.map(layer => {
+                            if (layer.quantity > 0) {
+                                return {
+                                    ...layer,
+                                    sellingPrice: oldSellPrice !== newSellPrice ? newSellPrice : layer.sellingPrice,
+                                    buyingPrice: oldBuyPrice !== newBuyPrice ? newBuyPrice : layer.buyingPrice
+                                };
+                            }
+                            return layer;
+                        });
                     }
                 }
                 
+                // Clean up the flag
+                if ('_skipPriceCascade' in enrichedData) {
+                    delete enrichedData._skipPriceCascade;
+                }
+
                 enrichedData = {
                     ...enrichedData,
                     buyingPrice: Number(enrichedData.buyingPrice) || 0,
                     sellingPrice: Number(enrichedData.sellingPrice) || 0,
-                    quantity: Number(enrichedData.quantity) || 0
+                    quantity: Number(enrichedData.quantity) || 0,
+                    stockLayers: updatedLayers
                 };
             }
 
@@ -1029,7 +1030,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     /**
      * Delete local data (State + IndexedDB) - FIRE AND FORGET version
      */
-    const deleteLocal = useCallback(async (collectionName: string, id: string): Promise<boolean> => {
+    const deleteLocal = useCallback(async (collectionName: string, id: string, options?: { deleteSalesHistory?: boolean }): Promise<boolean> => {
         try {
             console.log(`[deleteLocal] Starting for ${collectionName}:`, id);
 
@@ -1096,14 +1097,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             
                             // Check if this was the ONLY purchase for this item. 
                             // If so, delete the item entirely ("as if it was never there")
-                            const otherPurchases = (purchases || []).filter(p => 
-                                p.itemId === invItemId && 
-                                p.id !== purchaseId && 
-                                p.id !== id
+                            
+                            // IDENTIFY THE RELATED PURCHASE FIRST TO AVOID FALSE "OTHER" MATCHES
+                            const relatedPurchase = (purchases || []).find(p => 
+                                (purchaseId && p.id === purchaseId) || 
+                                p.id === id || 
+                                ((p as any).itemId === invItemId && Number(p.totalCost) === Number(expenseToDelete.amount))
                             );
 
-                            if (otherPurchases.length === 0 && newQuantity === 0) {
-                                console.log(`[deleteLocal] Deleting entire inventory item and sales history as this was its only purchase.`);
+                            const otherPurchases = (purchases || []).filter(p => 
+                                p.itemId === invItemId && 
+                                (!relatedPurchase || p.id !== relatedPurchase.id)
+                            );
+
+                            const forceDelete = options?.deleteSalesHistory === true;
+
+                            if (forceDelete || (otherPurchases.length === 0 && newQuantity === 0)) {
+                                console.log(`[deleteLocal] Deleting entire inventory item and sales history as requested or this was its only purchase.`);
                                 
                                 // A. Delete the item
                                 await dbManager.deleteFromLocal('inventory', invItemId);
@@ -1111,14 +1121,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
                                 backgroundFirebaseSync('inventory', { id: invItemId, _deleted: true });
 
                                 // B. Delete ALL sales history for this item
-                                const itemSales = (sales || []).filter(s => s.itemId === invItemId);
-                                if (itemSales.length > 0) {
-                                    console.log(`[deleteLocal] Wiping ${itemSales.length} sales records for item ${invItemId}`);
-                                    for (const sale of itemSales) {
-                                        await dbManager.deleteFromLocal('sales', sale.id);
-                                        backgroundFirebaseSync('sales', { id: sale.id, _deleted: true });
+                                if (options?.deleteSalesHistory !== false) {
+                                    const itemSales = (sales || []).filter(s => s.itemId === invItemId);
+                                    if (itemSales.length > 0) {
+                                        console.log(`[deleteLocal] Wiping ${itemSales.length} sales records for item ${invItemId}`);
+                                        for (const sale of itemSales) {
+                                            await dbManager.deleteFromLocal('sales', sale.id);
+                                            backgroundFirebaseSync('sales', { id: sale.id, _deleted: true });
+                                        }
+                                        setSales(prev => prev.filter(s => s.itemId !== invItemId));
                                     }
-                                    setSales(prev => prev.filter(s => s.itemId !== invItemId));
+                                } else {
+                                    console.log(`[deleteLocal] Skipped wiping sales history based on user preference.`);
                                 }
                             } else {
                                 // Just update quantity
@@ -1166,9 +1180,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             // Check if this was the ONLY purchase for this item. 
                             // If so, delete the item and its sales entirely ("as if it was never there")
                             const otherPurchases = (purchases || []).filter(p => p.itemId === invItemId && p.id !== id);
+                            
+                            const forceDelete = options?.deleteSalesHistory === true;
 
-                            if (otherPurchases.length === 0) {
-                                console.log(`[deleteLocal] Deleting entire inventory item and sales history as this was its only purchase.`);
+                            if (forceDelete || otherPurchases.length === 0) {
+                                console.log(`[deleteLocal] Deleting entire inventory item and sales history as requested or this was its only purchase.`);
                                 
                                 // A. Delete the item
                                 await dbManager.deleteFromLocal('inventory', invItemId);
@@ -1176,14 +1192,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
                                 backgroundFirebaseSync('inventory', { id: invItemId, _deleted: true });
 
                                 // B. Delete ALL sales history for this item
-                                const itemSales = (sales || []).filter(s => s.itemId === invItemId);
-                                if (itemSales.length > 0) {
-                                    console.log(`[deleteLocal] Wiping ${itemSales.length} sales records for item ${invItemId}`);
-                                    for (const sale of itemSales) {
-                                        await dbManager.deleteFromLocal('sales', sale.id);
-                                        backgroundFirebaseSync('sales', { id: sale.id, _deleted: true });
+                                if (options?.deleteSalesHistory !== false) {
+                                    const itemSales = (sales || []).filter(s => s.itemId === invItemId);
+                                    if (itemSales.length > 0) {
+                                        console.log(`[deleteLocal] Wiping ${itemSales.length} sales records for item ${invItemId}`);
+                                        for (const sale of itemSales) {
+                                            await dbManager.deleteFromLocal('sales', sale.id);
+                                            backgroundFirebaseSync('sales', { id: sale.id, _deleted: true });
+                                        }
+                                        setSales(prev => prev.filter(s => s.itemId !== invItemId));
                                     }
-                                    setSales(prev => prev.filter(s => s.itemId !== invItemId));
+                                } else {
+                                    console.log(`[deleteLocal] Skipped wiping sales history based on user preference.`);
                                 }
                             } else {
                                 // Just update quantity
@@ -1281,7 +1301,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             console.error(`Error deleting from ${collectionName}:`, error);
             throw error;
         }
-    }, [stateSetterMap, backgroundFirebaseSync, expenses, transactions, staff, salaryPayments, inventory, purchases]);
+    }, [stateSetterMap, backgroundFirebaseSync, expenses, transactions, staff, salaryPayments, inventory, purchases, sales]);
 
     /**
      * Add item - FIRE AND FORGET version (main fix for sticky toast)
@@ -1381,12 +1401,75 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }
             }
 
+            // AUTO-CREATE EXPENSE + PURCHASE when a brand-new inventory item is added with quantity > 0
+            if (collectionName === 'inventory' && isNewItem) {
+                const qty = Number(newItem.quantity) || 0;
+                const buyPrice = Number(newItem.buyingPrice) || 0;
+
+                if (qty > 0) {
+                    console.log(`[addItem] New inventory item added with qty=${qty}. Auto-creating expense + purchase records.`);
+
+                    const purchaseId = `pur-${Date.now()}`;
+                    const expenseId = `exp-${Date.now() + 1}`;
+                    const now = result.createdAt || new Date().toISOString();
+
+                    // 1. Create purchase record
+                    const purchaseRecord = {
+                        id: purchaseId,
+                        itemId: result.id,
+                        name: result.name,
+                        quantity: qty,
+                        buyingPrice: buyPrice,
+                        totalCost: qty * buyPrice,
+                        date: now
+                    };
+                    await updateLocal('purchases', purchaseRecord);
+
+                    // 2. Create expense record
+                    const expenseRecord = {
+                        id: expenseId,
+                        title: `Stock Purchase: ${result.name}`,
+                        amount: qty * buyPrice,
+                        category: 'inventory',
+                        date: now,
+                        description: `Initial stock entry for: ${result.name}`,
+                        inventoryItemId: result.id,
+                        purchaseId: purchaseId,
+                        units: qty,
+                        unitPrice: buyPrice,
+                        sellingPrice: Number(result.sellingPrice) || 0,
+                        status: 'paid'
+                    };
+                    await updateLocal('expenses', expenseRecord);
+
+                    // 3. Attach the initial stock layer to the inventory item
+                    const initialLayer = {
+                        id: `layer-${Date.now()}`,
+                        purchaseId: purchaseId,
+                        quantity: qty,
+                        buyingPrice: buyPrice,
+                        sellingPrice: Number(result.sellingPrice) || 0,
+                        date: now
+                    };
+                    const updatedInvWithLayer = {
+                        ...result,
+                        stockLayers: [initialLayer],
+                        _skipPriceCascade: true
+                    };
+                    await dbManager.saveToLocal('inventory', updatedInvWithLayer);
+                    setInventory(prev => prev.map(i => i.id === updatedInvWithLayer.id ? updatedInvWithLayer : i));
+                    backgroundFirebaseSync('inventory', updatedInvWithLayer);
+
+                    console.log(`[addItem] Created purchase ${purchaseId} and expense ${expenseId} for new item ${result.name}.`);
+                }
+            }
+
             return result;
         } catch (error) {
             console.error("Error adding item:", error);
             throw error;
         }
-    }, [updateLocal]);
+    }, [updateLocal, inventory, backgroundFirebaseSync]);
 
     const refreshCollection = useCallback(async (collectionName: string) => {
         try {

@@ -613,26 +613,30 @@ export default function ExpensesPage() {
                                             </div>
                                         </td>
                                         <td className="p-3">
-                                            <div className="flex gap-2">
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={(e) => handleEditExpense(expense, e)}
-                                                    className="h-8 w-8 p-0"
-                                                    title="Edit"
-                                                >
-                                                    <Edit className="w-3 h-3" />
-                                                </Button>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={(e) => handleDeleteExpense(expense, e)}
-                                                    className="h-8 w-8 p-0 text-red-600 border-red-200 hover:bg-red-50"
-                                                    title="Delete"
-                                                >
-                                                    <Trash2 className="w-3 h-3" />
-                                                </Button>
-                                            </div>
+                                            { (expense as any).staffId || expense.inventoryItemId || expense.purchaseId ? (
+                                                <span className="text-[11px] text-gray-400 italic">Managed in Source Tab</span>
+                                            ) : (
+                                                <div className="flex gap-2">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={(e) => handleEditExpense(expense, e)}
+                                                        className="h-8 w-8 p-0"
+                                                        title="Edit"
+                                                    >
+                                                        <Edit className="w-3 h-3" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={(e) => handleDeleteExpense(expense, e)}
+                                                        className="h-8 w-8 p-0 text-red-600 border-red-200 hover:bg-red-50"
+                                                        title="Delete"
+                                                    >
+                                                        <Trash2 className="w-3 h-3" />
+                                                    </Button>
+                                                </div>
+                                            )}
                                         </td>
                                     </tr>
                                 ))

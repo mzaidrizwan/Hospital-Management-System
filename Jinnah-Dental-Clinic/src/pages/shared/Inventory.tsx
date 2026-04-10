@@ -99,7 +99,7 @@ export default function SharedInventory() {
         id: string;
         title: string;
         description: React.ReactNode;
-        type: 'item' | 'purchase' | 'sale';
+        type: 'item' | 'purchase' | 'sale' | 'archive';
     } | null>(null);
 
     // Date filtering states
@@ -107,6 +107,7 @@ export default function SharedInventory() {
     const [salesEndDate, setSalesEndDate] = useState('');
     const [purchaseStartDate, setPurchaseStartDate] = useState('');
     const [purchaseEndDate, setPurchaseEndDate] = useState('');
+    const [deleteSalesHistoryChecked, setDeleteSalesHistoryChecked] = useState(true);
 
     // Filtered logic
     const filteredInventory = useMemo(() => {
@@ -221,6 +222,24 @@ export default function SharedInventory() {
         setShowDeleteConfirm(true);
     };
 
+    const handleArchiveItem = (id: string) => {
+        const item = contextInventory?.find(i => i && i.id === id);
+        setDeleteConfig({
+            id,
+            type: 'archive',
+            title: "Remove from Stock List?",
+            description: (
+                <div className="space-y-2">
+                    <p>Remove <span className="font-bold">"{item?.name || 'this item'}"</span> from the Stock Status list?</p>
+                    <p className="text-xs text-muted-foreground bg-muted/60 rounded-lg p-2 border">
+                        ✅ Purchasing Records, Sales History, and Expenses for this item will <span className="font-bold">remain untouched</span>.
+                    </p>
+                </div>
+            )
+        });
+        setShowDeleteConfirm(true);
+    };
+
     const handleConfirmDelete = async () => {
         if (!deleteConfig) return;
         setIsDeleting(true);
@@ -231,15 +250,21 @@ export default function SharedInventory() {
                 setInventory(prev => prev.filter(i => i.id !== deleteConfig.id));
                 smartDelete('inventory', deleteConfig.id);
                 toast.success("Item removed");
+            } else if (deleteConfig.type === 'archive') {
+                // SAFE: only remove from inventory list, leave all linked records intact
+                await dbManager.deleteFromLocal('inventory', deleteConfig.id);
+                setInventory(prev => prev.filter(i => i.id !== deleteConfig.id));
+                smartDelete('inventory', deleteConfig.id);
+                toast.success("Item removed from stock list. All records preserved.");
             } else if (deleteConfig.type === 'sale') {
                 await deleteLocal('sales', deleteConfig.id);
                 toast.success("Sale record voided and stock adjusted");
             } else if (deleteConfig.type === 'purchase') {
                 // If it's a purchase derived from expense, delete the expense
-                await deleteLocal('expenses', deleteConfig.id);
+                await deleteLocal('expenses', deleteConfig.id, { deleteSalesHistory: deleteSalesHistoryChecked });
                 toast.success("Purchase record and linked expense removed");
             } else {
-                await deleteLocal('purchases', deleteConfig.id);
+                await deleteLocal('purchases', deleteConfig.id, { deleteSalesHistory: deleteSalesHistoryChecked });
                 toast.success("Purchase record voided and stock adjusted");
             }
             setShowDeleteConfirm(false);
@@ -366,7 +391,8 @@ export default function SharedInventory() {
                 stockLayers: layers,
                 buyingPrice: nextActiveLayer?.buyingPrice || 0,
                 sellingPrice: nextActiveLayer?.sellingPrice || 0,
-                updatedAt: new Date().toISOString()
+                updatedAt: new Date().toISOString(),
+                _skipPriceCascade: true
             };
 
             setIsSellDialogOpen(false);
@@ -424,6 +450,7 @@ export default function SharedInventory() {
     const handleDeletePurchase = (id: string) => {
         // Now id refers to the expense ID or purchase ID
         const purchase = sortedPurchases.find(p => p && p.id === id);
+        setDeleteSalesHistoryChecked(true); // default to true
         setDeleteConfig({
             id,
             type: 'purchase',
@@ -573,6 +600,16 @@ export default function SharedInventory() {
                                                     {isAdmin && (
                                                         <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDeleteItem(item.id)}>
                                                             <Trash2 className="w-4 h-4" />
+                                                        </Button>
+                                                    )}
+                                                    {item.quantity <= 0 && (
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            className="h-8 text-destructive border border-destructive/30 bg-destructive/5 hover:bg-destructive/15 text-xs font-bold"
+                                                            onClick={() => handleArchiveItem(item.id)}
+                                                        >
+                                                            <Trash2 className="w-3 h-3 mr-1" /> Delete
                                                         </Button>
                                                     )}
                                                 </div>
@@ -953,7 +990,25 @@ export default function SharedInventory() {
                 onOpenChange={setShowDeleteConfirm}
                 onConfirm={handleConfirmDelete}
                 title={deleteConfig?.title || "Are you sure?"}
-                description={deleteConfig?.description || "This action cannot be undone."}
+                description={
+                    <div className="space-y-4 text-left">
+                        {deleteConfig?.description || "This action cannot be undone."}
+                        {deleteConfig?.type === 'purchase' && (
+                            <div className="flex items-center gap-2 mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                                <input
+                                    type="checkbox"
+                                    id="delete-sales"
+                                    checked={deleteSalesHistoryChecked}
+                                    onChange={(e) => setDeleteSalesHistoryChecked(e.target.checked)}
+                                    className="w-4 h-4 text-red-600 rounded focus:ring-red-500 cursor-pointer"
+                                />
+                                <label htmlFor="delete-sales" className="text-sm font-medium text-red-800 cursor-pointer select-none">
+                                    Also delete all Sales History records for this item
+                                </label>
+                            </div>
+                        )}
+                    </div>
+                }
                 isDeleting={isDeleting}
             />
             <RestockModal 
