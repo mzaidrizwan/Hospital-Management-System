@@ -19,6 +19,7 @@ import { toast } from 'sonner';
 import { Staff, Attendance } from '@/types';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
+import { getLocalDateString, parseAnyDate, formatDisplayDate } from '@/utils/dateUtils';
 
 interface AttendanceModalProps {
   open: boolean;
@@ -68,8 +69,7 @@ export default function AttendanceModal({
   });
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
+  const todayStr = getLocalDateString();
   const currentTime = new Date().toLocaleTimeString('en-US', { 
     hour12: false,
     hour: '2-digit',
@@ -152,7 +152,7 @@ export default function AttendanceModal({
         status: attendance?.status,
         time: attendance?.time,
         isToday: dateStr === todayStr,
-        isFuture: dateObj > today,
+        isFuture: dateObj > new Date(),
         canEdit: !isStaffInactive || !!attendance, // Can edit if active OR editing existing
         hasAttendance: !!attendance
       });

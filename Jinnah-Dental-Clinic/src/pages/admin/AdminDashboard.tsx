@@ -37,73 +37,12 @@ import { cn } from '@/lib/utils';
 import { Calendar } from '@/components/ui/calendar';
 
 import { useData } from '@/context/DataContext';
-import { calculateFinancialStats, formatCurrency, parseDate } from '@/utils/financialUtils';
+import { calculateFinancialStats, formatCurrency } from '@/utils/financialUtils';
+import { parseAnyDate } from '@/utils/dateUtils';
+import { Bill, Sale, Expense, Patient, SalaryPayment, InventoryItem } from '@/types';
 
 // Interfaces
-interface Bill {
-  id: string;
-  totalAmount: number;
-  amountPaid: number;
-  discount: number;
-  createdAt: any;
-  createdDate: string;
-  patientName: string;
-  paymentStatus: string;
-  billNumber: string;
-  date?: string;
-}
-
-interface Sale {
-  id: string;
-  amount: number;
-  totalPrice: number;
-  buyingPrice?: number;
-  sellingPrice?: number;
-  total?: number;
-  date: string;
-  createdAt: any;
-  productName?: string;
-  itemName?: string;
-  category?: string;
-  quantity?: number;
-  customerName?: string;
-  paymentStatus: string;
-  paymentMethod?: string;
-}
-
-interface Expense {
-  id: string;
-  amount: number;
-  date: string;
-  category: string;
-  title: string;
-  status: string;
-  description?: string;
-}
-
-interface InventoryItem {
-  id: string;
-  name: string;
-  quantity: number;
-  minQuantity?: number;
-}
-
-interface Patient {
-  id: string;
-  name: string;
-  phone: string;
-  lastVisit: string;
-  isActive: boolean;
-  age?: number;
-  gender?: string;
-}
-
-interface SalaryPayment {
-  id: string;
-  amount: number;
-  date: string;
-  staffName: string;
-}
+// Local interfaces removed in favor of @/types
 
 // Redundant local definitions removed
 
@@ -133,7 +72,7 @@ const getDailyRevenueExpenseData = (
     // Calculate daily revenue
     const dayRevenue = combinedRevenue
       .filter(item => {
-        const itemDate = parseDate(item.createdDate || item.date || item.createdAt);
+        const itemDate = parseAnyDate(item.createdDate || item.date || item.createdAt);
         if (!itemDate) return false;
         return format(itemDate, 'yyyy-MM-dd') === targetDateStr;
       })
@@ -142,7 +81,7 @@ const getDailyRevenueExpenseData = (
     // Calculate daily regular expenses
     const dayExpensesRegular = expenses
       .filter(expense => {
-        const expenseDate = parseDate(expense.date);
+        const expenseDate = parseAnyDate(expense.date);
         if (!expenseDate) return false;
         return format(expenseDate, 'yyyy-MM-dd') === targetDateStr;
       })
@@ -151,7 +90,7 @@ const getDailyRevenueExpenseData = (
     // Calculate daily salaries
     const dayExpensesSalaries = salaryPayments
       .filter(salary => {
-        const salaryDate = parseDate(salary.date);
+        const salaryDate = parseAnyDate(salary.date);
         if (!salaryDate) return false;
         return format(salaryDate, 'yyyy-MM-dd') === targetDateStr;
       })
@@ -180,8 +119,8 @@ const getRecentPatients = (patients: Patient[]) => {
   return patients
     .filter(p => p.isActive)
     .sort((a, b) => {
-      const dateA = parseDate(a.lastVisit);
-      const dateB = parseDate(b.lastVisit);
+      const dateA = parseAnyDate(a.lastVisit);
+      const dateB = parseAnyDate(b.lastVisit);
 
       if (!dateA && !dateB) return 0;
       if (!dateA) return 1;
@@ -225,8 +164,8 @@ const getRecentTransactions = (bills: Bill[], sales: Sale[], limit: number = 5) 
 
   return Array.from(uniqueTransactionsMap.values())
     .sort((a, b) => {
-      const dateA = parseDate(a.date);
-      const dateB = parseDate(b.date);
+      const dateA = parseAnyDate(a.date);
+      const dateB = parseAnyDate(b.date);
 
       if (!dateA && !dateB) return 0;
       if (!dateA) return 1;
@@ -346,20 +285,20 @@ export default function AdminDashboard() {
   // Calculate trends
   const revenueTrend = {
     value: prevPeriod.revenue > 0
-      ? ((memoizedData.totalRevenue - prevPeriod.revenue) / prevPeriod.revenue * 100).toFixed(1)
-      : memoizedData.totalRevenue > 0 ? '100' : '0',
+      ? Number(((memoizedData.totalRevenue - prevPeriod.revenue) / prevPeriod.revenue * 100).toFixed(1))
+      : memoizedData.totalRevenue > 0 ? 100 : 0,
     isPositive: memoizedData.totalRevenue > prevPeriod.revenue
   };
 
   const expensesTrend = {
     value: prevPeriod.expenses > 0
-      ? ((memoizedData.totalExpenses - prevPeriod.expenses) / prevPeriod.expenses * 100).toFixed(1)
-      : memoizedData.totalExpenses > 0 ? '100' : '0',
+      ? Number(((memoizedData.totalExpenses - prevPeriod.expenses) / prevPeriod.expenses * 100).toFixed(1))
+      : memoizedData.totalExpenses > 0 ? 100 : 0,
     isPositive: memoizedData.totalExpenses < prevPeriod.expenses
   };
 
   const profitTrend = {
-    value: memoizedData.netProfit > 0 ? '100' : '0',
+    value: memoizedData.netProfit > 0 ? 100 : 0,
     isPositive: memoizedData.netProfit > 0
   };
 
@@ -544,7 +483,7 @@ export default function AdminDashboard() {
                 <p className="text-center text-muted-foreground py-4">No transactions in selected period</p>
               ) : (
                 memoizedData.recentTransactions.map((transaction) => {
-                  const transactionDate = parseDate(transaction.date);
+                  const transactionDate = parseAnyDate(transaction.date);
                   return (
                     <div
                       key={`${transaction.type}-${transaction.id}`}
@@ -605,7 +544,7 @@ export default function AdminDashboard() {
                 <p className="text-center text-muted-foreground py-4">No recent patients</p>
               ) : (
                 memoizedData.recentPatients.map((patient) => {
-                  const lastVisitDate = parseDate(patient.lastVisit);
+                  const lastVisitDate = parseAnyDate(patient.lastVisit);
                   return (
                     <div
                       key={patient.id}

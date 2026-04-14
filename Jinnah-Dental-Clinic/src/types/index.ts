@@ -59,6 +59,7 @@ export interface Patient {
   totalVisits?: number;
   totalPaid: number;
   pendingBalance: number;
+  preReceiveBalance?: number;  // Unspent advance credit that carries over to future visits
   isActive: boolean;
   createdAt: string;
   updatedAt?: string;     // Timestamp ko string ya Date mein convert kar sakte ho
@@ -165,6 +166,7 @@ export interface Bill {
   doctor?: string;
   status?: string;
   notes?: string;
+  createdAt?: string; // Standardized field
 }
 
 export interface BillItem {
@@ -646,6 +648,24 @@ export interface InventoryTransaction {
   notes?: string;
   performedBy: string;
   createdAt: string;
+}
+
+export interface Sale {
+  id: string;
+  amount: number;
+  totalPrice: number;
+  buyingPrice?: number;
+  sellingPrice?: number;
+  total?: number;
+  date: string;
+  createdAt: any;
+  productName?: string;
+  itemName?: string;
+  category?: string;
+  quantity?: number;
+  customerName?: string;
+  paymentStatus: string;
+  paymentMethod?: string;
 }
 
 export interface Supplier {

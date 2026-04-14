@@ -17,7 +17,8 @@ import { Button } from '@/components/ui/button';
 import { Loader2, RefreshCw, AlertCircle, TrendingUp, BarChart2 } from 'lucide-react';
 import { toast } from "sonner";
 import { useData } from '@/context/DataContext';
-import { calculateFinancialStats, formatCurrency, parseDate } from '@/utils/financialUtils';
+import { calculateFinancialStats, formatCurrency } from '@/utils/financialUtils';
+import { parseAnyDate } from '@/utils/dateUtils';
 
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 
@@ -57,7 +58,7 @@ export default function AdminAnalytics() {
         if (!dateStr) return;
 
         try {
-          const date = parseDate(dateStr);
+          const date = parseAnyDate(dateStr);
           if (!date || date.getFullYear() !== currentYear) return;
 
           const monthIndex = date.getMonth();

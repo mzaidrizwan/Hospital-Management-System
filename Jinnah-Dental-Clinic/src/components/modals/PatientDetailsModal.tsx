@@ -8,7 +8,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Patient, QueueItem, Bill, Transaction } from '@/types';
-import { format, parseISO } from 'date-fns';
+import { format } from 'date-fns';
+import { parseAnyDate, formatDisplayDate, getLocalDateString } from '@/utils/dateUtils';
 import { toast } from 'sonner';
 import { useData } from '@/context/DataContext';
 
@@ -47,7 +48,7 @@ export default function PatientDetailsModal({
   const [isPaymentMode, setIsPaymentMode] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('cash');
-  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [paymentDate, setPaymentDate] = useState(getLocalDateString());
   const [paymentNotes, setPaymentNotes] = useState('');
   const [isPaymentSubmitting, setIsPaymentSubmitting] = useState(false);
 
@@ -535,20 +536,7 @@ Contact: 0347 1887181
   };
 
   const safeFormatDate = (dateString: string | undefined | null): string => {
-    if (!dateString) return 'N/A';
-    try {
-      const date = parseISO(dateString);
-      if (isNaN(date.getTime())) return 'Invalid Date';
-      return format(date, 'MMM dd, yyyy hh:mm a');
-    } catch {
-      try {
-        const date = new Date(dateString);
-        if (isNaN(date.getTime())) return 'N/A';
-        return format(date, 'MMM dd, yyyy hh:mm a');
-      } catch {
-        return 'N/A';
-      }
-    }
+    return formatDisplayDate(dateString);
   };
 
   if (!patient) return null;
@@ -1214,11 +1202,14 @@ Contact: 0347 1887181
                     <div className="text-3xl font-bold text-green-700 tracking-tight">
                       {formatCurrency(displayPatient.totalPaid || 0)}
                     </div>
-                    {preReceiveTotal > 0 && (
-                      <p className="text-xs text-purple-600 mt-1">
-                        + Advance: {formatCurrency(preReceiveTotal)}
-                      </p>
-                    )}
+                  </div>
+
+                  <div className="bg-white p-4 rounded-xl border shadow-sm border-purple-100 bg-purple-50/30">
+                    <div className="text-xs text-purple-600 mb-1 font-medium">Advance Credit</div>
+                    <div className="text-3xl font-bold text-purple-700 tracking-tight">
+                      {formatCurrency(displayPatient.preReceiveBalance || 0)}
+                    </div>
+                    <div className="text-xs mt-1 text-purple-500 italic">Remaining Balance</div>
                   </div>
 
                   <div className="bg-white p-4 rounded-xl border shadow-sm">
@@ -1243,14 +1234,15 @@ Contact: 0347 1887181
                 </div>
 
                 {/* Advance Payment Highlight */}
-                {preReceiveTotal > 0 && (
-                  <div className="mt-4 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 p-4 rounded-xl flex items-center gap-3">
-                    <div className="text-2xl">💰</div>
+                {(displayPatient.preReceiveBalance || 0) > 0 && (
+                  <div className="mt-4 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 p-4 rounded-xl flex items-center gap-3 shadow-sm shadow-purple-100/50">
+                    <div className="text-2xl">💳</div>
                     <div>
-                      <p className="font-medium text-purple-700">Advance Payment Received</p>
+                      <p className="font-medium text-purple-700">Persistent Advance Credit</p>
                       <p className="text-lg font-semibold text-purple-800">
-                        {formatCurrency(preReceiveTotal)}
+                        {formatCurrency(displayPatient.preReceiveBalance || 0)}
                       </p>
+                      <p className="text-[10px] text-purple-600/70">This amount is available for deduction from future bills.</p>
                     </div>
                   </div>
                 )}

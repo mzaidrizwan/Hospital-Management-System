@@ -14,6 +14,7 @@ import {
   ExpenseCategory,
   PaymentMethod
 } from '@/types';
+import { getLocalDateString } from '@/utils/dateUtils';
 
 // Local Expense interface removed in favor of @/types/index.ts
 
@@ -71,7 +72,7 @@ export default function ExpenseFormModal({
     amount: '',
     category: 'rent' as ExpenseCategory,
     paymentMethod: 'cash' as PaymentMethod,
-    date: new Date().toISOString().split('T')[0],
+    date: getLocalDateString(),
     description: '',
     vendor: '',
     receiptNumber: '',
@@ -111,7 +112,7 @@ export default function ExpenseFormModal({
         amount: expense.amount?.toString() || '',
         category: expense.category || 'rent',
         paymentMethod: expense.paymentMethod || 'cash',
-        date: expense.date ? (expense.date.includes('T') ? expense.date.split('T')[0] : expense.date) : new Date().toISOString().split('T')[0],
+        date: expense.date ? getLocalDateString(expense.date) : getLocalDateString(),
         description: expense.description || '',
         vendor: expense.vendor || '',
         receiptNumber: expense.receiptNumber || '',
@@ -134,7 +135,7 @@ export default function ExpenseFormModal({
         amount: '',
         category: 'rent',
         paymentMethod: 'cash',
-        date: new Date().toISOString().split('T')[0],
+        date: getLocalDateString(),
         description: '',
         vendor: '',
         receiptNumber: '',

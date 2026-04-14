@@ -44,6 +44,8 @@ import { useData } from '@/context/DataContext';
 import { useAuth } from '@/context/AuthContext';
 import { toast } from 'sonner';
 import { formatCurrency, cn } from '@/lib/utils';
+import { parseAnyDate, formatDisplayDate } from '@/utils/dateUtils';
+import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
 
 interface StaffActivityModalProps {
     open: boolean;
@@ -74,6 +76,12 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
         notes: ''
     });
     const [isUpdating, setIsUpdating] = useState(false);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [itemToDelete, setItemToDelete] = useState<{
+        type: 'payment' | 'attendance';
+        data: any;
+        message: string;
+    } | null>(null);
 
     const isAdmin = user?.role === 'admin';
 
@@ -82,7 +90,11 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
         if (!staff) return [];
         return (transactions || [])
             .filter(t => t.staffId === staff.id && t.type === 'Salary')
-            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            .sort((a, b) => {
+                const dateA = parseAnyDate(a.date)?.getTime() || 0;
+                const dateB = parseAnyDate(b.date)?.getTime() || 0;
+                return dateB - dateA;
+            });
     }, [transactions, staff?.id]);
 
     const staffAttendance = useMemo(() => {
@@ -105,7 +117,11 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                 grouped.set(att.date, att);
             }
         });
-        return Array.from(grouped.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        return Array.from(grouped.values()).sort((a, b) => {
+            const dateA = parseAnyDate(a.date)?.getTime() || 0;
+            const dateB = parseAnyDate(b.date)?.getTime() || 0;
+            return dateB - dateA;
+        });
     }, [staffAttendance]);
 
     const totalPaid = useMemo(() => {
@@ -201,9 +217,16 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
         }
     };
 
-    const handleDeletePayment = async (txn: Transaction) => {
-        if (!confirm(`Are you sure you want to delete this payment record of ${formatCurrency(txn.amount)}? This will permanently remove it from both local and cloud storage.`)) return;
+    const handleDeletePayment = (txn: Transaction) => {
+        setItemToDelete({
+            type: 'payment',
+            data: txn,
+            message: `Are you sure you want to delete this payment record of ${formatCurrency(txn.amount)} dated ${formatDisplayDate(txn.date, 'dd MMM, yyyy')}? This will permanently remove it and revert the staff member's pending salary.`
+        });
+        setShowDeleteConfirm(true);
+    };
 
+    const executeDeletePayment = async (txn: Transaction) => {
         setIsUpdating(true);
 
         try {
@@ -231,6 +254,8 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
             toast.error("Failed to delete record");
         } finally {
             setIsUpdating(false);
+            setShowDeleteConfirm(false);
+            setItemToDelete(null);
         }
     };
 
@@ -298,9 +323,16 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
         }
     };
 
-    const handleDeleteAttendance = async (att: Attendance) => {
-        if (!confirm(`Are you sure you want to delete the attendance record for ${att.date}? This action cannot be undone.`)) return;
+    const handleDeleteAttendance = (att: Attendance) => {
+        setItemToDelete({
+            type: 'attendance',
+            data: att,
+            message: `Are you sure you want to delete the attendance record for ${formatDisplayDate(att.date, 'dd MMM, yyyy')}? This action cannot be undone.`
+        });
+        setShowDeleteConfirm(true);
+    };
 
+    const executeDeleteAttendance = async (att: Attendance) => {
         setIsUpdating(true);
 
         try {
@@ -311,6 +343,18 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
             toast.error("Failed to delete attendance record");
         } finally {
             setIsUpdating(false);
+            setShowDeleteConfirm(false);
+            setItemToDelete(null);
+        }
+    };
+
+    const handleConfirmDelete = async () => {
+        if (!itemToDelete) return;
+
+        if (itemToDelete.type === 'payment') {
+            await executeDeletePayment(itemToDelete.data);
+        } else if (itemToDelete.type === 'attendance') {
+            await executeDeleteAttendance(itemToDelete.data);
         }
     };
 
@@ -395,7 +439,7 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                                                             <div className="flex flex-col">
                                                                 <div className="flex items-center gap-2">
                                                                     <Calendar className="w-3.5 h-3.5 text-gray-400" />
-                                                                    {new Date(txn.date).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })}
+                                                                    {formatDisplayDate(txn.date, 'dd MMM, yyyy')}
                                                                 </div>
                                                                 {(txn as any).paymentTime && (
                                                                     <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
@@ -473,7 +517,7 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                                                         <TableCell className="font-medium text-gray-600">
                                                             <div className="flex items-center gap-2">
                                                                 <Calendar className="w-3.5 h-3.5 text-gray-400" />
-                                                                {new Date(att.date).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })}
+                                                                {formatDisplayDate(att.date, 'dd MMM, yyyy')}
                                                             </div>
                                                         </TableCell>
                                                         <TableCell>
@@ -742,6 +786,15 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <DeleteConfirmationModal
+                open={showDeleteConfirm}
+                onOpenChange={setShowDeleteConfirm}
+                onConfirm={handleConfirmDelete}
+                title="Confirm Deletion"
+                description={itemToDelete?.message || "Are you sure you want to delete this record?"}
+                isDeleting={isUpdating}
+            />
         </>
     );
 }

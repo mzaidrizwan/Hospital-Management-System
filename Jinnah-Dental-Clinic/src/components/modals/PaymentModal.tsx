@@ -15,6 +15,7 @@ interface PaymentModalProps {
   bills: Bill[];
   patientData: Patient;
   onClose: () => void;
+  onCancel?: () => void;
   onSubmit: (queueItem: QueueItem, paymentData: any) => Promise<void> | void;
 }
 
@@ -23,6 +24,7 @@ export default function PaymentModal({
   bills = [],
   patientData,
   onClose,
+  onCancel,
   onSubmit
 }: PaymentModalProps) {
   const { licenseDaysLeft } = useData();
@@ -36,41 +38,43 @@ export default function PaymentModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // ============================================================
-  // FIXED: Pre-receive from queueItem (NOT from global transactions)
+  // FIXED: Use patient's total available credit (preReceiveBalance)
   // ============================================================
-  const preReceiveAmount = queueItem.preReceiveAmount || 0;
+  const totalAvailableCredit = Number(patientData.preReceiveBalance || 0);
 
   // ============================================================
-  // Calculations - Using queueItem's pre-receive
+  // Calculations - Handling Advance Payment Correctly
   // ============================================================
   const treatmentFee = Number(queueItem.fee || 0);
   const alreadyPaidThisVisit = Number(queueItem.amountPaid || 0);
   
-  // Patient's overall pending balance from their record
+  // Patient's overall pending balance (previous bills)
   const patientOverallPending = Number(patientData.pendingBalance || 0);
   
-  // Previous pending = Patient's overall pending minus this treatment fee + already paid
-  let previousPending = patientOverallPending - treatmentFee + alreadyPaidThisVisit;
-  if (previousPending < 0) previousPending = 0;
+  // Total bill before any adjustments
+  const totalDueBeforeAdjustments = patientOverallPending + treatmentFee;
   
-  // Total due before discount = Previous pending + Current treatment fee
-  const totalDueBeforeDiscount = patientOverallPending + treatmentFee;
+  // How much credit can we apply? (Cannot exceed total bill)
+  const appliedCredit = Math.min(totalAvailableCredit, totalDueBeforeAdjustments);
   
-  // FIXED: Pre-receive from queueItem (NOT from all transactions)
-  const totalDueAfterPreReceive = Math.max(0, totalDueBeforeDiscount - preReceiveAmount);
+  // Leftover credit after applying to this bill
+  const leftoverCredit = totalAvailableCredit - appliedCredit;
+  
+  // Total due after applying advance credit
+  const totalDueAfterAdvance = Math.max(0, totalDueBeforeAdjustments - appliedCredit);
   
   // Total due after discount
-  const totalDueAfterDiscount = Math.max(0, totalDueAfterPreReceive - paymentData.discount);
+  const totalDueAfterDiscount = Math.max(0, totalDueAfterAdvance - paymentData.discount);
   
-  // Remaining after this payment
-  const remainingAfterThisPayment = Math.max(0, totalDueAfterDiscount - paymentData.amount);
+  // Remaining amount to be paid in cash/online/bank
+  const remainingCashDue = Math.max(0, totalDueAfterDiscount - alreadyPaidThisVisit);
   
-  // Maximum payable amount
-  const maxPayable = Math.max(0, totalDueAfterPreReceive - alreadyPaidThisVisit);
-  const maxDiscount = totalDueAfterPreReceive;
-  
-  // New pending balance after this payment
-  const newPendingBalance = remainingAfterThisPayment;
+  // Final pending balance if no further payment is made
+  const finalPendingAfterPayment = Math.max(0, totalDueAfterDiscount - paymentData.amount);
+
+  // Maximum amount they can pay now (cannot pay more than what's left)
+  const maxPayable = remainingCashDue;
+  const maxDiscount = totalDueAfterAdvance;
 
   // Parse treatments (same as before)
   const parseTreatments = () => {
@@ -108,7 +112,7 @@ export default function PaymentModal({
   };
 
   const handleApplyDiscount = (percent: number) => {
-    const disc = (totalDueAfterPreReceive * percent) / 100;
+    const disc = (totalDueAfterAdvance * percent) / 100;
     setPaymentData(prev => ({ ...prev, discount: Math.min(Math.round(disc), maxDiscount) }));
   };
 
@@ -118,7 +122,7 @@ export default function PaymentModal({
     const payAmount = Math.round(Number(paymentData.amount));
     const disc = Math.round(Number(paymentData.discount));
 
-    if (payAmount <= 0) return toast.error('Enter valid amount');
+    if (payAmount < 0) return toast.error('Enter valid amount');
     if (payAmount > maxPayable) return toast.error(`Cannot pay more than Rs. ${maxPayable}`);
     if (disc > maxDiscount) return toast.error(`Discount cannot exceed Rs. ${maxDiscount}`);
 
@@ -139,8 +143,9 @@ export default function PaymentModal({
         ...paymentData,
         amount: payAmount,
         discount: disc,
-        newPendingBalance: newPendingBalance,
-        preReceiveAmount: preReceiveAmount
+        newPendingBalance: finalPendingAfterPayment,
+        preReceiveAmount: appliedCredit,
+        leftoverPreReceive: leftoverCredit
       });
 
       toast.success(shouldPrint ? 'Payment processed & bill printed!' : 'Payment processed!', { id: toastId });
@@ -212,15 +217,16 @@ TREATMENTS
 --------------------------------
 PAYMENT SUMMARY
 --------------------------------
-Previous Pending      : Rs. ${Math.round(previousPending)}
+Previous Pending      : Rs. ${Math.round(patientOverallPending)}
 Current Treatments    : Rs. ${Math.round(treatmentFee)}
-Total Due Before Disc : Rs. ${Math.round(totalDueBeforeDiscount)}
-${preReceiveAmount > 0 ? `Pre-received (ADVANCE) : Rs. -${Math.round(preReceiveAmount)}` : ''}
-${paymentData.discount > 0 ? `Discount              : Rs. -${Math.round(paymentData.discount)}` : ''}
+Total Due             : Rs. ${Math.round(totalDueBeforeAdjustments)}
+${appliedCredit > 0 ? `Advance Applied      : Rs. -${Math.round(appliedCredit)}` : ''}
+${paymentData.discount > 0 ? `Discount             : Rs. -${Math.round(paymentData.discount)}` : ''}
 --------------------------------
-Total Due             : Rs. ${Math.round(totalDueAfterDiscount)}
+Remaining Due         : Rs. ${Math.round(totalDueAfterDiscount)}
 Paid Now              : Rs. ${Math.round(paymentData.amount)}
-**Remaining**         : Rs. ${Math.round(remainingAfterThisPayment)}
+**Pending Balance**    : Rs. ${Math.round(finalPendingAfterPayment)}
+${leftoverCredit > 0 ? `Remaining Advance    : Rs. ${Math.round(leftoverCredit)}` : ''}
 --------------------------------
 Method: ${paymentData.paymentMethod.toUpperCase()}
 Notes: ${paymentData.notes || 'None'}
@@ -303,7 +309,7 @@ Contact: 0347 1887181
             <DollarSign className="h-5 w-5 text-green-600" />
             Payment – {queueItem.patientName}
           </h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full" disabled={isSubmitting}>
+          <button onClick={onCancel || onClose} className="p-2 hover:bg-gray-100 rounded-full" disabled={isSubmitting}>
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -317,21 +323,34 @@ Contact: 0347 1887181
             
           </div>
 
-          {/* Pre-receive Summary - Using queueItem's pre-receive */}
-          {preReceiveAmount > 0 && (
-            <div className="border rounded-lg p-4 bg-green-50 border-green-200">
-              <h3 className="font-semibold mb-3 flex items-center gap-2">
-                <CreditCard className="h-4 w-4 text-green-600" />
-                Advance Payment (Pre-receive) - This Treatment Only
+          {totalAvailableCredit > 0 && (
+            <div className="border rounded-lg p-4 bg-green-50 border-green-200 shadow-sm">
+              <h3 className="font-semibold mb-3 flex items-center gap-2 text-green-800">
+                <CreditCard className="h-4 w-4" />
+                Advance Payment Summary
               </h3>
-              <div className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-gray-600">Advance Paid for this treatment:</span>
-                  <span className="text-lg font-bold text-green-700">Rs. {Math.round(preReceiveAmount)}</span>
+              <div className="space-y-3">
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-gray-600">Total Advance Available:</span>
+                  <span className="font-bold text-green-700">Rs. {Math.round(totalAvailableCredit)}</span>
                 </div>
-                <div className="bg-green-100 p-2 rounded text-center text-sm">
-                  💡 This amount has been deducted from your total bill
+                
+                <div className="bg-white/60 p-3 rounded-lg border border-green-100 space-y-2">
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-blue-700 font-medium">Deducted for this bill:</span>
+                    <span className="font-bold text-blue-700">- Rs. {Math.round(appliedCredit)}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm pt-2 border-t border-green-100">
+                    <span className="text-purple-700 font-semibold">Remaining Advance Balance:</span>
+                    <span className="font-bold text-purple-700 text-lg">Rs. {Math.round(leftoverCredit)}</span>
+                  </div>
                 </div>
+
+                <p className="text-[10px] text-center text-gray-500 italic">
+                  {leftoverCredit > 0 
+                    ? "Remaining balance will be automatically available for future visits."
+                    : "Advance payment has been fully utilized for this treatment."}
+                </p>
               </div>
             </div>
           )}
@@ -379,34 +398,29 @@ Contact: 0347 1887181
             <div className="space-y-3 text-sm">
               <div className="flex justify-between"><span>Previous Pending Balance</span><span className="text-orange-700 font-medium">Rs. {Math.round(patientOverallPending)}</span></div>
               <div className="flex justify-between"><span>Current Treatment Fee</span><span>Rs. {Math.round(treatmentFee)}</span></div>
-              <div className="flex justify-between border-b pb-2"><span>Total Due Before Adjustments</span><span className="font-bold">Rs. {Math.round(totalDueBeforeDiscount)}</span></div>
+              <div className="flex justify-between border-b pb-2"><span>Total Bill Amount</span><span className="font-bold">Rs. {Math.round(totalDueBeforeAdjustments)}</span></div>
               
-              {preReceiveAmount > 0 && (
-                <div className="flex justify-between text-green-600">
-                  <span>Advance Payment (Pre-receive)</span>
-                  <span className="font-medium">- Rs. {Math.round(preReceiveAmount)}</span>
+              {appliedCredit > 0 && (
+                <div className="flex justify-between text-green-600 font-medium">
+                  <span>Advance Credit Applied</span>
+                  <span>- Rs. {Math.round(appliedCredit)}</span>
                 </div>
               )}
               
-              <div className="flex justify-between pt-2"><span>Total Due After Advance Deduction</span><span className="font-medium">Rs. {Math.round(totalDueAfterPreReceive)}</span></div>
+              <div className="flex justify-between pt-2"><span>Balance After Advance Deduction</span><span className="font-medium">Rs. {Math.round(totalDueAfterAdvance)}</span></div>
 
-              {/* Discount */}
-              {/* <div className="pt-3 border-t space-y-2">
-                <div className="flex justify-between items-center">
-                  <span className="font-medium">Discount</span>
-                  <Input type="number" name="discount" value={paymentData.discount} onChange={handleChange} min={0} max={maxDiscount} step="1" className="w-28 h-8 text-right" placeholder="0" disabled={isSubmitting} />
+              <div className="flex justify-between text-red-600 font-semibold border-t pt-2 mt-2"><span>Final Cash/Online/Bank Due</span><span>Rs. {Math.round(remainingCashDue)}</span></div>
+              <div className="flex justify-between pt-2 border-t text-sm"><span>Patient's New Pending Balance</span><span className={`font-bold ${finalPendingAfterPayment > 0 ? 'text-red-600' : 'text-green-600'}`}>Rs. {Math.round(finalPendingAfterPayment)}</span></div>
+              
+              {leftoverCredit > 0 && (
+                <div className="flex justify-between text-purple-700 font-bold bg-purple-50 p-2 rounded-lg mt-3 border border-purple-100 shadow-sm animate-pulse">
+                  <div className="flex items-center gap-2">
+                    <CreditCard className="w-4 h-4" />
+                    <span>Leftover Advance Credit</span>
+                  </div>
+                  <span>Rs. {Math.round(leftoverCredit)}</span>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {[5, 10, 15, 20].map(p => (
-                    <Button key={p} type="button" variant="outline" size="sm" onClick={() => handleApplyDiscount(p)} disabled={isSubmitting} className="text-xs">{p}%</Button>
-                  ))}
-                  <Button type="button" variant="outline" size="sm" onClick={() => setPaymentData(prev => ({ ...prev, discount: 0 }))} disabled={isSubmitting} className="text-xs text-red-600">Clear</Button>
-                </div>
-              </div> */}
-
-              {/* <div className="flex justify-between pt-3 border-t font-bold text-base"><span>Total Due After Discount</span><span className="text-green-700">Rs. {Math.round(totalDueAfterDiscount)}</span></div> */}
-              <div className="flex justify-between text-red-600 font-semibold"><span>Remaining to Pay</span><span>Rs. {Math.round(maxPayable)}</span></div>
-              <div className="flex justify-between pt-2 border-t text-sm"><span>New Pending Balance (After Payment)</span><span className={`font-bold ${newPendingBalance > 0 ? 'text-red-600' : 'text-green-600'}`}>Rs. {Math.round(newPendingBalance)}</span></div>
+              )}
             </div>
           </div>
 
@@ -441,11 +455,11 @@ Contact: 0347 1887181
             </div>
 
             <div className="flex gap-3 pt-4 border-t">
-              <Button type="button" variant="outline" onClick={onClose} className="flex-1" disabled={isSubmitting}>Cancel</Button>
-              <Button type="button" onClick={handleSubmitOnly} disabled={isSubmitting || maxPayable <= 0 || licenseDaysLeft <= 0} className="flex-1 bg-blue-600 hover:bg-blue-700">
+              <Button type="button" variant="outline" onClick={onCancel || onClose} className="flex-1" disabled={isSubmitting}>Cancel</Button>
+              <Button type="button" onClick={handleSubmitOnly} disabled={isSubmitting || licenseDaysLeft <= 0} className="flex-1 bg-blue-600 hover:bg-blue-700">
                 {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing...</> : 'Process Payment'}
               </Button>
-              <Button type="submit" disabled={isSubmitting || maxPayable <= 0 || licenseDaysLeft <= 0} className="flex-1 bg-green-600 hover:bg-green-700">
+              <Button type="submit" disabled={isSubmitting || licenseDaysLeft <= 0} className="flex-1 bg-green-600 hover:bg-green-700">
                 {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing...</> : <><Printer className="mr-2 h-4 w-4" /> Process & Print</>}
               </Button>
             </div>

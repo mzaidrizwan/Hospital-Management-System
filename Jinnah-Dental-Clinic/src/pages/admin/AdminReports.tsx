@@ -19,8 +19,9 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from "sonner";
-import { format, startOfDay, endOfDay, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
+import { format } from 'date-fns';
 import { useData } from '@/context/DataContext';
+import { parseAnyDate, isDateInDateRange, getDayRange } from '@/utils/dateUtils';
 
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 
@@ -72,10 +73,11 @@ export default function AdminReports() {
     }
 
     const now = new Date();
-    const todayStart = startOfDay(now);
-    const todayEnd = endOfDay(now);
-    const monthStart = startOfMonth(now);
-    const monthEnd = endOfMonth(now);
+    const { start: todayStart, end: todayEnd } = getDayRange(now);
+    
+    // Month range
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
     // 1. Revenue calculations
     let todayRevenue = 0;
@@ -83,25 +85,17 @@ export default function AdminReports() {
 
     (bills || []).forEach(bill => {
       if (!bill) return;
-      // Fixed: Removed createdAt as it might not exist according to lint
       const dateStr = bill.createdDate || bill.date;
       if (!dateStr) return;
 
-      try {
-        const date = new Date(dateStr);
-        if (isNaN(date.getTime())) return;
+      const amount = Number(bill.totalAmount || bill.amountPaid || 0);
 
-        const amount = Number(bill.totalAmount || bill.amountPaid || 0);
+      if (isDateInDateRange(dateStr, todayStart, todayEnd)) {
+        todayRevenue += amount;
+      }
 
-        if (isWithinInterval(date, { start: todayStart, end: todayEnd })) {
-          todayRevenue += amount;
-        }
-
-        if (isWithinInterval(date, { start: monthStart, end: monthEnd })) {
-          monthlyRevenue += amount;
-        }
-      } catch (e) {
-        console.error('Error parsing bill date:', e);
+      if (isDateInDateRange(dateStr, monthStart, monthEnd)) {
+        monthlyRevenue += amount;
       }
     });
 
@@ -109,13 +103,7 @@ export default function AdminReports() {
     const todayPatients = (queue || []).filter(item => {
       if (!item || item.status !== 'completed') return false;
       const dateStr = item.treatmentEndTime || item.checkInTime || item.createdAt;
-      if (!dateStr) return false;
-      try {
-        const date = new Date(dateStr);
-        return !isNaN(date.getTime()) && isWithinInterval(date, { start: todayStart, end: todayEnd });
-      } catch (e) {
-        return false;
-      }
+      return isDateInDateRange(dateStr, todayStart, todayEnd);
     }).length;
 
     let activePatients = 0;
@@ -124,12 +112,9 @@ export default function AdminReports() {
       if (!p) return;
       if (p.isActive !== false) activePatients++;
       if (p.registrationDate) {
-        try {
-          const regDate = new Date(p.registrationDate);
-          if (!isNaN(regDate.getTime()) && isWithinInterval(regDate, { start: monthStart, end: monthEnd })) {
-            newThisMonth++;
-          }
-        } catch (e) { }
+        if (isDateInDateRange(p.registrationDate, monthStart, monthEnd)) {
+          newThisMonth++;
+        }
       }
     });
 

@@ -11,7 +11,8 @@ import PatientFormModal from '@/components/modals/PatientFormModal';
 import PaymentModal from '@/components/modals/PaymentModal';
 import PatientDetailsModal from '@/components/modals/PatientDetailsModal';
 import TreatmentModal from '@/components/modals/TreatmentModal';
-import { startOfDay, endOfDay, parseISO, format } from 'date-fns';
+import { format } from 'date-fns';
+import { parseAnyDate, isDateInDateRange, getLocalDateString, getLocalTimeString, formatDisplayDate } from '@/utils/dateUtils';
 import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
 import { useData } from '@/context/DataContext';
 import { useAvailableDoctors } from '@/hooks/useAvailableDoctors';
@@ -62,54 +63,24 @@ export default function OperatorQueue() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [patientToDelete, setPatientToDelete] = useState<any>(null);
 
-  // Filter queue data by treatmentDate or checkInTime
   const queueData = React.useMemo(() => {
     if (!contextQueue) return [];
     try {
-      const start = startOfDay(parseISO(dateRange.startDate));
-      const end = endOfDay(parseISO(dateRange.endDate));
+      const { startDate, endDate } = dateRange;
 
       return contextQueue.filter(item => {
         if (item.status === 'completed' && item.treatmentDate) {
-          // try {
-          //   const treatmentDate = parseISO(item.treatmentDate);
-          //   return treatmentDate >= start && treatmentDate <= end;
-          // } catch (err) {
-          //   return false;
-          // }
-
-          // ✅ Best & Clean Fix
-          const treatmentDateStr = item.treatmentDate?.toString().trim();
-
-          if (!treatmentDateStr) {
-            return false;
-          }
-
-          try {
-            const treatmentDate = parseISO(treatmentDateStr);
-
-            if (isNaN(treatmentDate.getTime())) {
-              return false;
-            }
-
-            return treatmentDate >= start && treatmentDate <= end;
-          } catch (err) {
-            return false;
-          }
+          return isDateInDateRange(item.treatmentDate, startDate, endDate);
         }
 
         if (item.status !== 'completed' && item.checkInTime) {
-          try {
-            const checkInDate = parseISO(item.checkInTime);
-            return checkInDate >= start && checkInDate <= end;
-          } catch (err) {
-            return false;
-          }
+          return isDateInDateRange(item.checkInTime, startDate, endDate);
         }
 
         return false;
       });
     } catch (err) {
+      console.error('Queue calculation error:', err);
       return [];
     }
   }, [contextQueue, dateRange]);
@@ -224,11 +195,10 @@ export default function OperatorQueue() {
       const doctorName = staff.find(s => s.id === item.doctorId)?.name || item.doctor || '—';
 
       const displayDate = item.treatmentDate
-        // ? 
-        ? format(parseISO(String(item.treatmentDate)), 'dd/MM/yyyy')
-        : format(new Date(), 'dd/MM/yyyy');
+        ? formatDisplayDate(item.treatmentDate, 'dd/MM/yyyy')
+        : formatDisplayDate(new Date(), 'dd/MM/yyyy');
 
-      const displayTime = item.treatmentTime || format(new Date(), 'hh:mm a');
+      const displayTime = item.treatmentTime || formatDisplayDate(new Date(), 'hh:mm a');
 
       const treatmentsRows = treatmentItems.map((t, i) => `
         <tr>
@@ -442,36 +412,34 @@ Contact Us: 0347 1887181
       await updateLocal('bills', newBill);
 
       // ============================================================
-      // CRITICAL FIX: Patient update - Sirf totalPaid update karo
-      // Pending balance = (old pending + fee) - totalPaid
+      // FIXED: Patient update - Use the values from PaymentModal
       // ============================================================
-      const oldPending = patientData.pendingBalance || 0;
-      const newPendingBalance = oldPending + totalDueForThisTreatment - totalPaid;
+      const leftoverPreReceive = Number(paymentData.leftoverPreReceive || 0);
+      const newPendingBalance = Number(paymentData.newPendingBalance || 0);
       const newTotalPaid = (patientData.totalPaid || 0) + newPayment;
 
       const updatedPatient = {
         ...patientData,
         pendingBalance: Math.max(0, newPendingBalance),
+        preReceiveBalance: leftoverPreReceive, // PERSIST any unspent credit
         totalPaid: newTotalPaid,
         lastVisit: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
 
-      console.log('[Payment] Debug:', {
-        oldPending,
+      console.log('[Payment] Final Stats:', {
         treatmentFee,
-        preReceiveAmount,
-        totalDueForThisTreatment,
-        totalPaid,
-        newPendingBalance,
-        oldTotalPaid: patientData.totalPaid,
+        appliedCredit: paymentData.preReceiveAmount,
+        leftoverCredit: leftoverPreReceive,
+        newPending: newPendingBalance,
         newTotalPaid
       });
 
       await updateLocal('patients', updatedPatient);
 
       // 4. Create Transaction record for the payment (for history tracking)
-      const nowISO = new Date().toISOString();
+      const now = new Date();
+      const nowISO = now.toISOString();
       const transaction: any = {
         id: `TXN-${Date.now()}`,
         patientNumber: patientData.patientNumber,
@@ -481,8 +449,8 @@ Contact Us: 0347 1887181
         type: 'treatment_payment',
         method: paymentData.paymentMethod || 'cash',
         notes: paymentData.notes || `Payment for treatment: ${updatedQueueItem.treatment}`,
-        paymentDate: nowISO.split('T')[0],
-        paymentTime: nowISO.split('T')[1].split('.')[0],
+        paymentDate: getLocalDateString(now),
+        paymentTime: getLocalTimeString(now),
         fullPaymentDateTime: nowISO,
         createdAt: nowISO,
         updatedAt: nowISO,
@@ -530,8 +498,8 @@ Contact Us: 0347 1887181
       const today = new Date();
       const todayString = today.toDateString();
       const todayQueueItems = contextQueue.filter(item => {
-        const d = parseISO(item.checkInTime);
-        return d.toDateString() === todayString;
+        const d = parseAnyDate(item.checkInTime);
+        return d && d.toDateString() === todayString;
       });
 
       const nextToken = todayQueueItems.length > 0
@@ -1167,19 +1135,21 @@ Contact Us: 0347 1887181
       });
 
       // ============================================================
-      // CRITICAL FIX: Sirf totalVisits increase karo, pending balance MAT change karo
-      // Pending balance payment modal mein handle hoga
+      // CRITICAL FIX: Re-fetch latest patient data to avoid overwriting 
+      // pre-receive updates with stale state.
       // ============================================================
+      const latestPatient = getPatientDataForQueueItem(selectedQueueItemForTreatment) || selectedPatientData;
+
       const updatedPatient = {
-        ...selectedPatientData,
-        totalVisits: (selectedPatientData.totalVisits || 0) + 1,
+        ...latestPatient,
+        totalVisits: (latestPatient.totalVisits || 0) + 1,
         lastVisit: now,
         updatedAt: now
       };
 
       await updateLocal('patients', updatedPatient);
 
-      toast.success('Treatment saved! Please process payment.');
+      // toast.success('Treatment saved! Please process payment.');
 
       setShowTreatmentModal(false);
       const completedQueueItem = { ...selectedQueueItemForTreatment, ...updateData };
@@ -1235,27 +1205,36 @@ Contact Us: 0347 1887181
   };
 
   const handlePaymentModalClose = async () => {
+    setShowPaymentModal(null);
+  };
+
+  const handlePaymentCancel = async () => {
     if (showPaymentModal && showPaymentModal.queueItem) {
       const queueItem = showPaymentModal.queueItem;
       const patientData = showPaymentModal.patientData;
-      const amountPaid = queueItem.amountPaid || 0;
 
-      // Only add to pending if no payment was made (Skipped)
-      if (amountPaid === 0) {
-        const treatmentFee = queueItem.fee || 0;
-        const preReceiveAmount = queueItem.preReceiveAmount || 0;
-        const totalDue = Math.max(0, treatmentFee - preReceiveAmount);
+      try {
+        // Rollback Queue Item status
+        const updatedQueueItem = {
+          ...queueItem,
+          status: 'in_treatment' as const,
+          treatmentEndTime: null,
+          updatedAt: new Date().toISOString()
+        };
+        await updateLocal('queue', updatedQueueItem);
 
-        if (totalDue > 0) {
-          const updatedPatient = {
-            ...patientData,
-            pendingBalance: (patientData.pendingBalance || 0) + totalDue,
-            updatedAt: new Date().toISOString()
-          };
-          await updateLocal('patients', updatedPatient);
-          console.log('[PaymentModalClose] Added to pending:', totalDue);
-          toast.info(`Rs. ${totalDue} added to patient's pending balance`);
-        }
+        // Rollback Patient visit count
+        const updatedPatient = {
+          ...patientData,
+          totalVisits: Math.max(0, (patientData.totalVisits || 1) - 1),
+          updatedAt: new Date().toISOString()
+        };
+        await updateLocal('patients', updatedPatient);
+
+        toast.info('Treatment completion cancelled. Patient moved back to "In Treatment".');
+      } catch (error) {
+        console.error('Error rolling back treatment:', error);
+        toast.error('Failed to rollback treatment status');
       }
     }
     setShowPaymentModal(null);
@@ -1330,7 +1309,7 @@ Contact Us: 0347 1887181
         </div>
 
         <div className="text-sm text-gray-500 mt-2">
-          Showing data from {format(parseISO(dateRange.startDate), 'MMM dd, yyyy')} to {format(parseISO(dateRange.endDate), 'MMM dd, yyyy')}
+          Showing data from {formatDisplayDate(dateRange.startDate, 'MMM dd, yyyy')} to {formatDisplayDate(dateRange.endDate, 'MMM dd, yyyy')}
           <span className="ml-2 text-blue-600">
             (Completed treatments by treatment date, others by check-in date)
           </span>
@@ -1472,8 +1451,8 @@ Contact Us: 0347 1887181
           queueItem={showPaymentModal.queueItem}
           bills={showPaymentModal.patientBills}
           patientData={showPaymentModal.patientData}
-          // onClose={() => setShowPaymentModal(null)}
           onClose={handlePaymentModalClose}
+          onCancel={handlePaymentCancel}
           onSubmit={handleAddPayment}
         />
       )}

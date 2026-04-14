@@ -1,6 +1,7 @@
 
 import { Bill, Expense, SalaryPayment } from '@/types';
 import { DateRange } from 'react-day-picker';
+import { parseAnyDate, isDateInDateRange } from './dateUtils';
 
 // Local interface for Sale since it's not in global types yet
 export interface Sale {
@@ -21,30 +22,6 @@ export interface Sale {
     paymentStatus: string;
     paymentMethod?: string;
 }
-
-export const parseDate = (dateValue: any): Date | null => {
-    if (!dateValue) return null;
-
-    try {
-        if (dateValue.toDate && typeof dateValue.toDate === 'function') {
-            return dateValue.toDate();
-        }
-
-        if (typeof dateValue === 'string') {
-            const parsed = new Date(dateValue);
-            return isNaN(parsed.getTime()) ? null : parsed;
-        }
-
-        if (dateValue instanceof Date) {
-            return dateValue;
-        }
-
-        return null;
-    } catch (error) {
-        console.error('Error parsing date:', error);
-        return null;
-    }
-};
 
 export const formatCurrency = (amount: number) => {
     if (isNaN(amount)) return 'Rs. 0';
@@ -80,15 +57,9 @@ export const calculateFinancialStats = (
         };
     }
 
-    const from = new Date(dateRange.from);
-    from.setHours(0, 0, 0, 0);
-    const to = new Date(dateRange.to);
-    to.setHours(23, 59, 59, 999);
+    const { from, to } = dateRange;
 
-    const isInRange = (date: any) => {
-        const d = parseDate(date);
-        return d && d >= from && d <= to;
-    };
+    const isInRange = (date: any) => isDateInDateRange(date, from, to);
 
     // 1. Filter and Deduplicate Data
     const uniqueBills = Array.from(new Map((bills || []).filter(b => b && b.id).map(b => [b.id, b])).values());

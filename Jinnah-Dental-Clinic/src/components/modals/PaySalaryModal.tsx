@@ -137,6 +137,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Staff } from '@/types';
+import { getLocalDateString } from '@/utils/dateUtils';
 
 interface PaySalaryModalProps {
   open: boolean;
@@ -154,7 +155,7 @@ export default function PaySalaryModal({
   const [paymentData, setPaymentData] = useState({
     amount: 0,
     paymentMethod: 'bank',
-    paymentDate: new Date().toISOString().split('T')[0],     // YYYY-MM-DD
+    paymentDate: getLocalDateString(),     // YYYY-MM-DD
     paymentTime: new Date().toLocaleTimeString('en-US', { 
       hour: '2-digit', 
       minute: '2-digit',
@@ -173,7 +174,7 @@ export default function PaySalaryModal({
     setPaymentData({
       amount: staff.pendingSalary || 0,
       paymentMethod: 'bank',
-      paymentDate: now.toISOString().split('T')[0],
+      paymentDate: getLocalDateString(now),
       paymentTime: now.toLocaleTimeString('en-US', { 
         hour: '2-digit', 
         minute: '2-digit',

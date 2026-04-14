@@ -46,6 +46,7 @@ import { Staff, SalaryPayment, Attendance, Transaction, Expense } from '@/types'
 
 import { cn } from '@/lib/utils';
 import { useSalaryLogic } from '@/hooks/useSalaryLogic';
+import { getLocalDateString, formatDisplayDate } from '@/utils/dateUtils';
 
 const formatCurrency = (amount: number) => {
   if (isNaN(amount)) return 'Rs. 0';
@@ -202,12 +203,12 @@ export default function AdminStaff() {
   };
 
   const processedStaff = useMemo(() => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getLocalDateString();
     return (contextStaff || []).map(s => {
       if (!s) return null;
 
       const todayAttendance = (contextAttendance || []).find(a => a.staffId === s.id && a.date === todayStr);
-      let attendanceStatus = s.attendanceStatus;
+      let attendanceStatus: string | undefined = undefined;
 
       if (todayAttendance) {
         attendanceStatus = todayAttendance.status === 'present' ? 'Present' :
@@ -288,6 +289,9 @@ export default function AdminStaff() {
           lastUpdated: Date.now(),
           updatedAt: new Date().toISOString()
         } as Staff;
+        
+        // Remove legacy property to prevent confusion
+        delete (updatedStaff as any).attendanceStatus;
       } else {
         const nameSlug = (staffData.name || '').trim().toLowerCase().replace(/\s+/g, '-');
         let uniqueId = nameSlug;
@@ -396,7 +400,7 @@ export default function AdminStaff() {
         staffId: staffMember.id,
         staffName: staffMember.name,
         amount: paymentData.amount,
-        date: timestamp,
+        date: fullPaymentDateTime,
         type: 'Salary',
         method: paymentData.paymentMethod,
         notes: paymentData.notes,
@@ -413,7 +417,7 @@ export default function AdminStaff() {
         amount: paymentData.amount,
         category: 'salary',
         paymentMethod: (paymentData.paymentMethod === 'bank' ? 'bank_transfer' : 'cash') as any,
-        date: timestamp,
+        date: fullPaymentDateTime,
         description: `Monthly salary payment for ${staffMember.name}. ${paymentData.notes || ''}`,
         status: 'paid',
         isRecurring: false,
@@ -430,7 +434,7 @@ export default function AdminStaff() {
         staffId: staffMember.id,
         staffName: staffMember.name,
         amount: paymentData.amount,
-        date: timestamp,
+        date: fullPaymentDateTime,
         method: paymentData.paymentMethod,
         notes: paymentData.notes,
         month: paymentData.month || new Date().toLocaleString('default', { month: 'long', year: 'numeric' }),

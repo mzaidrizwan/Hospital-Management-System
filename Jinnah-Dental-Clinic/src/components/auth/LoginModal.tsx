@@ -84,8 +84,8 @@ export function LoginModal({ onOpenChange }: { onOpenChange?: (open: boolean) =>
     
     // Test logo loading
     const logoPath = getLogoPath();
-    console.log('Logo path:', logoPath);
-    console.log('Is Electron:', isElectron());
+    // console.log('Logo path:', logoPath);
+    // console.log('Is Electron:', isElectron());
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {

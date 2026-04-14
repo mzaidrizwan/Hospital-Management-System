@@ -4,8 +4,6 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   UserPlus,
   Search,
-  Edit,
-  Trash2,
   DollarSign,
   ChevronLeft,
   ChevronRight,
@@ -49,7 +47,8 @@ import { toast } from 'sonner';
 import PatientFormModal from '@/components/modals/PatientFormModal';
 import PatientDetailsModal from '@/components/modals/PatientDetailsModal';
 import { useData } from '@/context/DataContext';
-import { format, parseISO } from 'date-fns';
+import { format } from 'date-fns';
+import { parseAnyDate, formatDisplayDate } from '@/utils/dateUtils';
 import { deleteDoc, doc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
@@ -599,7 +598,7 @@ export default function OperatorPatients() {
 
       const treatmentRevenue = (contextBills || []).reduce((sum, b) => sum + (Number(b.amountPaid) || 0), 0);
       const salesRevenue = (contextSales || []).reduce((sum, s) => sum + (Number(s.total || s.amount || s.totalPrice || 0)), 0);
-      const preReceiveTotal = (contextTransactions || []).filter(t => t.type === 'pre_receive').reduce((sum, t) => sum + (t.amount || 0), 0);
+      const preReceiveTotal = contextPatients.reduce((sum, p) => sum + (Number(p?.preReceiveBalance) || 0), 0);
       const totalRevenue = treatmentRevenue + salesRevenue;
       console.log(contextTransactions)
 
@@ -743,8 +742,8 @@ export default function OperatorPatients() {
       const todayQueueItems = (contextQueue || []).filter(item => {
         if (!item.checkInTime) return false;
         try {
-          const d = parseISO(item.checkInTime);
-          return d.toDateString() === todayString;
+          const d = parseAnyDate(item.checkInTime);
+          return d && d.toDateString() === todayString;
         } catch (e) {
           return false;
         }
@@ -895,7 +894,8 @@ export default function OperatorPatients() {
   const safeFormatDate = (dateString: string | undefined | null): string => {
     if (!dateString) return 'N/A';
     try {
-      const date = parseISO(dateString);
+      const date = parseAnyDate(dateString);
+      if (!date) return 'N/A';
       if (isNaN(date.getTime())) return 'N/A';
       return format(date, 'MMM dd, yyyy');
     } catch (error) {
@@ -938,11 +938,7 @@ export default function OperatorPatients() {
       );
     }
 
-    return (
-      <Badge variant="outline" className="border-green-200 text-green-800 bg-green-50 text-xs">
-        Active
-      </Badge>
-    );
+    return null;
   };
 
   // Get pending amount display
@@ -952,7 +948,7 @@ export default function OperatorPatients() {
     const pending = patient.pendingBalance || 0;
 
     if (pending === 0) {
-      return <span className="text-gray-600 text-sm">--</span>;
+      return null;
     }
 
     const colorClass = pending > 0 ? 'text-orange-600' : 'text-blue-600';
@@ -993,16 +989,14 @@ export default function OperatorPatients() {
   const totalPages = Math.ceil(filteredPatients.length / patientsPerPage);
 
   // Memoized row component
-  const PatientRow = React.memo(({ patient, onEdit, onDelete, onViewDetails, onAddToWaiting, isSyncing }: {
+  const PatientRow = React.memo(({ patient, onViewDetails, onAddToWaiting, isSyncing }: {
     patient: Patient;
-    onEdit: (p: Patient) => void;
-    onDelete: (p: Patient) => void;
     onViewDetails: (p: Patient) => void;
     onAddToWaiting: (p: Patient) => void;
     isSyncing: boolean;
   }) => {
     if (!patient) return null;
-    const preReceiveTotal = getPatientPreReceiveTotal(patient.id, patient.patientNumber, patient.name);
+    const preReceiveBalance = Number(patient.preReceiveBalance || 0);
 
     return (
       <TableRow key={patient.id} className="hover:bg-gray-50 transition-colors">
@@ -1013,10 +1007,10 @@ export default function OperatorPatients() {
           <div className="font-semibold">{patient.name || '--'}</div>
         </TableCell>
         <TableCell className="hidden sm:table-cell">
-          <div className="text-sm">{patient.phone || '--'}</div>
+          <div className="text-sm">{patient.phone || <span className="text-gray-400">--</span>}</div>
         </TableCell>
         <TableCell className="hidden md:table-cell text-sm">
-          {patient.age ? `${patient.age}y` : '--'} / {patient.gender || '--'}
+          {patient.age ? `${patient.age}y` : <span className="text-gray-400">--</span>} / {patient.gender || <span className="text-gray-400">--</span>}
         </TableCell>
         <TableCell className="hidden lg:table-cell">
           {getVisitsBadge(patient)}
@@ -1024,12 +1018,17 @@ export default function OperatorPatients() {
         <TableCell>
           <div className="flex flex-col gap-1">
             {getPendingDisplay(patient)}
-            {preReceiveTotal > 0 && (
+            {preReceiveBalance > 0 && (
               <Badge variant="outline" className="text-[10px] border-purple-200 bg-purple-50 text-purple-700">
-                Pre-receive: {formatCurrency(preReceiveTotal)}
+                Pre-receive: {formatCurrency(preReceiveBalance)}
               </Badge>
             )}
             {getStatusBadge(patient)}
+            
+            {/* Show placeholder ONLY if both are zero and no other badge exists */}
+            {(patient.pendingBalance || 0) === 0 && preReceiveBalance === 0 && getStatusBadge(patient) === null && (
+              <span className="text-gray-600 text-sm">--</span>
+            )}
           </div>
         </TableCell>
         <TableCell className="text-right">
@@ -1053,26 +1052,6 @@ export default function OperatorPatients() {
               disabled={isSyncing}
             >
               <Clock className="w-3.5 h-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
-              onClick={() => onEdit(patient)}
-              title="Edit Patient"
-              disabled={isSyncing}
-            >
-              <Edit className="w-4 h-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50"
-              onClick={() => onDelete(patient)}
-              title="Delete Patient"
-              disabled={isSyncing}
-            >
-              <Trash2 className="w-4 h-4" />
             </Button>
           </div>
         </TableCell>
@@ -1307,8 +1286,6 @@ export default function OperatorPatients() {
                     <PatientRow
                       key={patient.id || Math.random().toString()}
                       patient={patient}
-                      onEdit={handleEditPatient}
-                      onDelete={handleDeletePatient}
                       onViewDetails={handleViewPatientDetails}
                       onAddToWaiting={handleAddToWaiting}
                       isSyncing={syncingPatientId === patient.id}
