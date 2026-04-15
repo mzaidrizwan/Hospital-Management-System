@@ -21,6 +21,8 @@ interface Patient {
   openingBalance?: number;
   pendingBalance?: number;
   totalVisits?: number;
+  registrationDate?: string;
+  totalPaid?: number;
 }
 
 interface PatientFormModalProps {
