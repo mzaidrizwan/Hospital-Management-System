@@ -547,19 +547,32 @@ export default function TreatmentModal({
           ` : '<p style="color: #666; margin: 20px 0;">No treatments added</p>'}
           
           <div class="totals">
-            <div class="total-row"><span>Previous Pending:</span><span>Rs. ${paymentBreakdown.currentPending.toLocaleString()}</span></div>
-            ${selectedTreatments.length > 0 ? `<div class="total-row"><span>Current Treatment:</span><span>Rs. ${actualTotal.toLocaleString()}</span></div>` : ''}
-            ${discount > 0 ? `<div class="total-row" style="color: #16a34a;"><span>Discount:</span><span>- Rs. ${discount.toLocaleString()}</span></div>` : ''}
+            <div class="total-row"><span>Previous Pending Balance:</span><span>Rs. ${paymentBreakdown.pendingBalance.toLocaleString()}</span></div>
+            ${selectedTreatments.length > 0 ? `<div class="total-row"><span>Current Treatment Fee:</span><span>Rs. ${actualTotal.toLocaleString()}</span></div>` : ''}
+            
+            <div class="total-row" style="border-top: 1px dashed #cbd5e1; margin-top: 5px; padding-top: 10px;">
+              <span>Total Bill Before Adjustments:</span>
+              <span>Rs. ${(paymentBreakdown.pendingBalance + actualTotal).toLocaleString()}</span>
+            </div>
+
             ${paymentBreakdown.preReceived > 0 ? `
-              <div class="pre-receive">
-                <h4>Pre-Receive Payment</h4>
-                <div class="total-row">
-                  <span>Amount Received</span>
-                  <span>- Rs. ${paymentBreakdown.preReceived.toLocaleString()}</span>
-                </div>
+              <div class="total-row" style="color: #6d28d9;">
+                <span>Advance Credit Applied:</span>
+                <span>- Rs. ${paymentBreakdown.preReceived.toLocaleString()}</span>
               </div>
             ` : ''}
-            <div class="total-row grand"><span>Total Due:</span><span>Rs. ${(parseFloat(manualTotal) || 0).toLocaleString()}</span></div>
+            
+            ${discount > 0 ? `
+              <div class="total-row" style="color: #16a34a;">
+                <span>Discount Applied:</span>
+                <span>- Rs. ${discount.toLocaleString()}</span>
+              </div>
+            ` : ''}
+            
+            <div class="total-row grand">
+              <span>Final Total Due:</span>
+              <span>Rs. ${(parseFloat(manualTotal) || 0).toLocaleString()}</span>
+            </div>
           </div>
           <div class="no-print" style="text-align: center; margin-top: 30px;">
             <button onclick="window.print()" style="background: #2563eb; color: white; border: none; padding: 12px 30px; border-radius: 6px; cursor: pointer; margin-right: 10px;">Print</button>

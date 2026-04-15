@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import { useData } from '@/context/DataContext';
 import { smartSync } from '@/services/syncService';
+import { getNextToken } from '@/utils/tokenUtils';
 
 interface Patient {
   id: string;           // Firebase document ID
@@ -256,19 +257,7 @@ export default function PatientFormModal({
       setShowSuggestions(false);
       setMatchingPatients([]);
 
-      // Get today's queue items to calculate next token number
-      const today = new Date();
-      const todayString = today.toDateString();
-
-      // Filter today's queue items
-      const todayQueueItems = (queue || []).filter(item => {
-        const itemDate = new Date(item.checkInTime);
-        return itemDate.toDateString() === todayString;
-      });
-
-      const nextToken = todayQueueItems.length > 0
-        ? Math.max(...todayQueueItems.map(q => q.tokenNumber || 0)) + 1
-        : 1;
+      const nextToken = getNextToken(queue);
 
       // Create queue item with all necessary fields
       const queueItemData = {

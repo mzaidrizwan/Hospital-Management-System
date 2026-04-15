@@ -96,13 +96,16 @@ export const isDateToday = (date: any): boolean => {
 /**
  * Flexible check if a date is within a range (inclusive)
  */
-export const isDateInDateRange = (dateValue: any, from: Date | null | undefined, to: Date | null | undefined): boolean => {
+export const isDateInDateRange = (dateValue: any, from: any, to: any): boolean => {
     const d = parseAnyDate(dateValue);
-    if (!d || !from || !to) return false;
+    const fromDate = parseAnyDate(from);
+    const toDate = parseAnyDate(to);
+    
+    if (!d || !fromDate || !toDate) return false;
 
     // Normalize boundaries to start and end of day
-    const start = startOfDay(from);
-    const end = endOfDay(to);
+    const start = startOfDay(fromDate);
+    const end = endOfDay(toDate);
 
     return d >= start && d <= end;
 };

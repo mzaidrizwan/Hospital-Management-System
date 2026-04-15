@@ -422,6 +422,7 @@ export type ExpenseCategory =
 
 export interface Expense {
   id: string;
+  staffId?: string;
   title: string;
   description?: string;
   amount: number;

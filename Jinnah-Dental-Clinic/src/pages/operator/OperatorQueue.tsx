@@ -14,6 +14,7 @@ import TreatmentModal from '@/components/modals/TreatmentModal';
 import { format } from 'date-fns';
 import { parseAnyDate, isDateInDateRange, getLocalDateString, getLocalTimeString, formatDisplayDate } from '@/utils/dateUtils';
 import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
+import { getNextToken } from '@/utils/tokenUtils';
 import { useData } from '@/context/DataContext';
 import { useAvailableDoctors } from '@/hooks/useAvailableDoctors';
 import { formatCurrency } from '@/lib/utils';
@@ -184,13 +185,17 @@ export default function OperatorQueue() {
       const discount = item.discount || 0;
       const amountPaid = item.amountPaid || 0;
       const treatmentFee = itemFee;
+      const appliedPreReceive = item.preReceiveAmount || 0;
 
-      let previousPending = currentPendingBalance - treatmentFee + discount + amountPaid;
+      // Deriving previous pending balance from current final balance
+      // Current Final = Prev Pending + Treatment Fee - Applied PreReceive - Discount - Amount Paid
+      // Prev Pending = Current Final - Treatment Fee + Applied PreReceive + Discount + Amount Paid
+      let previousPending = currentPendingBalance - treatmentFee + appliedPreReceive + discount + amountPaid;
       if (previousPending < 0) previousPending = 0;
 
-      const totalDueBeforeDiscount = previousPending + treatmentFee;
-      const totalDueAfterDiscount = Math.max(0, totalDueBeforeDiscount - discount);
-      const remainingAfterPayment = Math.max(0, totalDueAfterDiscount - amountPaid);
+      const totalDueBeforeAdjustments = previousPending + treatmentFee;
+      const totalDueAfterAdjustments = Math.max(0, totalDueBeforeAdjustments - appliedPreReceive - discount);
+      const finalPending = Math.max(0, totalDueAfterAdjustments - amountPaid);
 
       const doctorName = staff.find(s => s.id === item.doctorId)?.name || item.doctor || '—';
 
@@ -240,13 +245,15 @@ TREATMENTS
 --------------------------------
 PAYMENT SUMMARY
 --------------------------------
-Previous Pending : Rs. ${previousPending.toFixed(0)}
-Current Treatments: Rs. ${treatmentFee.toFixed(0)}
-Discount          : Rs. ${discount.toFixed(0)}
+Previous Pending      : Rs. ${previousPending.toFixed(0)}
+Current Treatment(s)  : Rs. ${treatmentFee.toFixed(0)}
+Total Billing Amount  : Rs. ${totalDueBeforeAdjustments.toFixed(0)}
+${appliedPreReceive > 0 ? `Advance Applied      : Rs. -${appliedPreReceive.toFixed(0)}` : ''}
+${discount > 0 ? `Discount             : Rs. -${discount.toFixed(0)}` : ''}
 --------------------------------
-Total Due         : Rs. ${totalDueAfterDiscount.toFixed(0)}
-Paid              : Rs. ${amountPaid.toFixed(0)}
-**Remaining**     : Rs. ${remainingAfterPayment.toFixed(0)}
+Net Payable Amount    : Rs. ${totalDueAfterAdjustments.toFixed(0)}
+Paid This Visit       : Rs. ${amountPaid.toFixed(0)}
+**Final Pending**     : Rs. ${finalPending.toFixed(0)}
 --------------------------------
 Status: ${item.paymentStatus ? item.paymentStatus.toUpperCase() : 'PENDING'}
 Notes: ${item.notes || 'None'}
@@ -495,16 +502,7 @@ Contact Us: 0347 1887181
         return;
       }
 
-      const today = new Date();
-      const todayString = today.toDateString();
-      const todayQueueItems = contextQueue.filter(item => {
-        const d = parseAnyDate(item.checkInTime);
-        return d && d.toDateString() === todayString;
-      });
-
-      const nextToken = todayQueueItems.length > 0
-        ? Math.max(...todayQueueItems.map(q => q.tokenNumber)) + 1
-        : 1;
+      const nextToken = getNextToken(contextQueue);
 
       const queueItemData = {
         id: `Q-${Date.now()}`,

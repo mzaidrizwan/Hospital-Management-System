@@ -218,14 +218,15 @@ TREATMENTS
 PAYMENT SUMMARY
 --------------------------------
 Previous Pending      : Rs. ${Math.round(patientOverallPending)}
-Current Treatments    : Rs. ${Math.round(treatmentFee)}
-Total Due             : Rs. ${Math.round(totalDueBeforeAdjustments)}
+Current Treatment(s)  : Rs. ${Math.round(treatmentFee)}
+Total Billing Amount  : Rs. ${Math.round(totalDueBeforeAdjustments)}
 ${appliedCredit > 0 ? `Advance Applied      : Rs. -${Math.round(appliedCredit)}` : ''}
 ${paymentData.discount > 0 ? `Discount             : Rs. -${Math.round(paymentData.discount)}` : ''}
+${alreadyPaidThisVisit > 0 ? `Previously Paid      : Rs. -${Math.round(alreadyPaidThisVisit)}` : ''}
 --------------------------------
-Remaining Due         : Rs. ${Math.round(totalDueAfterDiscount)}
+Net Payable Amount    : Rs. ${Math.round(remainingCashDue)}
 Paid Now              : Rs. ${Math.round(paymentData.amount)}
-**Pending Balance**    : Rs. ${Math.round(finalPendingAfterPayment)}
+**Final Balance Due**  : Rs. ${Math.round(finalPendingAfterPayment)}
 ${leftoverCredit > 0 ? `Remaining Advance    : Rs. ${Math.round(leftoverCredit)}` : ''}
 --------------------------------
 Method: ${paymentData.paymentMethod.toUpperCase()}

@@ -6,6 +6,5 @@
 - Resolved the problem in the Staff tab where the attendance indicator (the green line on staff cards) was incorrectly persisting across different days or appearing even when attendance hadn't been marked for the current day. Now it correctly shows Green for Present, Orange for Lev, Red for Absent.
 - Resolved all the issues related to the Advance Payment (Pre-Receive) feature and ensured that the system correctly handles, displays, and remembers advance credits for future visits.
 - Updated the Patient Details modal to include prominent information about the patient's advance credit balance. Now we can see Pre-Recieved money information at Patient details tab>View Details button(the Eye button).
-- Enhanced the TreatmentModal to provide a comprehensive financial overview, ensuring that advance balances and treatment costs are clearly visible during the session completion.
-- Enabled the payment processing buttons in the PaymentModal even when the amount to pay is zero.
-- Implemented a rollback mechanism for the payment process to ensure that cancelling a payment correctly reverts the patient's status.
+- Enhanced the Treatment Modal to provide a comprehensive financial overview, ensuring that advance balances and treatment costs are clearly visible during the session completion.
+- Audited and corrected the bill/invoice calculations.

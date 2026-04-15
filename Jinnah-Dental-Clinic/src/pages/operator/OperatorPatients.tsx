@@ -52,6 +52,7 @@ import { parseAnyDate, formatDisplayDate } from '@/utils/dateUtils';
 import { deleteDoc, doc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
+import { getNextToken } from '@/utils/tokenUtils';
 
 export default function OperatorPatients() {
   const {
@@ -737,21 +738,7 @@ export default function OperatorPatients() {
     if (!patient) return;
 
     try {
-      const today = new Date();
-      const todayString = today.toDateString();
-      const todayQueueItems = (contextQueue || []).filter(item => {
-        if (!item.checkInTime) return false;
-        try {
-          const d = parseAnyDate(item.checkInTime);
-          return d && d.toDateString() === todayString;
-        } catch (e) {
-          return false;
-        }
-      });
-
-      const nextToken = todayQueueItems.length > 0
-        ? Math.max(...todayQueueItems.map(q => q.tokenNumber)) + 1
-        : 1;
+      const nextToken = getNextToken(contextQueue);
 
       const queueItemData = {
         id: `Q-${Date.now()}`,

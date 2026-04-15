@@ -156,6 +156,7 @@ interface SelectContextType {
   open: boolean;
   setOpen: (open: boolean) => void;
   placeholder?: string;
+  disabled?: boolean;
 }
 
 const SelectContext = React.createContext<SelectContextType | null>(null);
@@ -165,13 +166,15 @@ export function Select({
   onValueChange,
   children,
   className,
-  placeholder
+  placeholder,
+  disabled
 }: {
   value: string;
   onValueChange: (value: string) => void;
   children: React.ReactNode;
   className?: string;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -188,7 +191,7 @@ export function Select({
   }, []);
 
   return (
-    <SelectContext.Provider value={{ value, onValueChange, open, setOpen, placeholder }}>
+    <SelectContext.Provider value={{ value, onValueChange, open, setOpen, placeholder, disabled }}>
       <div ref={containerRef} className={cn("relative", className)}>
         {children}
       </div>
@@ -203,7 +206,8 @@ export function SelectTrigger({ children, className }: { children: React.ReactNo
   return (
     <button
       type="button"
-      onClick={() => context.setOpen(!context.open)}
+      onClick={() => !context.disabled && context.setOpen(!context.open)}
+      disabled={context.disabled}
       className={cn(
         "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
         className
