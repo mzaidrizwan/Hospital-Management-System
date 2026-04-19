@@ -199,11 +199,12 @@ export default function OperatorQueue() {
 
       const doctorName = staff.find(s => s.id === item.doctorId)?.name || item.doctor || '—';
 
-      const displayDate = item.treatmentDate
-        ? formatDisplayDate(item.treatmentDate, 'dd/MM/yyyy')
-        : formatDisplayDate(new Date(), 'dd/MM/yyyy');
+      // Use treatmentDateTime or treatmentEndTime if available, otherwise fallback to checkInTime
+      const effectiveDateTime = item.treatmentDateTime || item.treatmentEndTime || item.checkInTime || new Date().toISOString();
+      const dateObj = new Date(effectiveDateTime);
 
-      const displayTime = item.treatmentTime || formatDisplayDate(new Date(), 'hh:mm a');
+      const displayDate = formatDisplayDate(dateObj, 'dd/MM/yyyy');
+      const displayTime = formatDisplayDate(dateObj, 'hh:mm a');
 
       const treatmentsRows = treatmentItems.map((t, i) => `
         <tr>
@@ -400,19 +401,24 @@ Contact Us: 0347 1887181
       };
       await updateLocal('queue', updatedQueueItem);
 
-      const newBill = {
+      const now = new Date();
+      const transactionDate = queueItem.treatmentDateTime || queueItem.treatmentEndTime || now.toISOString();
+      
+      const newBill: Bill = {
         id: `BILL-${Date.now()}`,
         billNumber: `BILL-${Date.now()}`,
         patientId: patientData.id,
         patientNumber: patientData.patientNumber,
         patientName: queueItem.patientName,
         treatment: queueItem.treatment || '',
+        fee: treatmentFee,
+        preReceiveApplied: preReceiveAmount,
         totalAmount: totalDueForThisTreatment,
         amountPaid: newPayment,
         discount: discount,
         paymentMethod: paymentData.paymentMethod || 'cash',
         paymentStatus,
-        createdDate: new Date().toISOString(),
+        createdDate: transactionDate,
         notes: paymentData.notes || '',
         queueItemId: queueItem.id
       };
@@ -430,8 +436,8 @@ Contact Us: 0347 1887181
         pendingBalance: Math.max(0, newPendingBalance),
         preReceiveBalance: leftoverPreReceive, // PERSIST any unspent credit
         totalPaid: newTotalPaid,
-        lastVisit: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        lastVisit: transactionDate,
+        updatedAt: now.toISOString()
       };
 
       console.log('[Payment] Final Stats:', {
@@ -445,22 +451,20 @@ Contact Us: 0347 1887181
       await updateLocal('patients', updatedPatient);
 
       // 4. Create Transaction record for the payment (for history tracking)
-      const now = new Date();
-      const nowISO = now.toISOString();
       const transaction: any = {
         id: `TXN-${Date.now()}`,
         patientNumber: patientData.patientNumber,
         patientName: patientData.name,
         amount: newPayment,
-        date: nowISO,
+        date: transactionDate,
         type: 'treatment_payment',
         method: paymentData.paymentMethod || 'cash',
         notes: paymentData.notes || `Payment for treatment: ${updatedQueueItem.treatment}`,
-        paymentDate: getLocalDateString(now),
-        paymentTime: getLocalTimeString(now),
-        fullPaymentDateTime: nowISO,
-        createdAt: nowISO,
-        updatedAt: nowISO,
+        paymentDate: getLocalDateString(transactionDate),
+        paymentTime: getLocalTimeString(transactionDate),
+        fullPaymentDateTime: transactionDate,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
         queueItemId: queueItem.id,
         billId: newBill.id
       };
@@ -1104,16 +1108,18 @@ Contact Us: 0347 1887181
         treatment: data.treatment
       });
 
+      const treatmentDateTime = `${treatmentDate}T${treatmentTime}`;
+
       const updateData = {
         status: 'completed' as const,
-        treatmentEndTime: now,
+        treatmentEndTime: treatmentDateTime,
         treatment: data.treatment,
         fee: fee,
         doctor: data.doctor,
         doctorId: data.doctorId,
         treatmentDate: treatmentDate,
         treatmentTime: treatmentTime,
-        treatmentDateTime: `${treatmentDate}T${treatmentTime}`,
+        treatmentDateTime: treatmentDateTime,
         preReceiveAmount: preReceiveAmount,
         amountPaid: 0,
         discount: 0,
@@ -1141,7 +1147,7 @@ Contact Us: 0347 1887181
       const updatedPatient = {
         ...latestPatient,
         totalVisits: (latestPatient.totalVisits || 0) + 1,
-        lastVisit: now,
+        lastVisit: treatmentDateTime,
         updatedAt: now
       };
 

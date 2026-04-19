@@ -67,8 +67,58 @@ export default function PatientDetailsModal({
   const [discountReason, setDiscountReason] = useState('');
   const [isDiscountSubmitting, setIsDiscountSubmitting] = useState(false);
 
+  const [isEditAdvanceMode, setIsEditAdvanceMode] = useState(false);
+  const [advanceAmount, setAdvanceAmount] = useState('');
 
-  // const handlePaymentSubmit = async () => {
+  const handleEditAdvanceSubmit = async () => {
+    const amount = parseFloat(advanceAmount);
+    if (isNaN(amount) || amount < 0) {
+      toast.error("Please enter a valid amount");
+      return;
+    }
+
+    try {
+      setIsPaymentSubmitting(true);
+
+      const now = new Date().toISOString();
+      const difference = amount - (displayPatient.preReceiveBalance || 0);
+
+      if (difference !== 0) {
+        const txnType = difference > 0 ? 'pre_receive' : 'treatment_payment';
+        const newTxn: Transaction = {
+          id: `TXN-${Date.now()}`,
+          patientId: displayPatient.id,
+          patientNumber: displayPatient.patientNumber,
+          patientName: displayPatient.name,
+          amount: Math.abs(difference),
+          date: now,
+          type: txnType,
+          method: 'adjustment',
+          notes: 'Manual adjustment of advance credit via Patient Details',
+          paymentDate: getLocalDateString(new Date()),
+          paymentTime: new Date().toLocaleTimeString(),
+          createdAt: now,
+          updatedAt: now
+        };
+        await updateLocal('transactions', newTxn);
+      }
+
+      const updatedPatient = {
+        ...displayPatient,
+        preReceiveBalance: amount,
+        updatedAt: now
+      };
+
+      await updateLocal('patients', updatedPatient);
+
+      toast.success(`Advance credit updated to Rs. ${amount}`);
+      setIsEditAdvanceMode(false);
+    } catch (error) {
+      toast.error("Failed to update advance credit");
+    } finally {
+      setIsPaymentSubmitting(false);
+    }
+  };
   //   const amount = parseFloat(paymentAmount);
   //   if (!amount || amount <= 0) {
   //     toast.error("Please enter a valid amount");
@@ -1049,6 +1099,17 @@ Contact: 0347 1887181
               <div className="flex gap-2">
                 <Button
                   size="sm"
+                  onClick={() => {
+                    setIsEditAdvanceMode(!isEditAdvanceMode);
+                    if (!isEditAdvanceMode) setAdvanceAmount((displayPatient.preReceiveBalance || 0).toString());
+                  }}
+                  variant={isEditAdvanceMode ? "secondary" : "outline"}
+                  className="font-medium border-purple-200 text-purple-700 hover:bg-purple-50"
+                >
+                  {isEditAdvanceMode ? "Done" : "Edit Pre-Recieve"}
+                </Button>
+                <Button
+                  size="sm"
                   onClick={() => setIsDiscountMode(!isDiscountMode)}
                   variant={isDiscountMode ? "secondary" : "outline"}
                   className="font-medium border-purple-200 text-purple-700 hover:bg-purple-50"
@@ -1113,6 +1174,40 @@ Contact: 0347 1887181
                   >
                     {isDiscountSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Printer className="w-4 h-4 mr-2" />}
                     Apply & Print
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Edit Pre-Recieve Mode Form */}
+            {isEditAdvanceMode && (
+              <div className="bg-purple-50 p-5 rounded-xl border border-purple-200 shadow-sm mb-4">
+                <h4 className="font-semibold mb-4 text-base text-purple-700">Edit Pre-Recieve Credit</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">New Advance Amount (Rs.)</Label>
+                    <Input
+                      type="number"
+                      value={advanceAmount}
+                      onChange={(e) => setAdvanceAmount(e.target.value)}
+                      placeholder="Enter new advance amount"
+                      min="0"
+                      className="h-10"
+                    />
+                    <p className="text-xs text-purple-600">Update the total persistent advance manually.</p>
+                  </div>
+                </div>
+                <div className="flex justify-end gap-3 mt-5 pt-3 border-t border-purple-200">
+                  <Button variant="outline" onClick={() => setIsEditAdvanceMode(false)} className="h-9 px-4">
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleEditAdvanceSubmit}
+                    disabled={isPaymentSubmitting || !advanceAmount}
+                    className="h-9 px-6 bg-purple-600 hover:bg-purple-700"
+                  >
+                    {isPaymentSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                    Update Advance
                   </Button>
                 </div>
               </div>
@@ -1325,7 +1420,7 @@ Contact: 0347 1887181
                                 <div>
                                   <div className="font-medium">{item.treatment || 'Treatment'}</div>
                                   <div className="text-xs text-gray-500 mt-1">
-                                    {safeFormatDate(item.checkInTime)}
+                                    {safeFormatDate(item.treatmentDateTime || item.treatmentEndTime || item.checkInTime)}
                                   </div>
                                 </div>
                                 <Badge className={`text-xs ${getStatusColor(item.status || '')}`}>
@@ -1369,7 +1464,7 @@ Contact: 0347 1887181
                             <tbody className="divide-y">
                               {history.queueHistory.map((item) => (
                                 <tr key={item.id} className="hover:bg-gray-50 transition-colors">
-                                  <td className="p-4 text-sm">{safeFormatDate(item.checkInTime)}</td>
+                                  <td className="p-4 text-sm">{safeFormatDate(item.treatmentDateTime || item.treatmentEndTime || item.checkInTime)}</td>
                                   <td className="p-4 font-mono font-medium">#{item.tokenNumber || '—'}</td>
                                   <td className="p-4 text-sm">{item.treatment || '—'}</td>
                                   <td className="p-4">
@@ -1424,9 +1519,41 @@ Contact: 0347 1887181
                               <div className="font-medium">{bill.treatment || 'General Treatment'}</div>
                               {bill.notes && <p className="text-sm text-gray-600 mt-1">{bill.notes}</p>}
                             </div>
-                            <div className="mt-6 flex justify-between text-sm">
-                              <div>Paid: <span className="font-semibold text-green-600">{formatCurrency(bill.amountPaid)}</span></div>
-                              <div>Method: <span className="font-medium">{bill.paymentMethod || '—'}</span></div>
+                            <div className="mt-4 space-y-2 text-sm bg-gray-50/50 p-4 rounded-xl border border-gray-100">
+                              {(bill.fee !== undefined || (bill.preReceiveApplied && bill.preReceiveApplied > 0)) && (
+                                <>
+                                  <div className="flex justify-between">
+                                    <span className="text-gray-600">Total Fee:</span>
+                                    <span className="font-medium">{formatCurrency(bill.fee || ((bill.totalAmount || 0) + (bill.preReceiveApplied || 0) + (bill.discount || 0)))}</span>
+                                  </div>
+                                  {(bill.preReceiveApplied && bill.preReceiveApplied > 0) ? (
+                                    <div className="flex justify-between text-purple-700 bg-purple-50/50 -mx-2 px-2 py-1 rounded">
+                                      <span>Covered by Advance:</span>
+                                      <span className="font-medium">-{formatCurrency(bill.preReceiveApplied)}</span>
+                                    </div>
+                                  ) : null}
+                                  {(bill.discount && bill.discount > 0) ? (
+                                    <div className="flex justify-between text-orange-600">
+                                      <span>Discount:</span>
+                                      <span className="font-medium">-{formatCurrency(bill.discount)}</span>
+                                    </div>
+                                  ) : null}
+                                  <div className="w-full h-px bg-gray-200 my-1"></div>
+                                </>
+                              )}
+                              <div className="flex justify-between items-center">
+                                <span className="text-gray-900 font-medium">Net Payable:</span>
+                                <span className="font-semibold text-gray-900">{formatCurrency(bill.totalAmount)}</span>
+                              </div>
+                              <div className="flex justify-between items-center">
+                                <span className="text-gray-900 font-medium">Actual Paid (Cash/Bank):</span>
+                                <span className="font-bold text-green-600">{formatCurrency(bill.amountPaid)}</span>
+                              </div>
+                              {(bill.amountPaid || 0) > 0 && (
+                                <div className="flex justify-end pt-1">
+                                  <span className="text-xs text-gray-500 bg-white px-2 py-1 rounded border shadow-sm">Method: {bill.paymentMethod || '—'}</span>
+                                </div>
+                              )}
                             </div>
                           </div>
                         ))}

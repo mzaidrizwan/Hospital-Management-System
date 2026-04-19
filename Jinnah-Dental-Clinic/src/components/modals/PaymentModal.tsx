@@ -168,8 +168,11 @@ export default function PaymentModal({
 
   // Print function with rounded numbers
   const handlePrint = () => {
-    const now = new Date();
-    const dateStr = now.toLocaleString('en-PK', {
+    // Use treatmentDateTime or treatmentEndTime if available, otherwise use now
+    const displayDate = queueItem.treatmentDateTime || queueItem.treatmentEndTime || queueItem.checkInTime || new Date().toISOString();
+    const dateObj = new Date(displayDate);
+    
+    const dateStr = dateObj.toLocaleString('en-PK', {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',

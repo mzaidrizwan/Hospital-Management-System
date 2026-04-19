@@ -23,6 +23,7 @@ interface Patient {
   totalVisits?: number;
   registrationDate?: string;
   totalPaid?: number;
+  preReceiveBalance?: number;
 }
 
 interface PatientFormModalProps {
@@ -443,18 +444,27 @@ export default function PatientFormModal({
                                 </span>
                               </div>
                               <p className="text-sm text-gray-600 mb-2">{patient.phone}</p>
-                              <div className="flex flex-wrap gap-2 text-xs">
-                                <span className={`px-2 py-1 rounded-full font-medium ${(patient.pendingBalance || 0) > 0
-                                  ? 'bg-red-100 text-red-700'
-                                  : (patient.pendingBalance || 0) < 0
-                                    ? 'bg-blue-100 text-blue-700'
-                                    : 'bg-green-100 text-green-700'
-                                  }`}>
-                                  {(patient.pendingBalance || 0) > 0 && 'Due: '}
-                                  {(patient.pendingBalance || 0) < 0 && 'Credit: '}
-                                  {(patient.pendingBalance || 0) === 0 && 'Settled'}
-                                  {(patient.pendingBalance || 0) !== 0 && ` ${formatCurrency(Math.abs(patient.pendingBalance || 0))}`}
-                                </span>
+                                <div className="flex flex-wrap gap-2 text-xs">
+                                  {/* Due Amount Badge */}
+                                  {(patient.pendingBalance || 0) > 0 && (
+                                    <span className="px-2 py-1 rounded-full font-medium bg-red-100 text-red-700">
+                                      Due: {formatCurrency(patient.pendingBalance || 0)}
+                                    </span>
+                                  )}
+                                  
+                                  {/* Advance / Pre-Receive Badge */}
+                                  {(patient.preReceiveBalance || 0) > 0 && (
+                                    <span className="px-2 py-1 rounded-full font-medium bg-green-100 text-green-700">
+                                      Advance: {formatCurrency(patient.preReceiveBalance || 0)}
+                                    </span>
+                                  )}
+
+                                  {/* Settled Badge (Only if neither Due nor Advance) */}
+                                  {!(patient.pendingBalance || 0) && !(patient.preReceiveBalance || 0) && (
+                                    <span className="px-2 py-1 rounded-full font-medium bg-blue-100 text-blue-700">
+                                      Settled (No Dues)
+                                    </span>
+                                  )}
                                 <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded-full font-medium">
                                   {patient.totalVisits || 0} visits
                                 </span>

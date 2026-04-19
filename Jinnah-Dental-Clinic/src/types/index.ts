@@ -147,6 +147,7 @@ export interface Bill {
   discount?: number;
   tax?: number;
   totalAmount?: number;
+  preReceiveApplied?: number;
 
   // Payment info
   paymentStatus?: 'pending' | 'partial' | 'paid';

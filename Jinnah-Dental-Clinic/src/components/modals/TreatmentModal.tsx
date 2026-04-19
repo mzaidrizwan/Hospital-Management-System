@@ -84,6 +84,9 @@ export default function TreatmentModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isManualEdited, setIsManualEdited] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
+  
+  // Track the patient's total consistent advance balance to avoid double counting on re-opens
+  const [activePatientCredit, setActivePatientCredit] = useState(0);
 
   const [paymentBreakdown, setPaymentBreakdown] = useState({
     totalTreatments: 0,
@@ -110,15 +113,19 @@ export default function TreatmentModal({
         setIsEditMode(false);
       }
 
-      // Load pre-receive from queue item (this visit) OR from patient's persistent credit balance
+      // Load pre-receive ONLY from queue item (advance added this specific visit)
       const queuePreReceive = queueItem.preReceiveAmount || 0;
-      const patientCredit = patientData?.preReceiveBalance || 0;
-      // Use whichever is set: the queue item's advance (new this session) or the patient's carry-over credit
-      const effectivePreReceive = queuePreReceive > 0 ? queuePreReceive : patientCredit;
-
-      if (effectivePreReceive > 0) {
+      
+      // Patient's total credit (from props). If this is a reopening, it ALREADY includes queuePreReceive.
+      const baseCredit = patientData?.preReceiveBalance || 0;
+      setActivePatientCredit(baseCredit);
+      
+      if (queuePreReceive > 0) {
         setHasPreReceive(true);
-        setPaymentBreakdown(prev => ({ ...prev, preReceived: effectivePreReceive }));
+        setPaymentBreakdown(prev => ({ ...prev, preReceived: queuePreReceive }));
+      } else {
+        setHasPreReceive(false);
+        setPaymentBreakdown(prev => ({ ...prev, preReceived: 0 }));
       }
     }
   }, [open, queueItem, patientData]);
@@ -351,9 +358,8 @@ export default function TreatmentModal({
 
     try {
       const timestamp = new Date().toISOString();
-      const now = new Date();
-      const paymentDate = now.toISOString().split('T')[0];
-      const paymentTime = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const paymentDate = treatmentDate;
+      const paymentTime = treatmentTime;
 
       // 1. Save advance amount on the queue item (scoped to this visit)
       const updatedQueueItem = {
@@ -382,7 +388,7 @@ export default function TreatmentModal({
           patientNumber: patientData.patientNumber,
           patientName: patientData.name,
           amount: amount,
-          date: timestamp,
+          date: `${paymentDate}T${paymentTime}`,
           type: 'pre_receive',
           method: 'cash',
           notes: preReceiveNotes || 'Advance payment received',
@@ -395,6 +401,9 @@ export default function TreatmentModal({
         };
         await updateLocal('transactions', newTransaction);
       }
+
+      // Update local state to reflect the new total
+      setActivePatientCredit(prev => prev + amount);
 
       setHasPreReceive(true);
       setPaymentBreakdown(prev => ({
@@ -527,7 +536,7 @@ export default function TreatmentModal({
         <body>
           <div class="header">
             <h1>Treatment Invoice</h1>
-            <p>Date: ${new Date().toLocaleDateString()}</p>
+            <p>Date: ${treatmentDate ? new Date(treatmentDate).toLocaleDateString() : new Date().toLocaleDateString()}</p>
           </div>
           <div class="info-row"><strong>Patient:</strong> ${queueItem?.patientName}</div>
           <div class="info-row"><strong>Token #:</strong> ${queueItem?.tokenNumber}</div>
@@ -753,7 +762,7 @@ export default function TreatmentModal({
               <div className="space-y-3">
                 <div className="flex justify-between items-center text-sm">
                   <span>Previous Credits (Advance Balance):</span>
-                  <span className="font-bold text-purple-700">{formatCurrency(patientData?.preReceiveBalance || 0)}</span>
+                  <span className="font-bold text-purple-700">{formatCurrency(Math.max(0, activePatientCredit - paymentBreakdown.preReceived))}</span>
                 </div>
                 <div className="flex justify-between items-center text-sm">
                   <span>New Advance Paid Today:</span>
@@ -762,7 +771,7 @@ export default function TreatmentModal({
                 <div className="flex justify-between items-center border-t pt-2 text-sm">
                   <span className="font-semibold">Total Available Advance Credit:</span>
                   <span className="font-extrabold text-blue-700">
-                    {formatCurrency((patientData?.preReceiveBalance || 0) + paymentBreakdown.preReceived)}
+                    {formatCurrency(activePatientCredit)}
                   </span>
                 </div>
                 

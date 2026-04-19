@@ -782,15 +782,23 @@ export default function OperatorPatients() {
     try {
       const queueHistory = (contextQueue || [])
         .filter(item => item && (item.patientId === patient.id || item.patientNumber === patient.patientNumber))
-        .sort((a, b) => new Date(b.checkInTime || 0).getTime() - new Date(a.checkInTime || 0).getTime());
+        .sort((a, b) => {
+          const dateA = new Date(a.treatmentDateTime || a.treatmentEndTime || a.checkInTime || 0).getTime();
+          const dateB = new Date(b.treatmentDateTime || b.treatmentEndTime || b.checkInTime || 0).getTime();
+          return dateB - dateA;
+        });
 
       const patientBills = (contextBills || [])
         .filter(bill => bill && (bill.patientId === patient.id || bill.patientNumber === patient.patientNumber))
-        .sort((a, b) => new Date(b.createdDate || 0).getTime() - new Date(a.createdDate || 0).getTime());
+        .sort((a, b) => new Date(b.createdDate || bill.date || 0).getTime() - new Date(a.createdDate || a.date || 0).getTime());
 
       const patientTransactions = (contextTransactions || [])
         .filter(t => t && (t.patientId === patient.id || t.patientNumber === patient.patientNumber || t.patientName === patient.name))
-        .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+        .sort((a, b) => {
+          const dateA = new Date(a.fullPaymentDateTime || a.date || 0).getTime();
+          const dateB = new Date(b.fullPaymentDateTime || b.date || 0).getTime();
+          return dateB - dateA;
+        });
 
       const preReceiveTotal = patientTransactions
         .filter(t => t.type === 'pre_receive')

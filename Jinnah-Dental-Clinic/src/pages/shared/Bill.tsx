@@ -96,7 +96,15 @@ export default function Bill() {
         }
     };
 
-    const handleTreatmentSubmit = async (data: { treatment: string; fee: number; doctor: string; doctorId?: string }) => {
+    const handleTreatmentSubmit = async (data: {
+        treatment: string;
+        fee: number;
+        doctor: string;
+        doctorId?: string;
+        treatmentDate?: string;
+        treatmentTime?: string;
+        treatmentDateTime?: string;
+    }) => {
         if (!selectedPatient) return;
 
         try {
@@ -107,7 +115,10 @@ export default function Bill() {
                 fee: data.fee,
                 doctor: data.doctor,
                 doctorId: data.doctorId,
-                treatmentEndTime: now
+                treatmentEndTime: data.treatmentDateTime || now,
+                treatmentDate: data.treatmentDate,
+                treatmentTime: data.treatmentTime,
+                treatmentDateTime: data.treatmentDateTime
             };
 
             // 1. Update Queue Item
@@ -120,7 +131,7 @@ export default function Bill() {
                     ...patientData,
                     pendingBalance: (patientData.pendingBalance || 0) + data.fee,
                     totalVisits: (patientData.totalVisits || 0) + 1,
-                    lastVisit: now
+                    lastVisit: data.treatmentDateTime || now
                 };
                 await updateLocal('patients', updatedPatient);
             }
@@ -189,8 +200,12 @@ export default function Bill() {
             // 3. Doctor Name
             const doctorName = staff.find(s => s.id === item.doctorId)?.name || item.doctor || '—';
 
-            const now = new Date();
-            const dateStr = now.toLocaleString('en-PK', {
+            // 4. Date Formatting
+            // Use treatmentDateTime or treatmentEndTime if available, otherwise use now
+            const displayDate = item.treatmentDateTime || item.treatmentEndTime || new Date().toISOString();
+            const dateObj = new Date(displayDate);
+            
+            const dateStr = dateObj.toLocaleString('en-PK', {
                 year: 'numeric',
                 month: '2-digit',
                 day: '2-digit',
