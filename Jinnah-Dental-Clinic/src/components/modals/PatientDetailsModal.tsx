@@ -92,11 +92,12 @@ export default function PatientDetailsModal({
           patientName: displayPatient.name,
           amount: Math.abs(difference),
           date: now,
+          fullPaymentDateTime: now,
           type: txnType,
           method: 'adjustment',
           notes: 'Manual adjustment of advance credit via Patient Details',
           paymentDate: getLocalDateString(new Date()),
-          paymentTime: new Date().toLocaleTimeString(),
+          paymentTime: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
           createdAt: now,
           updatedAt: now
         };
@@ -202,7 +203,7 @@ export default function PatientDetailsModal({
       const newBill: Bill = {
         id: `BILL-${Date.now()}`,
         billNumber: `PAY-${Date.now()}`,
-        patientId: displayPatient.patientNumber,
+        patientId: displayPatient.id,
         patientNumber: displayPatient.patientNumber,
         patientName: displayPatient.name,
         treatment: 'Balance Payment / Credit Update',
@@ -388,7 +389,7 @@ Contact: 0347 1887181
       const newBill: Bill = {
         id: `BILL-${Date.now()}`,
         billNumber: `DISC-${Date.now()}`,
-        patientId: displayPatient.patientNumber,
+        patientId: displayPatient.id,
         patientNumber: displayPatient.patientNumber,
         patientName: displayPatient.name,
         treatment: `Discount Applied: ${discountReason || 'Discount'}`,

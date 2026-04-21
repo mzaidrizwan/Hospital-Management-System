@@ -385,6 +385,7 @@ export default function TreatmentModal({
         // 3. Create a transaction record for audit trail
         const newTransaction: Transaction = {
           id: `pre-${Date.now()}`,
+          patientId: patientData.id,
           patientNumber: patientData.patientNumber,
           patientName: patientData.name,
           amount: amount,

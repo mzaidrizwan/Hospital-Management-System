@@ -526,6 +526,7 @@ export interface Transaction {
   id: string;
   staffId?: string;
   staffName?: string;
+  patientId?: string;
   amount: number;
   date: string;                      // Full ISO (old)
   patientNumber?: string; 
