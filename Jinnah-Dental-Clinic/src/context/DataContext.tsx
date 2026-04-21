@@ -2508,9 +2508,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     continue;
                 }
 
-                // Specific rule for users password
+                // Specific rule for users password preservation
                 if (collectionName === 'users' && (remoteItem.id === 'admin' || remoteItem.id === 'operator')) {
-                    if (!remoteItem.password && localItem.password) {
+                    // Always prefer the local password if it exists, unless remote is explicitly newer
+                    const remoteTimestamp = remoteItem.lastUpdated || 0;
+                    const localTimestamp = localItem.lastUpdated || 0;
+                    
+                    if (localItem.password && (localTimestamp >= remoteTimestamp || !remoteItem.password)) {
                         remoteItem.password = localItem.password;
                     }
                 }
@@ -2530,6 +2534,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
             // Handle Deletions: If item in local but not in remote and not pending sync
             for (const localItem of localData) {
+                // Safeguard: Never delete admin or operator users locally even if missing in cloud
+                if (collectionName === 'users' && (localItem.id === 'admin' || localItem.id === 'operator')) {
+                    continue;
+                }
+
                 if (!remoteIds.has(localItem.id) && !localItem.needsSync) {
                     console.log(`[Sync] Item ${localItem.id} not found in cloud, deleting locally.`);
                     await dbManager.deleteFromLocal(collectionName, localItem.id);

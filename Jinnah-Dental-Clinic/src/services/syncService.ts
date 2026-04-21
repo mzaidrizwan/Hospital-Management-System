@@ -49,10 +49,10 @@ export const smartSync = async (collectionName: string, data: any) => {
 
   const enrichedData = {
     ...data,
-    id: docId, // Ensure ID is present in the object itself
+    id: docId,
     lastUpdated: Date.now(),
     updatedAt: new Date().toISOString(),
-    needsSync: false
+    needsSync: true // Initially true
   };
 
   // 2. Save to IndexedDB (Always first, local source of truth)
@@ -67,6 +67,13 @@ export const smartSync = async (collectionName: string, data: any) => {
   try {
     const docRef = doc(db, collectionName, docId);
     await setDoc(docRef, sanitizeData(enrichedData));
+    
+    // Mark as synced ONLY after success
+    await dbManager.putItem(collectionName, {
+      ...enrichedData,
+      needsSync: false
+    });
+    
     await dbManager.deleteFromLocal('syncQueue', `${collectionName}_${docId}`).catch(() => { });
   } catch (err: any) {
     // 4. Handle Offline/Connectivity failure

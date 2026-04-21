@@ -57,7 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (foundUser && (foundUser.role === 'admin' || foundUser.role === 'operator')) {
         console.log('Login successful for:', foundUser.name);
-
+        
         // Login success - Create user object matching your User type
         const newAuthState: AuthState = {
           isAuthenticated: true,
@@ -79,8 +79,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         toast.success(`Welcome ${foundUser.name}!`);
         return { success: true, role: foundUser.role as UserRole };
       } else {
-        console.warn(`User found not found or password mismatch for ID: ${loginId}`);
-        toast.error('Invalid credentials');
+        console.warn(`Login failed: Invalid credentials or role for ID: ${loginId}`);
+        toast.error('Invalid ID or Password');
         return { success: false };
       }
     } catch (err) {

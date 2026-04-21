@@ -55,18 +55,37 @@ export function LoginModal({ onOpenChange }: { onOpenChange?: (open: boolean) =>
   useEffect(() => {
     async function setupDefaultUsers() {
       try {
+        // Check local first
         let admin = await dbManager.getFromLocal('users', 'admin');
-        if (!admin || !admin.id) {
-          admin = { id: 'admin', role: 'admin', password: 'admin123', name: 'Admin User' };
-          await dbManager.putItem('users', admin);
-          setDoc(doc(db, 'users', 'admin'), admin).catch(console.error);
-        }
-
         let operator = await dbManager.getFromLocal('users', 'operator');
-        if (!operator || !operator.id) {
-          operator = { id: 'operator', role: 'operator', password: 'operator123', name: 'Operator User' };
-          await dbManager.putItem('users', operator);
-          setDoc(doc(db, 'users', 'operator'), operator).catch(console.error);
+
+        // If not local, check cloud before creating defaults
+        if (!admin || !operator) {
+          const { getDoc, doc } = await import('firebase/firestore');
+          
+          if (!admin) {
+            const adminDoc = await getDoc(doc(db, 'users', 'admin'));
+            if (adminDoc.exists()) {
+              admin = { id: 'admin', ...adminDoc.data() };
+              await dbManager.putItem('users', admin);
+            } else {
+              admin = { id: 'admin', role: 'admin', password: 'admin123', name: 'Admin User' };
+              await dbManager.putItem('users', admin);
+              setDoc(doc(db, 'users', 'admin'), admin).catch(console.error);
+            }
+          }
+
+          if (!operator) {
+            const operatorDoc = await getDoc(doc(db, 'users', 'operator'));
+            if (operatorDoc.exists()) {
+              operator = { id: 'operator', ...operatorDoc.data() };
+              await dbManager.putItem('users', operator);
+            } else {
+              operator = { id: 'operator', role: 'operator', password: 'operator123', name: 'Operator User' };
+              await dbManager.putItem('users', operator);
+              setDoc(doc(db, 'users', 'operator'), operator).catch(console.error);
+            }
+          }
         }
 
         setTimeout(() => {
