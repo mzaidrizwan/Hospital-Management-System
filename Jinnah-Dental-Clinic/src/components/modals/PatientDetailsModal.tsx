@@ -308,10 +308,12 @@ Contact: 0347 1887181
             body { 
               margin: 0; 
               padding: 5mm; 
-              font-family: 'Courier New', Courier, monospace; 
-              font-size: 12px; 
-              line-height: 1.3; 
+              font-family: Arial, Helvetica, sans-serif; 
+              font-size: 13px; 
+              line-height: 1.4; 
               width: 72mm; 
+              word-wrap: break-word;
+              font-weight: 600;
             }
             .clinic-title {
               font-size: 18px;

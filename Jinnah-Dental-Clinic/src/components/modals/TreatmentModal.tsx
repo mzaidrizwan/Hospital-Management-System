@@ -541,6 +541,7 @@ export default function TreatmentModal({
           </div>
           <div class="info-row"><strong>Patient:</strong> ${queueItem?.patientName}</div>
           <div class="info-row"><strong>Token #:</strong> ${queueItem?.tokenNumber}</div>
+          <div class="info-row"><strong>Patient ID:</strong> ${queueItem?.patientNumber || queueItem?.patientId || 'N/A'}</div>
           <div class="info-row"><strong>Doctor:</strong> ${doctorName}</div>
           <div class="info-row"><strong>Treatment Date & Time:</strong> ${treatmentDateTime}</div>
           

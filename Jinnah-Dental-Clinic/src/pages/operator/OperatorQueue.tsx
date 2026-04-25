@@ -150,24 +150,29 @@ export default function OperatorQueue() {
 
   const handleDirectPrint = (item: QueueItem) => {
     try {
+      // 1. Parse treatments robustly
       const treatmentItems: { name: string; fee: number }[] = [];
-      let treatmentString = item.treatment || '';
+      const treatmentString = item.treatment || '';
 
-      const parts = treatmentString.split(/,\s*(?![^(]*\))/);
-      parts.forEach(part => {
-        const match = part.match(/^(.*?)\s*\(Rs\.\s*([\d,]+)\)$/i);
-        if (match) {
+      if (treatmentString && treatmentString !== 'No treatments yet') {
+        const treatmentRegex = /(?:^|,\s*)(.*?)\s*\(Rs\.\s*([\d,.]+)\)/g;
+        let match;
+
+        while ((match = treatmentRegex.exec(treatmentString)) !== null) {
           treatmentItems.push({
             name: match[1].trim(),
             fee: parseFloat(match[2].replace(/,/g, ''))
           });
-        } else if (part.trim()) {
+        }
+
+        // Fallback for non-standard formats if regex found nothing
+        if (treatmentItems.length === 0 && treatmentString.trim()) {
           treatmentItems.push({
-            name: part.trim(),
+            name: treatmentString.trim(),
             fee: 0
           });
         }
-      });
+      }
 
       const parsedTotal = treatmentItems.reduce((sum, t) => sum + t.fee, 0);
       const itemFee = item.fee || 0;
@@ -217,6 +222,7 @@ export default function OperatorQueue() {
       const printContent = `
 ================================
 Token: #${item.tokenNumber || '—'}
+Patient ID: ${item.patientNumber || item.patientId || 'N/A'}
 Patient: ${item.patientName}
 Phone: ${item.patientPhone || 'N/A'}
 Date: ${displayDate}
@@ -257,7 +263,7 @@ Paid This Visit       : Rs. ${amountPaid.toFixed(0)}
 **Final Pending**     : Rs. ${finalPending.toFixed(0)}
 --------------------------------
 Status: ${item.paymentStatus ? item.paymentStatus.toUpperCase() : 'PENDING'}
-Notes: ${item.notes || 'None'}
+${item.notes || ''}
 ================================
 Thank You! Visit Again
 Powered by Saynz Technologies
@@ -279,10 +285,18 @@ Contact Us: 0347 1887181
             body { 
               margin: 0; 
               padding: 5mm; 
-              font-family: 'Courier New', Courier, monospace; 
-              font-size: 12px; 
-              line-height: 1.3; 
+              font-family: Arial, Helvetica, sans-serif; 
+              font-size: 13px; 
+              line-height: 1.4; 
               width: 72mm; 
+              word-wrap: break-word;
+              font-weight: 600;
+            }
+            pre {
+              white-space: pre-wrap;
+              word-wrap: break-word;
+              font-family: inherit;
+              margin: 0;
             }
             .clinic-title {
               font-size: 18px;
@@ -436,6 +450,7 @@ Contact Us: 0347 1887181
         pendingBalance: Math.max(0, newPendingBalance),
         preReceiveBalance: leftoverPreReceive, // PERSIST any unspent credit
         totalPaid: newTotalPaid,
+        notes: paymentData.notes, // Update persistent clinical notes
         lastVisit: transactionDate,
         updatedAt: now.toISOString()
       };
@@ -1452,6 +1467,7 @@ Contact Us: 0347 1887181
 
       {showPaymentModal && showPaymentModal.queueItem && (
         <PaymentModal
+          key={showPaymentModal.queueItem.id}
           queueItem={showPaymentModal.queueItem}
           bills={showPaymentModal.patientBills}
           patientData={showPaymentModal.patientData}

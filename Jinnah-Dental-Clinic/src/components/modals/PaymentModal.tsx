@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { X, DollarSign, Receipt, History, Printer, Loader2, Smartphone, Building, CreditCard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { QueueItem, Bill, Patient, Transaction } from '@/types';
 import { toast } from 'sonner';
@@ -32,7 +33,7 @@ export default function PaymentModal({
     amount: 0,
     paymentMethod: 'cash' as 'cash' | 'online' | 'bank',
     discount: 0,
-    notes: ''
+    notes: patientData?.notes || ''
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -76,20 +77,39 @@ export default function PaymentModal({
   const maxPayable = remainingCashDue;
   const maxDiscount = totalDueAfterAdvance;
 
-  // Parse treatments (same as before)
+  // Robustly parse treatments from the string
   const parseTreatments = () => {
-    if (!queueItem.treatment) return [];
+    const treatmentString = queueItem.treatment || '';
+    if (!treatmentString || treatmentString === 'No treatments yet') return [];
+
     try {
-      return queueItem.treatment.split(',').map(t => {
-        const match = t.trim().match(/(.+?)\s*\(?\s*(?:Rs\.?|PKR|\$)?\s*(\d+(?:\.\d+)?)\s*\)?/);
-        return {
-          name: match ? match[1].trim() : t.trim(),
-          fee: match ? Math.round(parseFloat(match[2])) : 0  // Round to integer
-        };
-      });
+      const treatmentItems: { name: string; fee: number }[] = [];
+      
+      // This regex looks for "Name (Rs. 1000)" pattern.
+      // It uses a non-greedy match for the name and handles potential commas in the fee.
+      // The (?:^|,\s*) part handles the join separator if multiple treatments exist.
+      const treatmentRegex = /(?:^|,\s*)(.*?)\s*\(Rs\.\s*([\d,.]+)\)/g;
+      let match;
+      
+      while ((match = treatmentRegex.exec(treatmentString)) !== null) {
+        treatmentItems.push({
+          name: match[1].trim(),
+          fee: Math.round(parseFloat(match[2].replace(/,/g, '')))
+        });
+      }
+
+      // Fallback for non-standard formats if regex found nothing
+      if (treatmentItems.length === 0 && treatmentString.trim()) {
+        treatmentItems.push({
+          name: treatmentString.trim(),
+          fee: Math.round(treatmentFee)
+        });
+      }
+
+      return treatmentItems;
     } catch (error) {
       console.error('Error parsing treatments:', error);
-      return [{ name: queueItem.treatment || 'Treatment', fee: Math.round(treatmentFee) }];
+      return [{ name: treatmentString || 'Treatment', fee: Math.round(treatmentFee) }];
     }
   };
 
@@ -99,7 +119,16 @@ export default function PaymentModal({
     setPaymentData(prev => ({ ...prev, amount: maxPayable }));
   }, [maxPayable]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  useEffect(() => {
+    if (patientData) {
+      setPaymentData(prev => ({
+        ...prev,
+        notes: patientData.notes || ''
+      }));
+    }
+  }, [patientData?.id]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setPaymentData(prev => ({
       ...prev,
@@ -192,6 +221,7 @@ export default function PaymentModal({
     const printContent = `
 ================================
 Token: #${queueItem.tokenNumber || '—'}
+Patient ID: ${queueItem.patientNumber || queueItem.patientId || 'N/A'}
 Patient: ${queueItem.patientName}
 Phone: ${queueItem.patientPhone || 'N/A'}
 Date: ${dateStr}
@@ -232,8 +262,10 @@ Paid Now              : Rs. ${Math.round(paymentData.amount)}
 **Final Balance Due**  : Rs. ${Math.round(finalPendingAfterPayment)}
 ${leftoverCredit > 0 ? `Remaining Advance    : Rs. ${Math.round(leftoverCredit)}` : ''}
 --------------------------------
+--------------------------------
 Method: ${paymentData.paymentMethod.toUpperCase()}
-Notes: ${paymentData.notes || 'None'}
+--------------------------------
+${paymentData.notes || ''}
 ================================
 Thank You! Visit Again
 Powered by Saynz Technologies
@@ -251,10 +283,18 @@ Contact: 0347 1887181
             body { 
               margin: 0; 
               padding: 5mm; 
-              font-family: 'Courier New', Courier, monospace; 
-              font-size: 12px; 
-              line-height: 1.3; 
+              font-family: Arial, Helvetica, sans-serif; 
+              font-size: 13px; 
+              line-height: 1.4; 
               width: 72mm; 
+              word-wrap: break-word;
+              font-weight: 600;
+            }
+            pre {
+              white-space: pre-wrap;
+              word-wrap: break-word;
+              font-family: inherit;
+              margin: 0;
             }
             .clinic-title {
               font-size: 18px;
@@ -454,8 +494,16 @@ Contact: 0347 1887181
             </div>
 
             <div className="space-y-2">
-              <Label>Notes (optional)</Label>
-              <Input name="notes" value={paymentData.notes} onChange={handleChange} placeholder="e.g. Paid via EasyPaisa" disabled={isSubmitting} />
+              <Label>Additional Information</Label>
+              <Textarea 
+                name="notes" 
+                value={paymentData.notes} 
+                onChange={handleChange} 
+                placeholder="Clinical notes, history, or payment details..." 
+                className="min-h-[100px] resize-none"
+                disabled={isSubmitting} 
+              />
+              <p className="text-[10px] text-gray-500 italic">These notes are saved to the patient record and appear on the bill.</p>
             </div>
 
             <div className="flex gap-3 pt-4 border-t">

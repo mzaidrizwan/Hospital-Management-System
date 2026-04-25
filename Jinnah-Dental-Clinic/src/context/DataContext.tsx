@@ -2496,6 +2496,21 @@ export function DataProvider({ children }: { children: ReactNode }) {
             let hasChanged = false;
             const updatesToSave: any[] = [];
 
+            // Helper to get a reliable numeric timestamp from an item
+            const getNumericTimestamp = (item: any): number => {
+                if (item.lastUpdated && typeof item.lastUpdated === 'number') {
+                    return item.lastUpdated;
+                }
+                if (item.updatedAt) {
+                    try {
+                        return new Date(item.updatedAt).getTime();
+                    } catch (e) {
+                        return 0;
+                    }
+                }
+                return 0;
+            };
+
             // Track remote IDs to detect deletions
             const remoteIds = new Set(filteredRemoteData.map(d => d.id));
 
@@ -2511,8 +2526,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 // Specific rule for users password preservation
                 if (collectionName === 'users' && (remoteItem.id === 'admin' || remoteItem.id === 'operator')) {
                     // Always prefer the local password if it exists, unless remote is explicitly newer
-                    const remoteTimestamp = remoteItem.lastUpdated || 0;
-                    const localTimestamp = localItem.lastUpdated || 0;
+                    const remoteTimestamp = getNumericTimestamp(remoteItem);
+                    const localTimestamp = getNumericTimestamp(localItem);
                     
                     if (localItem.password && (localTimestamp >= remoteTimestamp || !remoteItem.password)) {
                         remoteItem.password = localItem.password;
@@ -2520,14 +2535,31 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }
 
                 if (JSON.stringify(remoteItem) !== JSON.stringify(localItem)) {
-                    const remoteTimestamp = remoteItem.lastUpdated || remoteItem.updatedAt || 0;
-                    const localTimestamp = localItem.lastUpdated || localItem.updatedAt || 0;
+                    const remoteTimestamp = getNumericTimestamp(remoteItem);
+                    const localTimestamp = getNumericTimestamp(localItem);
 
                     const isLocalPendingSync = localItem.needsSync || localItem.syncPending;
-                    // If remote is newer OR if we don't have a sync pending and it's different
-                    if ((remoteTimestamp > localTimestamp || !isLocalPendingSync)) {
+                    
+                    // CRITICAL FIX: Only overwrite if remote is strictly NEWER than local
+                    // OR if they have the same timestamp but local is clean while remote is different
+                    // This prevents stale Firebase snapshots from reverting local status updates.
+                    const isRemoteNewer = remoteTimestamp > localTimestamp;
+                    const isRemoteSameButLocalClean = remoteTimestamp === localTimestamp && !isLocalPendingSync;
+
+                    if (isRemoteNewer || isRemoteSameButLocalClean) {
                         updatesToSave.push(remoteItem);
                         hasChanged = true;
+                    } else if (isLocalPendingSync && remoteTimestamp === localTimestamp) {
+                        // If both have same timestamp but local is dirty, we might want to keep local
+                        // but if they are exactly the same data except needsSync, we can mark local as clean
+                        const remoteNoSync = { ...remoteItem, needsSync: false, lastUpdated: remoteTimestamp };
+                        const localNoSync = { ...localItem, needsSync: false, lastUpdated: localTimestamp };
+                        
+                        if (JSON.stringify(remoteNoSync) === JSON.stringify(localNoSync)) {
+                            // Data matches, just clear the sync flag locally
+                            updatesToSave.push({ ...localItem, needsSync: false });
+                            hasChanged = true;
+                        }
                     }
                 }
             }
