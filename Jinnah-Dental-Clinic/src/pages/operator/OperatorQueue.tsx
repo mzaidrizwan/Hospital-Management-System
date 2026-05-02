@@ -263,7 +263,7 @@ Paid This Visit       : Rs. ${amountPaid.toFixed(0)}
 **Final Pending**     : Rs. ${finalPending.toFixed(0)}
 --------------------------------
 Status: ${item.paymentStatus ? item.paymentStatus.toUpperCase() : 'PENDING'}
-${item.notes || ''}
+${getPatientDataForQueueItem(item)?.notes || item.notes || ''}
 ================================
 Thank You! Visit Again
 Powered by Saynz Technologies
@@ -411,7 +411,7 @@ Contact Us: 0347 1887181
         amountPaid: totalPaid,
         paymentStatus,
         discount: discount,
-        notes: (queueItem.notes || '') + `\nPayment: Rs. ${newPayment} (${paymentData.paymentMethod})`
+        notes: paymentData.notes || queueItem.notes || ''
       };
       await updateLocal('queue', updatedQueueItem);
 
