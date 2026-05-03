@@ -108,10 +108,13 @@ export default function OperatorQueue() {
   // Get pre-receive total for a patient
   const getPatientPreReceiveTotal = useCallback((patientId: string, patientNumber: string, patientName: string) => {
     const preReceiveTransactions = (contextTransactions || []).filter(t =>
-      t.type === 'pre_receive' &&
+      (t.type === 'pre_receive' || t.type === 'pre_receive_return') &&
       (t.patientId === patientId || t.patientNumber === patientNumber || t.patientName === patientName)
     );
-    return preReceiveTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+    return preReceiveTransactions.reduce((sum, t) => {
+      if (t.type === 'pre_receive_return') return sum - (t.amount || 0);
+      return sum + (t.amount || 0);
+    }, 0);
   }, [contextTransactions]);
 
   const filteredQueueData = queueData.filter(item => {

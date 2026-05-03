@@ -25,9 +25,11 @@ import { Patient, QueueItem } from '@/types';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { DeleteConfirmationModal } from '@/components/modals/DeleteConfirmationModal';
+import PatientDetailsModal from '@/components/modals/PatientDetailsModal';
+import { Transaction, Bill } from '@/types';
 
 export default function PatientDetails() {
-    const { patients, queue, deleteLocal, exportToCSV, addItem, deletePatientWithAllRecords } = useData();
+    const { patients, queue, bills, transactions, deleteLocal, exportToCSV, addItem, deletePatientWithAllRecords } = useData();
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -112,6 +114,29 @@ export default function PatientDetails() {
             maximumFractionDigits: 0,
         }).format(amount || 0);
     };
+
+    // Calculate history for selected patient
+    const selectedPatientHistory = useMemo(() => {
+        if (!selectedPatient) return { queueHistory: [], bills: [], transactions: [], preReceiveTotal: 0 };
+
+        const pQueue = (queue || []).filter(q => q.patientId === selectedPatient.id || q.patientNumber === selectedPatient.patientNumber);
+        const pBills = (bills || []).filter(b => b.patientId === selectedPatient.id || b.patientNumber === selectedPatient.patientNumber);
+        const pTransactions = (transactions || []).filter(t => t.patientId === selectedPatient.id || t.patientNumber === selectedPatient.patientNumber);
+        
+        const preReceiveTotal = pTransactions
+            .filter(t => t.type === 'pre_receive' || t.type === 'pre_receive_return')
+            .reduce((sum, t) => {
+                if (t.type === 'pre_receive_return') return sum - (t.amount || 0);
+                return sum + (t.amount || 0);
+            }, 0);
+
+        return {
+            queueHistory: pQueue,
+            bills: pBills,
+            transactions: pTransactions,
+            preReceiveTotal
+        };
+    }, [selectedPatient, queue, bills, transactions]);
 
     return (
         <div className="space-y-6 p-4 md:p-6 animate-fade-in">
@@ -358,6 +383,19 @@ export default function PatientDetails() {
                 }
                 isDeleting={isDeleting}
             />
+
+            {selectedPatient && (
+                <PatientDetailsModal
+                    patient={selectedPatient}
+                    onClose={() => setSelectedPatient(null)}
+                    onEdit={() => {}} // Not implemented here yet
+                    onDelete={() => handleDeletePatient(selectedPatient)}
+                    queueHistory={selectedPatientHistory.queueHistory}
+                    bills={selectedPatientHistory.bills}
+                    transactions={selectedPatientHistory.transactions}
+                    preReceiveTotal={selectedPatientHistory.preReceiveTotal}
+                />
+            )}
         </div>
     );
 }

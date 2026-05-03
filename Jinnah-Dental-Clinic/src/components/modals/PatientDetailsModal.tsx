@@ -50,6 +50,7 @@ export default function PatientDetailsModal({
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [paymentDate, setPaymentDate] = useState(getLocalDateString());
   const [paymentNotes, setPaymentNotes] = useState('');
+  const [paymentDiscount, setPaymentDiscount] = useState('');
   const [isPaymentSubmitting, setIsPaymentSubmitting] = useState(false);
 
   const [history, setHistory] = useState<{
@@ -61,7 +62,7 @@ export default function PatientDetailsModal({
   });
 
   const hasPreReceive = preReceiveTotal > 0 && transactions && transactions.length > 0;
-  const preReceiveTransactions = transactions?.filter(t => t.type === 'pre_receive') || [];
+  const preReceiveTransactions = transactions?.filter(t => t.type === 'pre_receive' || t.type === 'pre_receive_return') || [];
   const [isDiscountMode, setIsDiscountMode] = useState(false);
   const [discountAmount, setDiscountAmount] = useState('');
   const [discountReason, setDiscountReason] = useState('');
@@ -69,6 +70,8 @@ export default function PatientDetailsModal({
 
   const [isEditAdvanceMode, setIsEditAdvanceMode] = useState(false);
   const [advanceAmount, setAdvanceAmount] = useState('');
+  const [isReturnAdvanceMode, setIsReturnAdvanceMode] = useState(false);
+  const [returnAmount, setReturnAmount] = useState('');
 
   const handleEditAdvanceSubmit = async () => {
     const amount = parseFloat(advanceAmount);
@@ -116,6 +119,63 @@ export default function PatientDetailsModal({
       setIsEditAdvanceMode(false);
     } catch (error) {
       toast.error("Failed to update advance credit");
+    } finally {
+      setIsPaymentSubmitting(false);
+    }
+  };
+
+  const handleReturnAdvanceSubmit = async () => {
+    const amount = parseFloat(returnAmount);
+    if (isNaN(amount) || amount <= 0) {
+      toast.error("Please enter a valid amount");
+      return;
+    }
+
+    if (amount > (displayPatient.preReceiveBalance || 0)) {
+      toast.error("Return amount cannot exceed current pre-receive balance");
+      return;
+    }
+
+    try {
+      setIsPaymentSubmitting(true);
+
+      const now = new Date().toISOString();
+      const newPreReceiveBalance = (displayPatient.preReceiveBalance || 0) - amount;
+
+      // Create a transaction for the return
+      const newTxn: Transaction = {
+        id: `TXN-${Date.now()}`,
+        patientId: displayPatient.id,
+        patientNumber: displayPatient.patientNumber,
+        patientName: displayPatient.name,
+        amount: amount,
+        date: now,
+        fullPaymentDateTime: now,
+        type: 'pre_receive_return',
+        method: 'cash',
+        notes: 'Pre-receive amount returned to patient',
+        paymentDate: getLocalDateString(new Date()),
+        paymentTime: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
+        createdAt: now,
+        updatedAt: now
+      };
+      
+      await updateLocal('transactions', newTxn);
+
+      const updatedPatient = {
+        ...displayPatient,
+        preReceiveBalance: newPreReceiveBalance,
+        updatedAt: now
+      };
+
+      await updateLocal('patients', updatedPatient);
+
+      toast.success(`Rs. ${amount} returned to patient. New advance credit: Rs. ${newPreReceiveBalance}`);
+      setIsReturnAdvanceMode(false);
+      setReturnAmount('');
+    } catch (error) {
+      console.error("Return error:", error);
+      toast.error("Failed to process return");
     } finally {
       setIsPaymentSubmitting(false);
     }
@@ -186,9 +246,11 @@ export default function PatientDetailsModal({
   // };
 
   const handlePaymentSubmit = async (shouldPrint: boolean = true) => {
-    const amount = parseFloat(paymentAmount);
-    if (!amount || amount <= 0) {
-      toast.error("Please enter a valid amount");
+    const amount = parseFloat(paymentAmount) || 0;
+    const discount = parseFloat(paymentDiscount) || 0;
+    
+    if (amount <= 0 && discount <= 0) {
+      toast.error("Please enter a valid amount or discount");
       return;
     }
 
@@ -206,10 +268,10 @@ export default function PatientDetailsModal({
         patientId: displayPatient.id,
         patientNumber: displayPatient.patientNumber,
         patientName: displayPatient.name,
-        treatment: 'Balance Payment / Credit Update',
-        totalAmount: 0,
+        treatment: discount > 0 ? `Balance Payment & Discount` : 'Balance Payment / Credit Update',
+        totalAmount: discount, // Representing the adjustment
         amountPaid: amount,
-        discount: 0,
+        discount: discount,
         paymentMethod: paymentMethod,
         paymentStatus: 'paid',
         createdDate: finalDateISO,
@@ -219,7 +281,7 @@ export default function PatientDetailsModal({
       const currentPending = displayPatient.pendingBalance || 0;
       const currentTotalPaid = displayPatient.totalPaid || 0;
 
-      const newPendingBalance = currentPending - amount;
+      const newPendingBalance = currentPending - amount - discount;
       const newTotalPaid = currentTotalPaid + amount;
 
       const updatedPatient = {
@@ -231,6 +293,48 @@ export default function PatientDetailsModal({
       };
 
       await updateLocal('bills', newBill);
+      
+      // Add transaction records for audit trail
+      if (amount > 0) {
+        const paymentTxn: Transaction = {
+          id: `tx-pay-${Date.now()}`,
+          patientId: displayPatient.id,
+          patientNumber: displayPatient.patientNumber,
+          patientName: displayPatient.name,
+          amount: amount,
+          date: finalDateISO,
+          fullPaymentDateTime: finalDateISO,
+          type: 'treatment_payment',
+          method: paymentMethod as any,
+          notes: paymentNotes || 'Balance payment',
+          paymentDate: paymentDate,
+          paymentTime: now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
+          createdAt: finalDateISO,
+          updatedAt: finalDateISO
+        };
+        await updateLocal('transactions', paymentTxn);
+      }
+
+      if (discount > 0) {
+        const discountTxn: Transaction = {
+          id: `tx-disc-${Date.now()}`,
+          patientId: displayPatient.id,
+          patientNumber: displayPatient.patientNumber,
+          patientName: displayPatient.name,
+          amount: discount,
+          date: finalDateISO,
+          fullPaymentDateTime: finalDateISO,
+          type: 'treatment_payment', // Or maybe a new type? Let's stay with treatment_payment for now or 'adjustment'
+          method: 'adjustment' as any,
+          notes: `Discount applied: ${paymentNotes || 'No reason'}`,
+          paymentDate: paymentDate,
+          paymentTime: now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
+          createdAt: finalDateISO,
+          updatedAt: finalDateISO
+        };
+        await updateLocal('transactions', discountTxn);
+      }
+
       await updateLocal('patients', updatedPatient);
 
       setHistory(prev => ({
@@ -240,12 +344,13 @@ export default function PatientDetailsModal({
 
       // Print receipt if requested
       if (shouldPrint) {
-        handlePrintReceipt(amount, newPendingBalance, newTotalPaid);
+        handlePrintReceipt(amount, newPendingBalance, newTotalPaid, discount);
       }
 
-      toast.success(`Payment of Rs. ${amount} recorded successfully`);
+      toast.success(`Payment of Rs. ${amount} ${discount > 0 ? `and Discount of Rs. ${discount} ` : ''}recorded successfully`);
       setIsPaymentMode(false);
       setPaymentAmount('');
+      setPaymentDiscount('');
       setPaymentDate(new Date().toISOString().split('T')[0]);
       setPaymentNotes('');
     } catch (error) {
@@ -256,7 +361,7 @@ export default function PatientDetailsModal({
     }
   };
 
-  const handlePrintReceipt = (amount: number, newPendingBalance: number, newTotalPaid: number) => {
+  const handlePrintReceipt = (amount: number, newPendingBalance: number, newTotalPaid: number, discount: number = 0) => {
     const now = new Date();
     const dateStr = now.toLocaleString('en-PK', {
       year: 'numeric',
@@ -277,20 +382,19 @@ Phone: ${displayPatient.phone || 'N/A'}
 
 PAYMENT DETAILS
 --------------------------------
-Payment Amount     : Rs. ${amount.toFixed(0)}
-Payment Method     : ${paymentMethod.toUpperCase()}
+Cash Received      : Rs. ${amount.toFixed(0)}
+${discount > 0 ? `Discount Applied   : Rs. ${discount.toFixed(0)}\n` : ''}Payment Method     : ${paymentMethod.toUpperCase()}
 Payment Date       : ${paymentDate}
 --------------------------------
 
 BALANCE SUMMARY
 --------------------------------
 Previous Balance   : Rs. ${(displayPatient.pendingBalance || 0).toFixed(0)}
-Amount Paid        : Rs. ${amount.toFixed(0)}
+Cash Paid          : - Rs. ${amount.toFixed(0)}
+${discount > 0 ? `Discount Applied   : - Rs. ${discount.toFixed(0)}\n` : ''}--------------------------------
 New Balance        : Rs. ${newPendingBalance.toFixed(0)}
---------------------------------
-Total Paid to Date : Rs. ${newTotalPaid.toFixed(0)}
 ================================
-Notes: ${paymentNotes || 'None'}
+${paymentNotes || ''}
 ================================
 Thank You! Visit Again
 Powered by Saynz Technologies
@@ -413,6 +517,26 @@ Contact: 0347 1887181
       };
 
       await updateLocal('bills', newBill);
+      
+      // Add transaction record for audit trail
+      const discountTxn: Transaction = {
+        id: `tx-disc-${Date.now()}`,
+        patientId: displayPatient.id,
+        patientNumber: displayPatient.patientNumber,
+        patientName: displayPatient.name,
+        amount: discount,
+        date: finalDateISO,
+        fullPaymentDateTime: finalDateISO,
+        type: 'treatment_payment', // Using this for general balance adjustments
+        method: 'adjustment' as any,
+        notes: `Discount applied (Balance Update): ${discountReason || 'No reason'}`,
+        paymentDate: getLocalDateString(new Date()),
+        paymentTime: now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
+        createdAt: finalDateISO,
+        updatedAt: finalDateISO
+      };
+      await updateLocal('transactions', discountTxn);
+
       await updateLocal('patients', updatedPatient);
 
       setHistory(prev => ({
@@ -477,7 +601,7 @@ New Balance        : Rs. ${newPendingBalance.toFixed(0)}
 --------------------------------
 Total Paid to Date : Rs. ${(displayPatient.totalPaid || 0).toFixed(0)}
 ================================
-Notes: ${discountReason || 'None'}
+${discountReason || ''}
 ================================
 Thank You! Visit Again
 Powered by Saynz Technologies
@@ -1104,12 +1228,25 @@ Contact: 0347 1887181
                   size="sm"
                   onClick={() => {
                     setIsEditAdvanceMode(!isEditAdvanceMode);
+                    setIsReturnAdvanceMode(false);
                     if (!isEditAdvanceMode) setAdvanceAmount((displayPatient.preReceiveBalance || 0).toString());
                   }}
                   variant={isEditAdvanceMode ? "secondary" : "outline"}
                   className="font-medium border-purple-200 text-purple-700 hover:bg-purple-50"
                 >
                   {isEditAdvanceMode ? "Done" : "Edit Pre-Recieve"}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setIsReturnAdvanceMode(!isReturnAdvanceMode);
+                    setIsEditAdvanceMode(false);
+                    if (!isReturnAdvanceMode) setReturnAmount('');
+                  }}
+                  variant={isReturnAdvanceMode ? "secondary" : "outline"}
+                  className="font-medium border-red-200 text-red-700 hover:bg-red-50"
+                >
+                  {isReturnAdvanceMode ? "Cancel Return" : "Return Money"}
                 </Button>
                 <Button
                   size="sm"
@@ -1216,17 +1353,63 @@ Contact: 0347 1887181
               </div>
             )}
 
+            {/* Return Pre-Recieve Form */}
+            {isReturnAdvanceMode && (
+              <div className="bg-red-50 p-5 rounded-xl border border-red-200 shadow-sm mb-4">
+                <h4 className="font-semibold mb-4 text-base text-red-700">Return Pre-Recieve Money</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Return Amount (Rs.)</Label>
+                    <Input
+                      type="number"
+                      value={returnAmount}
+                      onChange={(e) => setReturnAmount(e.target.value)}
+                      placeholder="Enter amount to return"
+                      min="0"
+                      max={displayPatient.preReceiveBalance || 0}
+                      className="h-10"
+                    />
+                    <p className="text-xs text-red-600">Available to return: {formatCurrency(displayPatient.preReceiveBalance || 0)}</p>
+                  </div>
+                </div>
+                <div className="flex justify-end gap-3 mt-5 pt-3 border-t border-red-200">
+                  <Button variant="outline" onClick={() => setIsReturnAdvanceMode(false)} className="h-9 px-4">
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleReturnAdvanceSubmit}
+                    disabled={isPaymentSubmitting || !returnAmount}
+                    className="h-9 px-6 bg-red-600 hover:bg-red-700"
+                  >
+                    {isPaymentSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                    Process Return
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {isPaymentMode ? (
               <div className="bg-white p-5 rounded-xl border shadow-sm">
                 <h4 className="font-semibold mb-4 text-base">Record Payment</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label className="text-sm font-medium">Amount (Rs.)</Label>
+                    <Label className="text-sm font-medium">Cash Received (Rs.)</Label>
                     <Input
                       type="number"
                       value={paymentAmount}
                       onChange={(e) => setPaymentAmount(e.target.value)}
-                      placeholder="Enter amount"
+                      placeholder="Actual cash received"
+                      min="0"
+                      className="h-10"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Discount (Rs.)</Label>
+                    <Input
+                      type="number"
+                      value={paymentDiscount}
+                      onChange={(e) => setPaymentDiscount(e.target.value)}
+                      placeholder="Enter discount"
                       min="0"
                       className="h-10"
                     />
@@ -1261,6 +1444,35 @@ Contact: 0347 1887181
                       className="h-10"
                     />
                   </div>
+                  
+                  {/* Real-time Calculation Summary */}
+                  <div className="md:col-span-2 bg-blue-50 p-4 rounded-xl border border-blue-100 mt-2">
+                    <div className="flex justify-between items-center mb-2 pb-2 border-b border-blue-100">
+                      <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">Payment Summary</span>
+                      <span className="text-xs text-gray-500">Live Calculation</span>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-sm text-gray-700">
+                        <span>Current Pending Balance:</span>
+                        <span className="font-bold">{formatCurrency(displayPatient.pendingBalance || 0)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm text-blue-700">
+                        <span>Total Settlement (Cash + Discount):</span>
+                        <span className="font-bold">
+                          {formatCurrency((parseFloat(paymentAmount) || 0) + (parseFloat(paymentDiscount) || 0))}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-base border-t border-blue-200 pt-2 mt-1">
+                        <span className="font-bold text-gray-900">Remaining Balance:</span>
+                        <span className={`font-black ${(displayPatient.pendingBalance || 0) - (parseFloat(paymentAmount) || 0) - (parseFloat(paymentDiscount) || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {formatCurrency((displayPatient.pendingBalance || 0) - (parseFloat(paymentAmount) || 0) - (parseFloat(paymentDiscount) || 0))}
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-blue-600/70 mt-3 italic text-center">
+                      Tip: Enter actual cash in "Cash Received" and reduction in "Discount".
+                    </p>
+                  </div>
                 </div>
                 <div className="flex justify-end gap-3 mt-5 pt-3 border-t">
                   <Button variant="outline" onClick={() => setIsPaymentMode(false)} className="h-9 px-4">
@@ -1268,7 +1480,7 @@ Contact: 0347 1887181
                   </Button>
                   <Button
                     onClick={() => handlePaymentSubmit(false)}
-                    disabled={isPaymentSubmitting || !paymentAmount}
+                    disabled={isPaymentSubmitting || (!paymentAmount && !paymentDiscount)}
                     className="h-9 px-6 bg-blue-600 hover:bg-blue-700"
                   >
                     {isPaymentSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
@@ -1276,7 +1488,7 @@ Contact: 0347 1887181
                   </Button>
                   <Button
                     onClick={() => handlePaymentSubmit(true)}
-                    disabled={isPaymentSubmitting || !paymentAmount}
+                    disabled={isPaymentSubmitting || (!paymentAmount && !paymentDiscount)}
                     className="h-9 px-6 bg-green-600 hover:bg-green-700"
                   >
                     {isPaymentSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Printer className="w-4 h-4 mr-2" />}
@@ -1389,7 +1601,7 @@ Contact: 0347 1887181
                           <Phone className="w-5 h-5 text-gray-400 mt-0.5" />
                           <div>
                             <div className="text-xs text-gray-500">Phone Number</div>
-                            <div className="font-medium">{patient.phone || 'N/A'}</div>
+                            <div className="font-medium">{displayPatient.phone || 'N/A'}</div>
                           </div>
                         </div>
                         <div className="flex gap-4">
@@ -1397,7 +1609,7 @@ Contact: 0347 1887181
                           <div>
                             <div className="text-xs text-gray-500">Age & Gender</div>
                             <div className="font-medium">
-                              {patient.age || 'N/A'} years • {patient.gender || 'N/A'}
+                              {displayPatient.age || 'N/A'} years • {displayPatient.gender || 'N/A'}
                             </div>
                           </div>
                         </div>
@@ -1405,7 +1617,7 @@ Contact: 0347 1887181
                           <MapPin className="w-5 h-5 text-gray-400 mt-0.5" />
                           <div>
                             <div className="text-xs text-gray-500">Address</div>
-                            <div className="font-medium leading-relaxed">{patient.address || 'N/A'}</div>
+                            <div className="font-medium leading-relaxed">{displayPatient.address || 'N/A'}</div>
                           </div>
                         </div>
                       </div>

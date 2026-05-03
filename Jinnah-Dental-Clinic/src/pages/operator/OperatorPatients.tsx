@@ -106,10 +106,13 @@ export default function OperatorPatients() {
   // Calculate pre-receive total for a patient
   const getPatientPreReceiveTotal = useCallback((patientId: string, patientNumber: string, patientName: string) => {
     const preReceiveTransactions = (contextTransactions || []).filter(t =>
-      t.type === 'pre_receive' &&
+      (t.type === 'pre_receive' || t.type === 'pre_receive_return') &&
       (t.patientId === patientId || t.patientNumber === patientNumber || t.patientName === patientName)
     );
-    return preReceiveTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+    return preReceiveTransactions.reduce((sum, t) => {
+      if (t.type === 'pre_receive_return') return sum - (t.amount || 0);
+      return sum + (t.amount || 0);
+    }, 0);
   }, [contextTransactions]);
 
   // Comprehensive delete function for patient with all records
@@ -582,7 +585,7 @@ export default function OperatorPatients() {
   }, [contextPatients]);
 
 
-  // Derived Stats
+  // Derived Stats (Daily Only)
   const stats = useMemo(() => {
     try {
       if (!contextPatients || !Array.isArray(contextPatients)) {
@@ -597,23 +600,55 @@ export default function OperatorPatients() {
         };
       }
 
-      const treatmentRevenue = (contextBills || []).reduce((sum, b) => sum + (Number(b.amountPaid) || 0), 0);
-      const salesRevenue = (contextSales || []).reduce((sum, s) => sum + (Number(s.total || s.amount || s.totalPrice || 0)), 0);
-      const preReceiveTotal = contextPatients.reduce((sum, p) => sum + (Number(p?.preReceiveBalance) || 0), 0);
-      const totalRevenue = treatmentRevenue + salesRevenue;
-      console.log(contextTransactions)
+      const isToday = (dateString: string | undefined | null) => {
+        if (!dateString) return false;
+        try {
+          const d = new Date(dateString);
+          if (isNaN(d.getTime())) return false;
+          const today = new Date();
+          return d.getDate() === today.getDate() &&
+                 d.getMonth() === today.getMonth() &&
+                 d.getFullYear() === today.getFullYear();
+        } catch {
+          return false;
+        }
+      };
+
+      // 1. Total Patients (Registered Today)
+      const patientsToday = contextPatients.filter(p => p && (isToday(p.createdAt) || isToday(p.registrationDate)));
+
+      // 2. Pending Balance (Net debt generated today)
+      const todayBills = (contextBills || []).filter(b => isToday(b.createdDate || b.date || b.createdAt));
+      const pendingBalanceToday = todayBills.reduce((sum, b) => {
+          return sum + ((Number(b.fee) || 0) - (Number(b.amountPaid) || 0) - (Number(b.discount) || 0) - (Number(b.preReceiveApplied) || 0));
+      }, 0);
+
+      // 3. Total Revenue (Cash from bills today + Sales today)
+      const treatmentRevenueToday = todayBills.reduce((sum, b) => sum + (Number(b.amountPaid) || 0), 0);
+      const todaySales = (contextSales || []).filter(s => isToday(s.date || s.createdAt));
+      const salesRevenueToday = todaySales.reduce((sum, s) => sum + (Number(s.total || s.amount || s.totalPrice || 0)), 0);
+      const totalRevenueToday = treatmentRevenueToday + salesRevenueToday;
+
+      // 4. Pre-Receive Total (Net pre-receive collected today)
+      const todayTransactions = (contextTransactions || []).filter(t => isToday(t.date || t.fullPaymentDateTime || t.createdAt));
+      const preReceiveToday = todayTransactions
+        .filter(t => t.type === 'pre_receive' || t.type === 'pre_receive_return')
+        .reduce((sum, t) => {
+          if (t.type === 'pre_receive_return') return sum - (Number(t.amount) || 0);
+          return sum + (Number(t.amount) || 0);
+        }, 0);
 
       return {
-        total: contextPatients.length,
+        total: patientsToday.length,
         active: contextPatients.filter(p => p && p.isActive !== false).length,
-        pendingBalance: contextPatients.reduce((sum, p) => sum + (p?.pendingBalance || 0), 0),
-        totalVisits: (contextQueue || []).filter(q => q.status === 'completed').length,
-        totalRevenue: totalRevenue,
+        pendingBalance: pendingBalanceToday,
+        totalVisits: (contextQueue || []).filter(q => isToday(q.checkInTime || q.createdAt) && q.status === 'completed').length,
+        totalRevenue: totalRevenueToday,
         creditPatients: contextPatients.filter(p => p && (p.pendingBalance || 0) < 0).length,
-        totalPreReceive: preReceiveTotal
+        totalPreReceive: preReceiveToday
       };
     } catch (error) {
-      console.error('Error calculating stats:', error);
+      console.error('Error calculating daily stats:', error);
       return {
         total: 0,
         active: 0,
@@ -801,8 +836,11 @@ export default function OperatorPatients() {
         });
 
       const preReceiveTotal = patientTransactions
-        .filter(t => t.type === 'pre_receive')
-        .reduce((sum, t) => sum + (t.amount || 0), 0);
+        .filter(t => t.type === 'pre_receive' || t.type === 'pre_receive_return')
+        .reduce((sum, t) => {
+          if (t.type === 'pre_receive_return') return sum - (t.amount || 0);
+          return sum + (t.amount || 0);
+        }, 0);
 
       setSelectedPatientHistory({
         queueHistory,
@@ -1111,7 +1149,7 @@ export default function OperatorPatients() {
           <div className="flex items-center justify-between">
             <div>
               <div className="text-2xl font-bold">{stats.total}</div>
-              <div className="text-sm text-gray-600">Total Patients</div>
+              <div className="text-sm text-gray-600">New Patients (Today)</div>
             </div>
             <Users className="w-8 h-8 text-blue-500" />
           </div>
@@ -1131,7 +1169,7 @@ export default function OperatorPatients() {
           <div className="flex items-center justify-between">
             <div>
               <div className="text-2xl font-bold">{formatCurrency(stats.pendingBalance)}</div>
-              <div className="text-sm text-gray-600">Pending Balance</div>
+              <div className="text-sm text-gray-600">New Pending (Today)</div>
             </div>
             <AlertCircle className="w-8 h-8 text-orange-500" />
           </div>
@@ -1151,7 +1189,7 @@ export default function OperatorPatients() {
           <div className="flex items-center justify-between">
             <div>
               <div className="text-2xl font-bold">{formatCurrency(stats.totalRevenue)}</div>
-              <div className="text-sm text-gray-600">Total Revenue</div>
+              <div className="text-sm text-gray-600">Revenue (Today)</div>
             </div>
             <DollarSign className="w-8 h-8 text-green-500" />
           </div>
@@ -1161,7 +1199,7 @@ export default function OperatorPatients() {
           <div className="flex items-center justify-between">
             <div>
               <div className="text-2xl font-bold">{formatCurrency(stats.totalPreReceive)}</div>
-              <div className="text-sm text-gray-600">Pre-receive Total</div>
+              <div className="text-sm text-gray-600">Pre-receive (Today)</div>
             </div>
             <CreditCard className="w-8 h-8 text-purple-500" />
           </div>

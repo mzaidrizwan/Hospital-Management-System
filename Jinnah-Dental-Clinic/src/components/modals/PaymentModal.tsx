@@ -33,7 +33,7 @@ export default function PaymentModal({
     amount: 0,
     paymentMethod: 'cash' as 'cash' | 'online' | 'bank',
     discount: 0,
-    notes: patientData?.notes || ''
+    notes: queueItem.notes || ''
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -120,13 +120,13 @@ export default function PaymentModal({
   }, [maxPayable]);
 
   useEffect(() => {
-    if (patientData) {
+    if (queueItem) {
       setPaymentData(prev => ({
         ...prev,
-        notes: patientData.notes || ''
+        notes: queueItem.notes || ''
       }));
     }
-  }, [patientData?.id]);
+  }, [queueItem?.id]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -265,7 +265,7 @@ ${leftoverCredit > 0 ? `Remaining Advance    : Rs. ${Math.round(leftoverCredit)}
 --------------------------------
 Method: ${paymentData.paymentMethod.toUpperCase()}
 --------------------------------
-${paymentData.notes || ''}
+${paymentData.notes ? `\nAdditional Information:\n${paymentData.notes}\n--------------------------------` : ''}
 ================================
 Thank You! Visit Again
 Powered by Saynz Technologies

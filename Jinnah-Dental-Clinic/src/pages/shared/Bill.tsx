@@ -268,7 +268,7 @@ Paid              : Rs. ${amountPaid.toFixed(0)}
 **Remaining**     : Rs. ${remainingAfterPayment.toFixed(0)}
 --------------------------------
 Status: ${item.paymentStatus ? item.paymentStatus.toUpperCase() : 'PENDING'}
-${patientData?.notes || item.notes || ''}
+${item.notes || ''}
 ================================
 Thank You! Visit Again
 Powered by Saynz Technologies

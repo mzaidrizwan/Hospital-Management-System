@@ -174,6 +174,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const dataChangedRef = useRef<Record<string, boolean>>({});
     const initialLoadDone = useRef(false);
     const isSyncingRef = useRef(false);
+    const collectionLocks = useRef<Record<string, boolean>>({});
     const stateSettersRef = useRef<any>({});
     const listenersRef = useRef<(() => void)[]>([]);
 
@@ -312,23 +313,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
         if (initialLoadDone.current) return;
 
         try {
+            console.log('[initializeData] Starting local data fetch...');
+            
             // Get deleted patients from localStorage
             const deletedPatients = JSON.parse(localStorage.getItem('deleted_patients') || '[]');
-            console.log(`[initializeData] Deleted patients list:`, deletedPatients);
 
+            // 1. Fetch ALL from local IndexedDB first (Fast)
             const results = await Promise.all(COLLECTIONS.map(async (collectionName) => {
                 try {
                     let data = await dbManager.getFromLocal(collectionName);
-
-                    // ✅ FILTER OUT DELETED PATIENTS on initial load
+                    
                     if (collectionName === 'patients' && Array.isArray(data) && deletedPatients.length > 0) {
-                        const originalCount = data.length;
                         data = data.filter((p: any) => !deletedPatients.includes(p.id));
-                        if (originalCount !== data.length) {
-                            console.log(`[initializeData] Filtered out ${originalCount - data.length} deleted patients from ${collectionName}`);
-                        }
                     }
-
+                    
                     return { collectionName, data };
                 } catch (error) {
                     console.error(`Error loading ${collectionName} from IndexedDB:`, error);
@@ -336,6 +334,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }
             }));
 
+            // 2. Update React State immediately
             results.forEach(({ collectionName, data }) => {
                 if (data === null || data === undefined) return;
 
@@ -344,17 +343,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
                 if (collectionName === 'clinicSettings') {
                     const settings = Array.isArray(data) ? data[0] : data;
-                    if (settings) {
-                        setter(settings);
-                    }
+                    if (settings) setter(settings);
                 } else if (collectionName === 'staff') {
-                    // Filter out invalid staff members with empty or missing names
                     const validStaff = Array.isArray(data)
                         ? data.filter((s: any) => s && s.name && s.name.trim() !== '')
                         : [];
                     setter(validStaff);
                 } else if (collectionName === 'treatments') {
-                    // Filter out ghost treatments with NaN fees
                     const validTreatments = Array.isArray(data)
                         ? data.filter((t: any) => t && t.name && !isNaN(Number(t.fee)))
                         : [];
@@ -364,63 +359,36 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }
             });
 
+            // 3. Mark initialization as basically complete (UI can show local data now)
+            setInitialLoadComplete(true);
+            setLoading(false);
+            initialLoadDone.current = true;
+
+            // 4. Background: Check License locally
             try {
-                const settingsData = await dbManager.getFromLocal('clinicSettings', 'clinic-settings');
-                const clinicId = settingsData?.id || 'clinic-settings';
-
                 let licenseData = await dbManager.getFromLocal('settings', 'clinic_license');
-
-                // Try to fetch latest license from Firebase if online
-                if (isOnline) {
-                    try {
-                        const licenseDoc = await getDoc(doc(db, 'settings', 'license'));
-                        if (licenseDoc.exists()) {
-                            const firebaseLicense = licenseDoc.data();
-                            if (firebaseLicense.expiryDate) {
-                                licenseData = { ...licenseData, ...firebaseLicense };
-                                // Save back to local for offline use
-                                await dbManager.saveToLocal('settings', { id: 'clinic_license', ...firebaseLicense });
-                            }
-                        }
-                    } catch (fbError) {
-                        console.warn('Could not fetch license from Firebase, using local:', fbError);
-                    }
-                }
-
-                // NO FREE TRIAL - License is required from the start
                 if (licenseData && (licenseData.key || licenseData.expiryDate)) {
                     setLicenseKey(licenseData.key || null);
                     setLicenseExpiryDate(licenseData.expiryDate);
-
                     const days = checkSubscription({ licenseExpiry: licenseData.expiryDate });
                     setLicenseDaysLeft(Math.max(0, days));
                     setLicenseStatus(days > 0 ? 'valid' : 'expired');
                 } else {
-                    // No license found - App should be disabled
-                    console.warn('⚠️ No license key found. Application is locked.');
-                    setLicenseKey(null);
-                    setLicenseExpiryDate(null);
-                    setLicenseDaysLeft(0);
                     setLicenseStatus('missing');
                 }
             } catch (e) {
-                console.error('Error checking license:', e);
-                setLicenseStatus('missing');
+                console.error('Error checking local license:', e);
             }
 
+            // 5. Trigger housekeeping
             setTimeout(() => {
                 migrateAttendanceRecords().catch(console.error);
-            }, 1000);
-
-            setInitialLoadComplete(true);
-            setLoading(false);
-            initialLoadDone.current = true;
+            }, 2000);
 
         } catch (error) {
-            console.error('Error initializing data:', error);
+            console.error('Fatal error initializing data:', error);
             setInitialLoadComplete(true);
             setLoading(false);
-            initialLoadDone.current = true;
         }
     };
 
@@ -773,6 +741,22 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             }
                         }
                     }
+                }
+            }
+
+            // SPECIAL CASCADE FOR TRANSACTION UPDATES (Salary)
+            if (collectionName === 'transactions' && enrichedData.type === 'Salary' && enrichedData.expenseId) {
+                const linkedExp = (expenses || []).find(e => e.id === enrichedData.expenseId);
+                if (linkedExp && Number(linkedExp.amount) !== Number(enrichedData.amount)) {
+                    console.log(`[updateLocal] Transaction changed. Cascading to Expense: ${linkedExp.id}`);
+                    const updatedExp = {
+                        ...linkedExp,
+                        amount: enrichedData.amount,
+                        updatedAt: new Date().toISOString()
+                    };
+                    await dbManager.saveToLocal('expenses', updatedExp);
+                    setExpenses(prev => prev.map(e => e.id === updatedExp.id ? updatedExp : e));
+                    backgroundFirebaseSync('expenses', updatedExp);
                 }
             }
 
@@ -1241,6 +1225,26 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }
             }
 
+            // NEW: SPECIAL CASCADE FOR TRANSACTION/SALARY DELETIONS
+            if (collectionName === 'transactions' || collectionName === 'salaryPayments') {
+                const itemToDelete = collectionName === 'transactions' 
+                    ? (transactions || []).find(t => t.id === id)
+                    : (salaryPayments || []).find(p => p.id === id);
+
+                if (itemToDelete) {
+                    const expenseId = (itemToDelete as any).expenseId;
+                    if (expenseId) {
+                        const linkedExp = (expenses || []).find(e => e.id === expenseId);
+                        if (linkedExp) {
+                            console.log(`[deleteLocal] Cascading deletion from ${collectionName} to Expense: ${expenseId}`);
+                            await deleteLocal('expenses', expenseId);
+                            // The expense cascade will handle the rest (staff totals, etc.)
+                            return true; // We already handled everything via expense cascade
+                        }
+                    }
+                }
+            }
+
             // NEW: SPECIAL CASCADE FOR SALE DELETIONS
             if (collectionName === 'sales') {
                 const saleToDelete = (sales || []).find(s => s.id === id);
@@ -1274,6 +1278,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 if (recentlyDeleted.length > 500) recentlyDeleted.shift();
                 localStorage.setItem('recently_deleted_ids', JSON.stringify(recentlyDeleted));
             }
+
 
             // 1. STEP 1: Update React State immediately (Fast)
             const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
@@ -2407,13 +2412,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
     // }, [stateSetterMap]);
 
     const handleFirebaseUpdate = useCallback(async (collectionName: string, remoteData: any[]) => {
-        // Reduced strict lock to prevent missing sync updates
-        if (isSyncingRef.current) {
-            // If we are currently saving a batch, we might want to wait instead of returning
-            // but for now, low-latency return is okay if we use setTimeout
+        // Robust per-collection lock to prevent interleaving writes
+        if (collectionLocks.current[collectionName]) {
+            // console.log(`[Sync] Lock active for ${collectionName}, skipping this snapshot.`);
+            return;
         }
 
         try {
+            collectionLocks.current[collectionName] = true;
             // Get deleted patients from localStorage
             const deletedPatients = JSON.parse(localStorage.getItem('deleted_patients') || '[]');
 
@@ -2565,16 +2571,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
             }
 
             // Handle Deletions: If item in local but not in remote and not pending sync
-            for (const localItem of localData) {
-                // Safeguard: Never delete admin or operator users locally even if missing in cloud
-                if (collectionName === 'users' && (localItem.id === 'admin' || localItem.id === 'operator')) {
-                    continue;
-                }
+            // SAFETY: Only delete locally if we have a reasonably complete remote snapshot
+            if (filteredRemoteData.length > 0 || localData.length < 5) {
+                for (const localItem of localData) {
+                    if (collectionName === 'users' && (localItem.id === 'admin' || localItem.id === 'operator')) {
+                        continue;
+                    }
 
-                if (!remoteIds.has(localItem.id) && !localItem.needsSync) {
-                    console.log(`[Sync] Item ${localItem.id} not found in cloud, deleting locally.`);
-                    await dbManager.deleteFromLocal(collectionName, localItem.id);
-                    hasChanged = true;
+                    // Only delete if NOT in remote, NOT pending sync, and NOT recently modified locally
+                    const isMissingInCloud = !remoteIds.has(localItem.id);
+                    const isCleanLocally = !localItem.needsSync;
+                    const isOldEnough = (Date.now() - (localItem.lastUpdated || 0)) > 30000; // 30s grace period for local edits
+
+                    if (isMissingInCloud && isCleanLocally && isOldEnough) {
+                        console.log(`[Sync] Item ${localItem.id} confirmed missing in cloud, deleting locally.`);
+                        await dbManager.deleteFromLocal(collectionName, localItem.id);
+                        hasChanged = true;
+                    }
                 }
             }
 
@@ -2584,24 +2597,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
             }
 
             if (hasChanged) {
-                const freshLocalData = await dbManager.getFromLocal(collectionName);
+                const refreshedData = await dbManager.getFromLocal(collectionName);
                 const setter = stateSetterMap[collectionName as keyof typeof stateSetterMap];
-                if (setter) {
-                    // ✅ Apply deleted filter again before setting state
-                    let finalData = Array.isArray(freshLocalData) ? freshLocalData : [];
-                    if (collectionName === 'patients' && deletedPatients.length > 0) {
-                        finalData = finalData.filter((p: any) => !deletedPatients.includes(p.id));
-                    }
-                    setter(finalData);
-                    dataChangedRef.current[collectionName] = true;
-                }
-                setTimeout(() => { isSyncingRef.current = false; }, 200);
-            } else if (updatesToSave.length > 0) {
-                setTimeout(() => { isSyncingRef.current = false; }, 200);
+                if (setter) setter(refreshedData);
+                setTimeout(() => { collectionLocks.current[collectionName] = false; }, 200);
+            } else {
+                collectionLocks.current[collectionName] = false;
             }
         } catch (error) {
             console.error(`Error handling Firebase update for ${collectionName}:`, error);
-            isSyncingRef.current = false;
+            collectionLocks.current[collectionName] = false;
         }
     }, [stateSetterMap]);
 
@@ -3297,7 +3302,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if (isOnline && initialLoadComplete && autoSyncEnabled) {
-            console.log("🔄 Auto-Sync Enabled: Processing Sync Queue...");
+            console.log("🔄 Online: Processing Sync Queue...");
             processSyncQueue().catch(err => console.error('Sync queue error:', err));
         }
     }, [isOnline, initialLoadComplete, autoSyncEnabled]);
@@ -3404,34 +3409,53 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }, [isOnline, initialLoadComplete, autoSyncEnabled]);
 
     useEffect(() => {
-        // Process sync queue when online
+        // Background License Sync (when online and loaded)
+        if (isOnline && initialLoadComplete) {
+            const syncLicense = async () => {
+                try {
+                    const licenseDoc = await getDoc(doc(db, 'settings', 'license'));
+                    if (licenseDoc.exists()) {
+                        const firebaseLicense = licenseDoc.data();
+                        if (firebaseLicense.expiryDate) {
+                            await dbManager.saveToLocal('settings', { id: 'clinic_license', ...firebaseLicense });
+                            setLicenseKey(firebaseLicense.key || null);
+                            setLicenseExpiryDate(firebaseLicense.expiryDate);
+                            const days = checkSubscription({ licenseExpiry: firebaseLicense.expiryDate });
+                            setLicenseDaysLeft(Math.max(0, days));
+                            setLicenseStatus(days > 0 ? 'valid' : 'expired');
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Background license sync failed:', e);
+                }
+            };
+            syncLicense();
+        }
+    }, [isOnline, initialLoadComplete, checkSubscription]);
+
+    useEffect(() => {
+        // Standard processSyncQueue handler for online events
         const handleOnline = async () => {
-            console.log('[DataContext] Online, processing sync queue...');
-            const { processSyncQueue } = await import('@/services/offlineSync');
-            await processSyncQueue();
+            if (autoSyncEnabled) {
+                console.log('[DataContext] Network restored, syncing...');
+                await processSyncQueue();
+            }
         };
 
         window.addEventListener('online', handleOnline);
 
-        // Initial sync if online
-        if (navigator.onLine) {
-            handleOnline();
-        }
-
-        // Periodic sync every 5 minutes
+        // Periodic sync every 3 minutes
         const interval = setInterval(() => {
-            if (navigator.onLine) {
-                import('@/services/offlineSync').then(({ processSyncQueue }) => {
-                    processSyncQueue();
-                });
+            if (navigator.onLine && autoSyncEnabled) {
+                processSyncQueue().catch(() => {});
             }
-        }, 5 * 60 * 1000);
+        }, 3 * 60 * 1000);
 
         return () => {
             window.removeEventListener('online', handleOnline);
             clearInterval(interval);
         };
-    }, []);
+    }, [autoSyncEnabled]);
 
     return (
         <DataContext.Provider value={{

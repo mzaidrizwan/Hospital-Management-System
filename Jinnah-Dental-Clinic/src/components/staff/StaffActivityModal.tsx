@@ -39,6 +39,7 @@ import {
     TabsList,
     TabsTrigger
 } from '@/components/ui/tabs';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Staff, Transaction, Expense, Attendance } from '@/types';
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/context/AuthContext';
@@ -62,7 +63,9 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
         updateLocal,
         deleteLocal,
         staff: staffList,
-        setStaff
+        setStaff,
+        salaryPayments,
+        setSalaryPayments
     } = useData();
     const { user } = useAuth();
 
@@ -177,8 +180,21 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
             };
             await updateLocal('transactions', updatedTxn);
 
-            if (updatedTxn.expenseId) {
-                const linkedExpense = expenses.find(e => e.id === updatedTxn.expenseId);
+            // 2. Cascade update to Expense record
+            let expenseId = updatedTxn.expenseId;
+            if (!expenseId) {
+                // Fallback: try to find the expense by staffId, amount, and approximate date
+                const linkedExp = (expenses || []).find(e => 
+                    e.category === 'salary' && 
+                    e.staffId === staff.id && 
+                    Math.abs(Number(e.amount) - editingTxn.amount) < 1 &&
+                    Math.abs(new Date(e.date).getTime() - new Date(editingTxn.date).getTime()) < 3600000 // 1 hour window
+                );
+                if (linkedExp) expenseId = linkedExp.id;
+            }
+
+            if (expenseId) {
+                const linkedExpense = expenses.find(e => e.id === expenseId);
                 if (linkedExpense) {
                     const updatedExpense: Expense = {
                         ...linkedExpense,
@@ -189,22 +205,43 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                         fullPaymentDateTime: fullDateTime,
                         updatedAt: new Date().toISOString()
                     };
+                    // updateLocal('expenses') will handle cascading to salaryPayments and staff in DataContext
                     await updateLocal('expenses', updatedExpense);
                 }
-            }
+            } else {
+                // If no expense record found, still try to update salaryPayments directly
+                const linkedPay = (salaryPayments || []).find(p => 
+                    p.staffId === staff.id && 
+                    Math.abs(Number(p.amount) - editingTxn.amount) < 1 &&
+                    Math.abs(new Date(p.date).getTime() - new Date(editingTxn.date).getTime()) < 3600000
+                );
+                if (linkedPay) {
+                    const updatedPay = {
+                        ...linkedPay,
+                        amount: updatedTxn.amount,
+                        date: timestamp,
+                        paymentDate,
+                        paymentTime,
+                        fullPaymentDateTime: fullDateTime,
+                        updatedAt: new Date().toISOString()
+                    };
+                    await updateLocal('salaryPayments', updatedPay);
+                }
 
-            const currentStaff = staffList.find(s => s.id === staff.id);
-            if (currentStaff) {
-                const updatedStaff = {
-                    ...currentStaff,
-                    totalPaid: (currentStaff.totalPaid || 0) + amountDifference,
-                    totalEarned: (currentStaff.totalEarned || 0) + amountDifference,
-                    pendingSalary: Math.max(0, (currentStaff.pendingSalary || 0) - amountDifference),
-                    lastPaidDate: fullDateTime,
-                    updatedAt: new Date().toISOString()
-                };
-                await updateLocal('staff', updatedStaff);
-                setStaff(prev => prev.map(s => s.id === staff.id ? updatedStaff : s));
+                // And manually update staff totals as a fallback
+                const currentStaff = staffList.find(s => s.id === staff.id);
+                if (currentStaff) {
+                    const updatedStaff = {
+                        ...currentStaff,
+                        totalPaid: (currentStaff.totalPaid || 0) + amountDifference,
+                        totalEarned: (currentStaff.totalEarned || 0) + amountDifference,
+                        pendingSalary: Math.max(0, (currentStaff.pendingSalary || 0) - amountDifference),
+                        lastPaidDate: fullDateTime,
+                        updatedAt: new Date().toISOString()
+                    };
+                    await updateLocal('staff', updatedStaff);
+                    setStaff(prev => prev.map(s => s.id === staff.id ? updatedStaff : s));
+                }
             }
 
             toast.success("Payment record updated successfully");
@@ -230,22 +267,48 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
         setIsUpdating(true);
 
         try {
-            await deleteLocal('transactions', txn.id);
-            if (txn.expenseId) {
-                await deleteLocal('expenses', txn.expenseId);
+            // Find linked expense even if expenseId is missing from txn
+            let expenseId = txn.expenseId;
+            if (!expenseId) {
+                const linkedExp = (expenses || []).find(e => 
+                    e.category === 'salary' && 
+                    e.staffId === staff.id && 
+                    Math.abs(Number(e.amount) - txn.amount) < 1 &&
+                    Math.abs(new Date(e.date).getTime() - new Date(txn.date).getTime()) < 3600000
+                );
+                if (linkedExp) expenseId = linkedExp.id;
             }
 
-            const currentStaff = staffList.find(s => s.id === staff.id);
-            if (currentStaff) {
-                const updatedStaff = {
-                    ...currentStaff,
-                    totalPaid: Math.max(0, (currentStaff.totalPaid || 0) - txn.amount),
-                    totalEarned: Math.max(0, (currentStaff.totalEarned || 0) - txn.amount),
-                    pendingSalary: (currentStaff.pendingSalary || 0) + txn.amount,
-                    updatedAt: new Date().toISOString()
-                };
-                await updateLocal('staff', updatedStaff);
-                setStaff(prev => prev.map(s => s.id === staff.id ? updatedStaff : s));
+            if (expenseId) {
+                // deleteLocal('expenses') in DataContext handles cascading to transactions, staff, and salaryPayments
+                await deleteLocal('expenses', expenseId);
+            } else {
+                // Fallback for isolated transaction records
+                await deleteLocal('transactions', txn.id);
+                
+                // Manual revert of staff totals since no expense cascade will trigger
+                const currentStaff = staffList.find(s => s.id === staff.id);
+                if (currentStaff) {
+                    const updatedStaff = {
+                        ...currentStaff,
+                        totalPaid: Math.max(0, (currentStaff.totalPaid || 0) - txn.amount),
+                        totalEarned: Math.max(0, (currentStaff.totalEarned || 0) - txn.amount),
+                        pendingSalary: (currentStaff.pendingSalary || 0) + txn.amount,
+                        updatedAt: new Date().toISOString()
+                    };
+                    await updateLocal('staff', updatedStaff);
+                    setStaff(prev => prev.map(s => s.id === staff.id ? updatedStaff : s));
+                }
+
+                // Also try to find and delete linked salaryPayment record
+                const linkedPay = (salaryPayments || []).find(p => 
+                    p.staffId === staff.id && 
+                    Math.abs(Number(p.amount) - txn.amount) < 1 &&
+                    Math.abs(new Date(p.date).getTime() - new Date(txn.date).getTime()) < 3600000
+                );
+                if (linkedPay) {
+                    await deleteLocal('salaryPayments', linkedPay.id);
+                }
             }
 
             toast.success("Payment record deleted successfully");
@@ -412,7 +475,8 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                             </div>
 
                             {/* Payments Tab */}
-                            <TabsContent value="payments" className="flex-1 overflow-y-auto p-6 m-0">
+                            <TabsContent value="payments" className="flex-1 m-0 p-0 overflow-hidden">
+                                <ScrollArea className="h-[500px] w-full p-6">
                                 {staffTransactions.length === 0 ? (
                                     <div className="flex flex-col items-center justify-center py-20 text-center">
                                         <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
@@ -422,7 +486,7 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                                         <p className="text-muted-foreground text-sm max-w-[200px] mt-1">Salary payments for this staff member will appear here.</p>
                                     </div>
                                 ) : (
-                                    <div className="border rounded-xl overflow-hidden bg-white shadow-sm border-gray-100">
+                                    <div className="border rounded-xl overflow-hidden bg-white shadow-sm border-gray-100 mb-8">
                                         <Table>
                                             <TableHeader className="bg-gray-50/50">
                                                 <TableRow className="hover:bg-transparent">
@@ -487,10 +551,12 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                                         </Table>
                                     </div>
                                 )}
+                                </ScrollArea>
                             </TabsContent>
 
                             {/* Attendance Tab */}
-                            <TabsContent value="attendance" className="flex-1 overflow-y-auto p-6 m-0">
+                            <TabsContent value="attendance" className="flex-1 m-0 p-0 overflow-hidden">
+                                <ScrollArea className="h-[500px] w-full p-6">
                                 {groupedAttendance.length === 0 ? (
                                     <div className="flex flex-col items-center justify-center py-20 text-center">
                                         <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
@@ -500,7 +566,7 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                                         <p className="text-muted-foreground text-sm max-w-[200px] mt-1">Attendance history for this staff member will appear here.</p>
                                     </div>
                                 ) : (
-                                    <div className="border rounded-xl overflow-hidden bg-white shadow-sm border-gray-100">
+                                    <div className="border rounded-xl overflow-hidden bg-white shadow-sm border-gray-100 mb-8">
                                         <Table>
                                             <TableHeader className="bg-gray-50/50">
                                                 <TableRow className="hover:bg-transparent">
@@ -597,6 +663,7 @@ export default function StaffActivityModal({ open, onClose, staff }: StaffActivi
                                         </Table>
                                     </div>
                                 )}
+                                </ScrollArea>
                             </TabsContent>
                         </Tabs>
                     </div>

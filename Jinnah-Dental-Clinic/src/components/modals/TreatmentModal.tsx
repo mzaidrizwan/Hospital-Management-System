@@ -164,12 +164,24 @@ export default function TreatmentModal({
           const treatmentNames = queueItem.treatment.split(', ');
           const loadedTreatments: SelectedTreatment[] = [];
 
+          // Robust parsing for multiple formats and DEDUPLICATION
+          const seenTreatments = new Set<string>();
           for (const t of treatmentNames) {
-            const match = t.match(/(.+?)\s*\(Rs\.\s*([\d,]+)\)/);
+            const trimmed = t.trim();
+            if (!trimmed || seenTreatments.has(trimmed)) continue;
+            seenTreatments.add(trimmed);
+
+            const match = trimmed.match(/(.+?)\s*(?:\(Rs\.\s*|Rs\.\s*|)\s*([\d,.]+)\)?/i);
             if (match) {
               loadedTreatments.push({
-                name: match[1],
+                name: match[1].trim(),
                 fee: parseInt(match[2].replace(/,/g, '')),
+                id: `treatment-${Date.now()}-${Math.random()}`
+              });
+            } else {
+              loadedTreatments.push({
+                name: trimmed,
+                fee: 0,
                 id: `treatment-${Date.now()}-${Math.random()}`
               });
             }
@@ -177,7 +189,11 @@ export default function TreatmentModal({
 
           if (loadedTreatments.length > 0) {
             setSelectedTreatments(loadedTreatments);
+          } else {
+            setSelectedTreatments([]);
           }
+        } else {
+          setSelectedTreatments([]);
         }
 
         if (queueItem.doctorId) {
@@ -283,6 +299,10 @@ export default function TreatmentModal({
         isInitialLoad.current = true;
         setIsEditMode(false);
         setHasPreReceive(false);
+        setSelectedTreatments([]);
+        setSelectedDoctor('');
+        setDiscount(0);
+        setManualTotal('');
       }, 300);
       return () => clearTimeout(timer);
     }

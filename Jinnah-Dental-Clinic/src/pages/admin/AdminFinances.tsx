@@ -12,7 +12,7 @@ import { useData } from '@/context/DataContext';
 import { calculateFinancialStats, formatCurrency } from '@/utils/financialUtils';
 
 export default function AdminFinances() {
-  const { bills, expenses, patients, sales, salaryPayments, loading: dataLoading, exportToCSV } = useData();
+  const { bills, expenses, patients, sales, salaryPayments, transactions: contextTransactions, loading: dataLoading, exportToCSV } = useData();
 
   const currentMonthRange = React.useMemo(() => ({
     from: startOfMonth(new Date()),
@@ -81,6 +81,20 @@ export default function AdminFinances() {
           patient: sal.staffName || 'Staff Member',
           status: 'paid',
         });
+      });
+      
+      (contextTransactions || []).forEach(tx => {
+        if (tx.type === 'pre_receive' || tx.type === 'pre_receive_return') {
+          const isReturn = tx.type === 'pre_receive_return';
+          transactions.push({
+            id: tx.id,
+            type: isReturn ? 'Advance Return' : 'Advance Credit',
+            amount: isReturn ? -Number(tx.amount || 0) : Number(tx.amount || 0),
+            date: tx.date || tx.createdAt || new Date().toISOString(),
+            patient: tx.patientName || 'Patient',
+            status: 'paid',
+          });
+        }
       });
 
 

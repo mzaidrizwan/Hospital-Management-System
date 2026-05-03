@@ -545,7 +545,7 @@ export interface Transaction {
   updatedAt?: string;
 
   queueItemId?: string;
-  type: 'pre_receive' | 'Salary' | 'treatment_payment';
+  type: 'pre_receive' | 'Salary' | 'treatment_payment' | 'pre_receive_return';
 }
 
 export interface PatientTransaction {
