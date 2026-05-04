@@ -152,16 +152,6 @@ export default function WalkInPatientModal({
     }
 
     setIsSubmitting(true);
-    const tid = toast.loading('Adding to queue...');
-    // GLOBAL TOAST GUARD: Force dismiss after 4 seconds
-    const timeoutId = setTimeout(() => {
-      toast.dismiss(tid);
-      console.warn('TOAST GUARD: Forced toast dismissal after 4 seconds');
-      if (isSubmitting) {
-        setIsSubmitting(false);
-        toast.error('Operation timed out. The patient was added locally, but sync may be delayed.');
-      }
-    }, 4000);
 
     try {
       console.log("Attempting to add patient...", formData);
@@ -199,7 +189,7 @@ export default function WalkInPatientModal({
       await addItem("queue", queueItem);
       console.log("Queue item added successfully");
 
-      toast.success("Patient added to queue successfully!", { id: tid });
+      toast.success("Patient added to queue successfully!");
       
       // Short delay to ensure toast is seen
       setTimeout(() => {
@@ -208,16 +198,13 @@ export default function WalkInPatientModal({
 
     } catch (err) {
       console.error("Modal Submit Error:", err);
-      toast.error("Failed to add patient. Please try again.", { id: tid });
+      toast.error("Failed to add patient. Please try again.");
       
       // Show alert for database errors
       if (typeof window !== 'undefined' && err instanceof Error) {
         window.alert(`Database Error: ${err.message}`);
       }
     } finally {
-      // CRITICAL: ALWAYS clean up toast and timer
-      clearTimeout(timeoutId);
-      toast.dismiss(tid);
       setIsSubmitting(false);
     }
   };

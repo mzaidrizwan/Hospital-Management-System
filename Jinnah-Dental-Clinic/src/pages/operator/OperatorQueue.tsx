@@ -502,11 +502,6 @@ Contact Us: 0347 1887181
   };
 
   const handleWalkInPatient = async (patientData: any) => {
-    const toastId = toast.loading('Adding to queue...');
-    const timeoutId = setTimeout(() => {
-      toast.dismiss(toastId);
-    }, 4000);
-
     try {
       const patientId = patientData.id;
       const isEditing = patientData.isEditing;
@@ -517,8 +512,6 @@ Contact Us: 0347 1887181
       }
 
       if (isEditing) {
-        clearTimeout(timeoutId);
-        toast.dismiss(toastId);
         toast.success(`Patient ${patientData.name} updated`);
         setShowPatientModal(false);
         return;
@@ -547,14 +540,10 @@ Contact Us: 0347 1887181
 
       await updateLocal('queue', queueItemData);
 
-      clearTimeout(timeoutId);
-      toast.dismiss(toastId);
       toast.success(`Patient added to queue (Token #${nextToken})`);
       setShowPatientModal(false);
     } catch (error) {
       console.error('Walk-in error:', error);
-      clearTimeout(timeoutId);
-      toast.dismiss(toastId);
       toast.error('Failed to add to queue');
     }
   };

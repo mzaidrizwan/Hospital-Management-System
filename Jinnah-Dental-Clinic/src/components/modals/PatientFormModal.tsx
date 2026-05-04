@@ -247,14 +247,6 @@ export default function PatientFormModal({
   };
 
   const handleAddExistingToQueue = async (patient: Patient) => {
-    const toastId = toast.loading('Adding to queue...');
-
-    // Timeout guard to prevent stuck toast
-    const timeoutId = setTimeout(() => {
-      toast.dismiss(toastId);
-      console.warn('TOAST GUARD: Forced dismissal after 4 seconds');
-    }, 4000);
-
     try {
       // Close suggestions
       setShowSuggestions(false);
@@ -287,10 +279,6 @@ export default function PatientFormModal({
       // Add to queue using updateLocal
       await updateLocal('queue', queueItemData);
 
-      // Clear timeout and dismiss loading toast
-      clearTimeout(timeoutId);
-      toast.dismiss(toastId);
-
       // Show success message
       toast.success(`${patient.name} added to waiting queue (Token #${nextToken})`);
 
@@ -298,10 +286,6 @@ export default function PatientFormModal({
       onClose();
     } catch (error) {
       console.error('Error adding patient to queue:', error);
-
-      // Clear timeout and dismiss loading toast
-      clearTimeout(timeoutId);
-      toast.dismiss(toastId);
 
       // Show error message
       toast.error('Failed to add patient to queue');
